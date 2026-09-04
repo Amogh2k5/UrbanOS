@@ -1,0 +1,92 @@
+{
+  "feature_columns": [
+    "speed_lag_1",
+    "speed_lag_2",
+    "speed_lag_3",
+    "speed_lag_4",
+    "speed_lag_5",
+    "speed_lag_6",
+    "rolling_mean_3",
+    "rolling_std_3",
+    "rolling_min_3",
+    "rolling_max_3",
+    "rolling_mean_6",
+    "rolling_std_6",
+    "speed_trend_15",
+    "speed_change_5",
+    "segment_mean_speed",
+    "segment_std_speed",
+    "segment_min_speed",
+    "segment_max_speed",
+    "segment_count",
+    "road_mean_speed",
+    "road_std_speed",
+    "zone_mean_speed",
+    "zone_std_speed",
+    "hour",
+    "minute_bucket",
+    "day_of_week",
+    "is_weekend",
+    "is_peak",
+    "hour_sin",
+    "hour_cos",
+    "minute_sin",
+    "minute_cos",
+    "dow_sin",
+    "dow_cos"
+  ],
+  "categorical_features": [
+    "road_category"
+  ],
+  "target": "target_speed_change (speed_midpoint change at t+5min)",
+  "prediction_horizon_minutes": 5,
+  "lags": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  ],
+  "segment_stats": [
+    "segment_mean_speed",
+    "segment_std_speed",
+    "segment_min_speed",
+    "segment_max_speed",
+    "segment_count"
+  ],
+  "road_stats": [
+    "road_mean_speed",
+    "road_std_speed"
+  ],
+  "zone_stats": [
+    "zone_mean_speed",
+    "zone_std_speed"
+  ],
+  "rolling_features": [
+    "rolling_mean_3",
+    "rolling_std_3",
+    "rolling_min_3",
+    "rolling_max_3",
+    "rolling_mean_6",
+    "rolling_std_6"
+  ],
+  "trend_features": [
+    "speed_trend_15",
+    "speed_change_5"
+  ],
+  "calendar_features": [
+    "hour",
+    "minute_bucket",
+    "day_of_week",
+    "is_weekend",
+    "is_peak",
+    "hour_sin",
+    "hour_cos",
+    "minute_sin",
+    "minute_cos",
+    "dow_sin",
+    "dow_cos"
+  ],
+  "model_type": "XGBoost"
+}

@@ -1,0 +1,443 @@
+"""Traffic Agent - LangGraph workflow for combining ML predictions, live incidents, and zones."""
+
+from __future__ import annotations
+
+import logging
+import os
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import pandas as pd
+from langgraph.graph import END, StateGraph
+
+# Local imports (new location)
+from backend.app.mobility.traffic.models import TrafficReport, ZoneReport, IncidentReport
+from backend.app.mobility.traffic.geo_zones import get_all_zones
+
+log = logging.getLogger(__name__)
+
+# Prediction data path (relative to project root)
+_PREDICTIONS_PATH = Path("traffic/data/processed/real_day_predictions.csv")
+# Default prediction horizon (10 minutes - matching the data interval)
+_PREDICTION_HORIZON_MINUTES = 10
+
+# Congestion thresholds (km/h)
+CONGESTION_THRESHOLDS = {
+    "free_flow": 70,
+    "moderate": 50,
+    "heavy": 30,
+    "severe": 0,
+}
+
+
+@dataclass
+class TrafficAgentState:
+    """LangGraph state for Traffic Agent."""
+    # Raw/summarized data
+    predictions_df: Optional[pd.DataFrame] = None
+    predictions_summary: Dict[str, Any] = field(default_factory=dict)
+    
+    # Zone aggregation
+    zone_predictions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    
+    # Live incidents
+    live_incidents: List[Dict[str, Any]] = field(default_factory=list)
+    incidents_by_zone: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    
+    # Analysis
+    overall_stats: Dict[str, Any] = field(default_factory=dict)
+    zone_reports: List[ZoneReport] = field(default_factory=list)
+    
+    # Final report
+    report: Optional[TrafficReport] = None
+    
+    # Error tracking
+    errors: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+
+def classify_congestion(speed: Optional[float]) -> str:
+    """Classify congestion level based on speed."""
+    if speed is None:
+        return "unknown"
+    if speed >= CONGESTION_THRESHOLDS["free_flow"]:
+        return "free_flow"
+    elif speed >= CONGESTION_THRESHOLDS["moderate"]:
+        return "moderate"
+    elif speed >= CONGESTION_THRESHOLDS["heavy"]:
+        return "heavy"
+    else:
+        return "severe"
+
+
+def classify_overall_status(avg_speed: Optional[float], incident_count: int) -> str:
+    """Classify overall traffic status."""
+    if avg_speed is None:
+        return "unknown"
+    if incident_count == 0:
+        if avg_speed >= 60:
+            return "normal"
+        elif avg_speed >= 40:
+            return "elevated"
+        else:
+            return "disrupted"
+    else:
+        if avg_speed >= 50:
+            return "elevated"
+        else:
+            return "disrupted"
+
+
+# ============================================================
+# NODE 1: LOAD_PREDICTIONS
+# ============================================================
+def load_predictions(state: TrafficAgentState) -> TrafficAgentState:
+    """Load XGBoost prediction data from CSV."""
+    log.info("Loading traffic predictions...")
+    
+    try:
+        if not _PREDICTIONS_PATH.exists():
+            state.errors.append(f"Predictions file not found: {_PREDICTIONS_PATH}")
+            return state
+        
+        df = pd.read_csv(_PREDICTIONS_PATH)
+        
+        if df.empty:
+            state.errors.append("Predictions file is empty")
+            return state
+        
+        # Basic validation
+        required_cols = ["entity_id", "traffic_speed", "predicted_speed", "timestamp"]
+        for col in required_cols:
+            if col not in df.columns:
+                state.errors.append(f"Missing required column: {col}")
+                return state
+        
+        state.predictions_df = df
+        
+        # Create summary statistics
+        state.predictions_summary = {
+            "total_rows": len(df),
+            "unique_segments": df["entity_id"].nunique(),
+            "timestamp_range": {
+                "min": df["timestamp"].min(),
+                "max": df["timestamp"].max(),
+            },
+            "overall_actual_avg": float(df["traffic_speed"].mean()),
+            "overall_predicted_avg": float(df["predicted_speed"].mean()),
+            "overall_mae": float((df["traffic_speed"] - df["predicted_speed"]).abs().mean()),
+        }
+        
+        log.info(f"Loaded {len(df)} predictions for {df['entity_id'].nunique()} segments")
+        
+    except Exception as e:
+        state.errors.append(f"Failed to load predictions: {str(e)}")
+        log.exception("Error loading predictions")
+    
+    return state
+
+
+# ============================================================
+# NODE 2: AGGREGATE_ZONES
+# ============================================================
+def aggregate_zones(state: TrafficAgentState) -> TrafficAgentState:
+    """Aggregate segment-level predictions into geographic zones.
+    
+    IMPORTANT: The historical ML dataset has NO geographic coordinates.
+    We CANNOT map segments to real zones. This node marks zone ML data
+    as unavailable/demo rather than fabricating mappings.
+    """
+    log.info("Aggregating predictions to zones (demo mode - no geographic mapping)...")
+    
+    if state.predictions_df is None:
+        state.warnings.append("No predictions data available for zone aggregation")
+        return state
+    
+    try:
+        df = state.predictions_df
+        
+        # Since we have NO geographic mapping between entity_ids and zones,
+        # we create demo zone reports with aggregate statistics.
+        # This is explicitly marked as demo/unavailable.
+        
+        # Get overall stats for demo zone data
+        overall_actual = float(df["traffic_speed"].mean())
+        overall_predicted = float(df["predicted_speed"].mean())
+        overall_change = overall_predicted - overall_actual
+        overall_change_pct = (overall_change / overall_actual * 100) if overall_actual != 0 else 0
+        
+        zones = get_all_zones()
+        
+        for zone in zones:
+            zone_id = zone["zone_id"]
+            zone_name = zone["zone_name"]
+            
+            # For demo purposes, use overall stats with slight variation
+            # In production, this would use real segment-to-zone mapping
+            import hashlib
+            seed = int(hashlib.md5(zone_id.encode()).hexdigest()[:8], 16)
+            variation = (seed % 1000) / 10000  # 0-0.1 variation
+            
+            demo_actual = overall_actual * (1 + variation - 0.05)
+            demo_predicted = overall_predicted * (1 + variation - 0.05)
+            demo_change = demo_predicted - demo_actual
+            demo_change_pct = (demo_change / demo_actual * 100) if demo_actual != 0 else 0
+            
+            state.zone_predictions[zone_id] = {
+                "zone_id": zone_id,
+                "zone_name": zone_name,
+                "current_average_speed": round(demo_actual, 1),
+                "predicted_average_speed": round(demo_predicted, 1),
+                "speed_change": round(demo_change, 1),
+                "speed_change_percent": round(demo_change_pct, 1),
+                "congestion_level": classify_congestion(demo_actual),
+                "segment_count": 0,  # No real mapping available
+                "is_demo_zone": True,
+            }
+        
+        state.warnings.append(
+            "Historical ML segments do not contain geographic coordinates; "
+            "zone-level ML aggregation is currently limited to demo values."
+        )
+        
+        log.info(f"Created demo zone predictions for {len(zones)} zones")
+        
+    except Exception as e:
+        state.errors.append(f"Failed to aggregate zones: {str(e)}")
+        log.exception("Error aggregating zones")
+    
+    return state
+
+
+# ============================================================
+# NODE 3: LOAD_LIVE_INCIDENTS
+# ============================================================
+def load_live_incidents(state: TrafficAgentState) -> TrafficAgentState:
+    """Fetch live LTA traffic incidents."""
+    log.info("Loading live traffic incidents...")
+    
+    # Import here to ensure runtime path resolution
+    try:
+        from backend.app.mobility.traffic.incidents import TrafficIncidentsApiClient
+    except Exception as e:
+        state.errors.append(f"Failed to load live incidents: TrafficIncidentsApiClient not available ({e})")
+        log.exception("TrafficIncidentsApiClient import failed")
+        return state
+    
+    try:
+        # Use offline mode for testing, live for production
+        offline = os.getenv("TRAFFIC_AGENT_OFFLINE", "false").lower() == "true"
+        
+        client = TrafficIncidentsApiClient(offline=offline, allow_fallback_fixture=True)
+        snapshot = client.fetch()
+        
+        state.live_incidents = snapshot.to_dict()["incidents"]
+        
+        # Group incidents by zone
+        incidents_by_zone: Dict[str, List[Dict[str, Any]]] = {}
+        for inc in state.live_incidents:
+            zone_id = inc.get("zone_id")
+            if zone_id:
+                incidents_by_zone.setdefault(zone_id, []).append(inc)
+        
+        state.incidents_by_zone = incidents_by_zone
+        
+        log.info(f"Loaded {len(state.live_incidents)} live incidents (is_live={snapshot.is_live})")
+        
+    except Exception as e:
+        state.errors.append(f"Failed to load live incidents: {str(e)}")
+        log.exception("Error loading live incidents")
+    
+    return state
+
+
+# ============================================================
+# NODE 4: ANALYZE_TRAFFIC
+# ============================================================
+def analyze_traffic(state: TrafficAgentState) -> TrafficAgentState:
+    """Analyze traffic combining zone predictions and live incidents."""
+    log.info("Analyzing traffic...")
+    
+    try:
+        # Build zone reports
+        zone_reports: List[ZoneReport] = []
+        
+        for zone_id, zone_pred in state.zone_predictions.items():
+            incidents_in_zone = state.incidents_by_zone.get(zone_id, [])
+            
+            current_speed = zone_pred.get("current_average_speed")
+            predicted_speed = zone_pred.get("predicted_average_speed")
+            
+            zone_report = ZoneReport(
+                zone_id=zone_id,
+                zone_name=zone_pred["zone_name"],
+                is_demo_zone=zone_pred.get("is_demo_zone", True),
+                current_average_speed=current_speed,
+                predicted_average_speed=predicted_speed,
+                speed_change=zone_pred.get("speed_change"),
+                speed_change_percent=zone_pred.get("speed_change_percent"),
+                congestion_level=zone_pred.get("congestion_level", "unknown"),
+                segment_count=zone_pred.get("segment_count", 0),
+                incident_count=len(incidents_in_zone),
+            )
+            zone_reports.append(zone_report)
+        
+        # Sort by zone_id for consistent ordering
+        zone_reports.sort(key=lambda z: z.zone_id)
+        
+        state.zone_reports = zone_reports
+        
+        # Calculate overall stats
+        valid_speeds = [z.current_average_speed for z in zone_reports if z.current_average_speed is not None]
+        valid_predicted = [z.predicted_average_speed for z in zone_reports if z.predicted_average_speed is not None]
+        
+        overall_avg = sum(valid_speeds) / len(valid_speeds) if valid_speeds else None
+        overall_pred = sum(valid_predicted) / len(valid_predicted) if valid_predicted else None
+        overall_change_pct = ((overall_pred - overall_avg) / overall_avg * 100) if overall_avg and overall_avg != 0 else None
+        total_incidents = sum(z.incident_count for z in zone_reports)
+        
+        state.overall_stats = {
+            "overall_average_speed": round(overall_avg, 1) if overall_avg else None,
+            "overall_predicted_speed": round(overall_pred, 1) if overall_pred else None,
+            "overall_speed_change_percent": round(overall_change_pct, 1) if overall_change_pct else None,
+            "overall_congestion_level": classify_congestion(overall_avg),
+            "overall_status": classify_overall_status(overall_avg, total_incidents),
+            "total_incidents": total_incidents,
+        }
+        
+        log.info(f"Analysis complete: overall_avg={overall_avg}, total_incidents={total_incidents}")
+        
+    except Exception as e:
+        state.errors.append(f"Failed to analyze traffic: {str(e)}")
+        log.exception("Error analyzing traffic")
+    
+    return state
+
+
+# ============================================================
+# NODE 5: BUILD_REPORT
+# ============================================================
+def build_report(state: TrafficAgentState) -> TrafficAgentState:
+    """Build the final TrafficReport."""
+    log.info("Building traffic report...")
+    
+    try:
+        if not state.zone_reports:
+            state.errors.append("No zone reports available")
+            return state
+        
+        # Build incident reports
+        incident_reports: List[IncidentReport] = []
+        for inc in state.live_incidents:
+            incident_reports.append(IncidentReport(
+                type=inc.get("type", ""),
+                message=inc.get("message", ""),
+                latitude=inc.get("coordinates", {}).get("lat") if inc.get("coordinates") else inc.get("latitude"),
+                longitude=inc.get("coordinates", {}).get("lon") if inc.get("coordinates") else inc.get("longitude"),
+                zone_id=inc.get("zone_id"),
+                zone_name=inc.get("zone_name"),
+            ))
+        
+        # Compile limitations
+        limitations = list(state.warnings)
+        limitations.extend([
+            "Historical ML segments do not contain geographic coordinates; "
+            "zone-level ML aggregation is currently limited.",
+            "Zone-level speed predictions use demo values with synthetic variation.",
+            "Live incidents are sourced from LTA DataMall Traffic Incidents API.",
+        ])
+        
+        # Add errors as limitations if any
+        for err in state.errors:
+            limitations.append(f"Error: {err}")
+        
+        report = TrafficReport(
+            generated_at=datetime.now(),
+            prediction_horizon_minutes=_PREDICTION_HORIZON_MINUTES,
+            overall_status=state.overall_stats.get("overall_status", "unknown"),
+            overall_average_speed=state.overall_stats.get("overall_average_speed"),
+            overall_predicted_speed=state.overall_stats.get("overall_predicted_speed"),
+            overall_speed_change_percent=state.overall_stats.get("overall_speed_change_percent"),
+            overall_congestion_level=state.overall_stats.get("overall_congestion_level", "unknown"),
+            zones=state.zone_reports,
+            incidents=incident_reports,
+            limitations=limitations,
+        )
+        
+        state.report = report
+        log.info("Traffic report built successfully")
+        
+    except Exception as e:
+        state.errors.append(f"Failed to build report: {str(e)}")
+        log.exception("Error building report")
+    
+    return state
+
+
+# ============================================================
+# BUILD LANGGRAPH WORKFLOW
+# ============================================================
+def create_traffic_agent() -> StateGraph:
+    """Create the Traffic Agent LangGraph workflow."""
+    
+    workflow = StateGraph(TrafficAgentState)
+    
+    # Add nodes
+    workflow.add_node("LOAD_PREDICTIONS", load_predictions)
+    workflow.add_node("AGGREGATE_ZONES", aggregate_zones)
+    workflow.add_node("LOAD_LIVE_INCIDENTS", load_live_incidents)
+    workflow.add_node("ANALYZE_TRAFFIC", analyze_traffic)
+    workflow.add_node("BUILD_REPORT", build_report)
+    
+    # Add edges
+    workflow.set_entry_point("LOAD_PREDICTIONS")
+    workflow.add_edge("LOAD_PREDICTIONS", "AGGREGATE_ZONES")
+    workflow.add_edge("AGGREGATE_ZONES", "LOAD_LIVE_INCIDENTS")
+    workflow.add_edge("LOAD_LIVE_INCIDENTS", "ANALYZE_TRAFFIC")
+    workflow.add_edge("ANALYZE_TRAFFIC", "BUILD_REPORT")
+    workflow.add_edge("BUILD_REPORT", END)
+    
+    return workflow.compile()
+
+
+# Global compiled graph
+_traffic_agent_graph = None
+
+
+def get_traffic_agent():
+    """Get or create the compiled Traffic Agent graph."""
+    global _traffic_agent_graph
+    if _traffic_agent_graph is None:
+        _traffic_agent_graph = create_traffic_agent()
+    return _traffic_agent_graph
+
+
+def run_traffic_agent(offline: bool = False) -> TrafficReport:
+    """Run the Traffic Agent and return a TrafficReport.
+    
+    Args:
+        offline: If True, use offline mode for LTA incidents (deterministic fixture).
+    
+    Returns:
+        TrafficReport with combined ML predictions, live incidents, and zone analysis.
+    """
+    # Set offline mode env var for the agent run
+    prev_offline = os.getenv("TRAFFIC_AGENT_OFFLINE")
+    os.environ["TRAFFIC_AGENT_OFFLINE"] = "true" if offline else "false"
+    
+    try:
+        graph = get_traffic_agent()
+        initial_state = TrafficAgentState()
+        result = graph.invoke(initial_state)
+        
+        if result.get("report") is None:
+            raise RuntimeError("Traffic agent failed to produce report: " + "; ".join(result.get("errors", ["Unknown error"])))
+        
+        return result["report"]
+    finally:
+        if prev_offline is not None:
+            os.environ["TRAFFIC_AGENT_OFFLINE"] = prev_offline
+        else:
+            os.environ.pop("TRAFFIC_AGENT_OFFLINE", None)

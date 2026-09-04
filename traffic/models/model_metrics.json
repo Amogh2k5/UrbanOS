@@ -1,0 +1,31 @@
+{
+  "selected_model": "XGBoost",
+  "validation_mae": 3.8602852530088665,
+  "validation_rmse": 5.191393974019164,
+  "test_mae": 3.861834398700118,
+  "test_rmse": 5.195458247119569,
+  "baseline_mae": 4.433140313667497,
+  "baseline_rmse": 6.00181862263053,
+  "peak_mae": 3.8789611831919455,
+  "macro_mae": 3.8618343987001174,
+  "macro_rmse": 4.868451598600695,
+  "training_date_range": "2022-03-01 to 2022-03-21",
+  "validation_date_range": "2022-03-22 to 2022-03-24",
+  "test_date_range": "2022-03-25 to 2022-03-30",
+  "feature_list": [
+    "speed_lag_1",
+    "speed_lag_2",
+    "speed_lag_3",
+    "speed_lag_4",
+    "speed_lag_5",
+    "speed_lag_6",
+    "hour",
+    "day_of_week",
+    "is_weekend",
+    "is_peak",
+    "segment_mean_speed",
+    "segment_std_speed",
+    "neighbor_mean_speed"
+  ],
+  "beats_persistence": true
+}

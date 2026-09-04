@@ -1,0 +1,49 @@
+{
+  "feature_columns": [
+    "speed_lag_1",
+    "speed_lag_2",
+    "speed_lag_3",
+    "speed_lag_4",
+    "speed_lag_5",
+    "speed_lag_6",
+    "hour",
+    "day_of_week",
+    "is_weekend",
+    "is_peak",
+    "segment_mean_speed",
+    "segment_std_speed",
+    "neighbor_mean_speed"
+  ],
+  "categorical_features": [
+    "hour",
+    "day_of_week",
+    "is_weekend",
+    "is_peak"
+  ],
+  "target": "traffic_speed",
+  "lags": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  ],
+  "segment_stats": [
+    "segment_mean_speed",
+    "segment_std_speed"
+  ],
+  "network_features": [
+    "neighbor_mean_speed"
+  ],
+  "calendar_features": [
+    "hour",
+    "day_of_week",
+    "is_weekend",
+    "is_peak"
+  ],
+  "model_type": "XGBoost",
+  "training_date_range": "2022-03-01 to 2022-03-21",
+  "validation_date_range": "2022-03-22 to 2022-03-24",
+  "test_date_range": "2022-03-25 to 2022-03-30"
+}
