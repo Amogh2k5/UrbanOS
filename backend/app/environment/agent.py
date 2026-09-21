@@ -36,7 +36,7 @@ from backend.app.environment.environment_module import EnvironmentModule
 from backend.app.environment.pm25.predictor import PM25Predictor, _IngestCache
 from backend.app.environment.result import EnvironmentReport, RegionPrediction, utcnow_sg
 from backend.app.environment.weather.predictor import WeatherPredictor, WeatherPrediction
-from backend.app.environment.weather.loader import latest_forecast_summary
+from backend.app.environment.weather.data import latest_forecast_summary
 from ml.pm25.config import RAW_PM25_CSV, RAW_WEATHER_DIR, RUNS_DIR
 
 log = logging.getLogger(__name__)

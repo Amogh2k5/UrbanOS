@@ -35,9 +35,11 @@ from backend.app.environment.flood.models import (
 )
 from backend.app.environment.flood.api import FloodAlertsApiClient, FloodAlertsSnapshot
 from backend.app.mobility.traffic.geo_zones import get_all_zones
-from backend.app.environment.rain.api import RainfallApiClient, RainfallSnapshot
-from backend.app.environment.rain.malaysia_api import MalaysiaRainfallApiClient, MalaysiaRainfallSnapshot, get_malaysia_rainfall_evidence
-from backend.app.environment.rain.sumatra_api import SumatraForecastApiClient, SumatraForecastSnapshot, get_sumatra_forecast_evidence
+from backend.app.environment.flood.rainfall_clients import (
+    RainfallApiClient, RainfallSnapshot,
+    MalaysiaRainfallApiClient, MalaysiaRainfallSnapshot, get_malaysia_rainfall_evidence,
+    SumatraForecastApiClient, SumatraForecastSnapshot, get_sumatra_forecast_evidence,
+)
 from backend.app.environment.weather.api import WeatherApiClient, WeatherLiveSnapshot
 from backend.app.environment.flood.config.risk_rules import (
     RISK_THRESHOLDS, SINGAPORE_RAINFALL_RULES, REGIONAL_RULES, PUB_ALERT_RULES,

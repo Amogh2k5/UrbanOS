@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import Map, { Source, Layer, Marker, NavigationControl } from 'react-map-gl/maplibre';
 import type { FillLayerSpecification, LineLayerSpecification } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -10,9 +10,9 @@ import ZoneInspector from './ZoneInspector';
 import MapLegend from './MapLegend';
 
 const MAP_STYLE = {
-  version: 8,
+  version: 8 as const,
   sources: {
-    'osm': {
+    osm: {
       type: 'raster',
       tiles: [
         'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -30,14 +30,14 @@ const MAP_STYLE = {
       maxzoom: 19
     }
   ]
-};
+} as const;
 
 export default function SingaporeMap() {
-  const { report, selectedZone, setSelectedZone } = useAppStore();
+  const { report, setSelectedZone } = useAppStore();
   const [hoverInfo, setHoverInfo] = useState<any | null>(null);
 
   // Compute risk colors for each zone
-  const getZoneRiskColor = (zoneName: string) => {
+  const getZoneRiskColor = useCallback((zoneName: string) => {
     if (!report) return '#3b82f6'; // Default Low / Blue
     
     const checkZoneAffected = (zName: string, affectedZones?: string[]) => {
@@ -53,7 +53,7 @@ export default function SingaporeMap() {
     if (crossImpacts.some(i => i.severity === 'HIGH') || activeIncidents.some(i => i.severity === 'HIGH')) return '#f97316'; // orange-500
     if (crossImpacts.some(i => i.severity === 'MODERATE') || activeIncidents.some(i => i.severity === 'MODERATE')) return '#eab308'; // yellow-500
     return '#3b82f6'; // blue-500
-  };
+  }, [report]);
 
   const fillLayerStyle: FillLayerSpecification = useMemo(() => {
     return {
@@ -82,7 +82,7 @@ export default function SingaporeMap() {
         ]
       }
     };
-  }, [report]);
+  }, [getZoneRiskColor]);
 
   const lineLayerStyle: LineLayerSpecification = {
     id: 'zones-line',
@@ -114,33 +114,34 @@ export default function SingaporeMap() {
   const floodAlerts = report?.source_reports?.flood?.active_alerts || [];
 
   return (
-    <div className="relative w-full h-full min-h-[500px] glass-panel rounded-xl overflow-hidden">
+    <div className="relative w-full h-full min-h-[500px] glass-panel rounded-xl overflow-hidden border border-gray-800 traffic-map-container" style={{ touchAction: 'pan-y' }}>
       <Map
-        initialViewState={{
-          longitude: 103.8198,
-          latitude: 1.3521,
-          zoom: 11.5
-        }}
-        maxBounds={[[103.55, 1.15], [104.15, 1.50]] as any}
-        dragPan={false}
-        dragRotate={false}
-        pitchWithRotate={false}
-        touchZoomRotate={false}
-        touchPitch={false}
-        keyboard={false}
-        minZoom={10.5}
-        maxZoom={16}
-        mapStyle={MAP_STYLE as any}
-        interactiveLayerIds={['zones-fill']}
-        onMouseMove={onHover}
-        onClick={(e) => {
-          if (e.features && e.features.length > 0) {
-            setSelectedZone(e.features[0].properties?.name);
-          } else {
-            setSelectedZone(null);
-          }
-        }}
-      >
+          initialViewState={{
+            longitude: 103.8198,
+            latitude: 1.3521,
+            zoom: 11.5
+          }}
+          maxBounds={[[103.55, 1.15], [104.15, 1.50]] as any}
+          dragPan={false}
+          dragRotate={false}
+          pitchWithRotate={false}
+          touchZoomRotate={false}
+          touchPitch={false}
+          keyboard={false}
+          minZoom={10.5}
+          maxZoom={16}
+          mapStyle={MAP_STYLE as any}
+          interactiveLayerIds={['zones-fill']}
+          onMouseMove={onHover}
+          onClick={(e) => {
+            if (e.features && e.features.length > 0) {
+              setSelectedZone(e.features[0].properties?.name);
+            } else {
+              setSelectedZone(null);
+            }
+          }}
+          scrollZoom={false}
+        >
         <NavigationControl showCompass={false} position="top-right" />
         
         <Source id="zones" type="geojson" data="/data/singapore_traffic_zones.geojson">

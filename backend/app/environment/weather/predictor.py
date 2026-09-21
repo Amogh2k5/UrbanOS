@@ -30,7 +30,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-from backend.app.environment.weather.loader import latest_forecast_summary
+from backend.app.environment.weather.data import latest_forecast_summary
 from ml.pm25.config import REPO_ROOT
 
 SG_TZ = "Asia/Singapore"

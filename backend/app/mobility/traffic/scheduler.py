@@ -17,7 +17,7 @@ from datetime import datetime, timezone, timedelta
 from threading import Event, Lock
 from typing import Optional
 
-from backend.app.environment.traffic_collector import (
+from backend.app.mobility.traffic.data import (
     CollectionResult,
     TrafficCollector,
     collect_traffic_once,
@@ -98,47 +98,52 @@ class TrafficScheduler:
         self._next_scheduled_start = self._start_time
 
         while not self._stop_event.is_set():
-            # Check max runtime
-            if self.config.max_runtime_seconds and self._start_time:
-                elapsed = time.time() - self._start_time
-                if elapsed >= self.config.max_runtime_seconds:
-                    log.info("Max runtime reached (%.1fs), stopping", elapsed)
-                    break
-
-            now = time.time()
-
-            # If we're past the scheduled start time, note it
-            if now >= self._next_scheduled_start:
-                delay = now - self._next_scheduled_start
-                if delay > 1.0:  # Only log if significantly delayed
-                    log.warning(
-                        "Collection start delayed by %.1fs (interval=%.1fs, previous collection ran long)",
-                        delay,
-                        self.config.interval_seconds,
-                    )
-
-            # Try to acquire collection lock (prevents overlapping runs)
-            if not self._collection_lock.acquire(blocking=False):
-                log.warning("Previous collection still running, waiting for completion...")
-                # Wait for the lock to be released, then check if we should proceed
-                if not self._collection_lock.acquire(timeout=60):
-                    log.error("Timed out waiting for previous collection to complete")
-                    self._schedule_next_start()
-                    continue
-
-            self._collection_in_progress = True
-            collection_start_time = time.time()
             try:
-                self._run_collection_cycle(collection_start_time)
-            finally:
-                self._collection_in_progress = False
-                self._collection_lock.release()
+                # Check max runtime
+                if self.config.max_runtime_seconds and self._start_time:
+                    elapsed = time.time() - self._start_time
+                    if elapsed >= self.config.max_runtime_seconds:
+                        log.info("Max runtime reached (%.1fs), stopping", elapsed)
+                        break
 
-            # Schedule next start based on THIS collection's start time
-            self._next_scheduled_start = collection_start_time + self.config.interval_seconds
+                now = time.time()
 
-            # Sleep until next scheduled start
-            self._sleep_until_next_start()
+                # If we're past the scheduled start time, note it
+                if now >= self._next_scheduled_start:
+                    delay = now - self._next_scheduled_start
+                    if delay > 1.0:  # Only log if significantly delayed
+                        log.warning(
+                            "Collection start delayed by %.1fs (interval=%.1fs, previous collection ran long)",
+                            delay,
+                            self.config.interval_seconds,
+                        )
+
+                # Try to acquire collection lock (prevents overlapping runs)
+                if not self._collection_lock.acquire(blocking=False):
+                    log.warning("Previous collection still running, waiting for completion...")
+                    # Wait for the lock to be released, then check if we should proceed
+                    if not self._collection_lock.acquire(timeout=60):
+                        log.error("Timed out waiting for previous collection to complete")
+                        self._schedule_next_start()
+                        continue
+
+                self._collection_in_progress = True
+                collection_start_time = time.time()
+                try:
+                    self._run_collection_cycle(collection_start_time)
+                finally:
+                    self._collection_in_progress = False
+                    self._collection_lock.release()
+
+                # Schedule next start based on THIS collection's start time
+                self._next_scheduled_start = collection_start_time + self.config.interval_seconds
+
+                # Sleep until next scheduled start
+                self._sleep_until_next_start()
+            except Exception as e:
+                log.exception("Unexpected error in scheduler loop: %s", e)
+                # Avoid tight loop on persistent errors
+                time.sleep(5)
 
         log.info("Traffic scheduler stopped. Total runs: %d", self._run_count)
 

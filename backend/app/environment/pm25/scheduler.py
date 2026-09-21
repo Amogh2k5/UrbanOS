@@ -17,12 +17,12 @@ from datetime import datetime, timezone, timedelta
 from threading import Event, Lock
 from typing import Any, Dict, List, Optional
 
-from backend.app.environment.pm25.collector import (
+from backend.app.environment.pm25.data import (
     Pm25CollectionResult,
     Pm25Collector,
     collect_pm25_once,
+    Pm25ObservationStore,
 )
-from backend.app.environment.pm25.storage import Pm25ObservationStore
 
 log = logging.getLogger(__name__)
 

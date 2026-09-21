@@ -16,7 +16,7 @@ from datetime import datetime, timezone, timedelta
 from threading import Event, Lock
 from typing import Optional
 
-from backend.app.mobility.transit.collector import (
+from backend.app.mobility.transit.data import (
     TransitCollectionResult,
     TransitCollector,
     collect_transit_reference_once,
@@ -131,6 +131,10 @@ class TransitAlertsScheduler:
 
         try:
             result = self.collector.collect_train_alerts()
+            # Clean up old alerts (>24 hours)
+            deleted = self.collector.store.cleanup_old_alerts(max_age_hours=24)
+            if deleted:
+                log.info("Cleaned up %d stale alerts during run #%d", deleted, self._run_count)
             self._last_result = result
             duration = time.time() - collection_start_time
 
@@ -142,9 +146,9 @@ class TransitAlertsScheduler:
                 )
             else:
                 log.info(
-                    "Train alerts run #%d SUCCESS: received=%d, stored=%d, duration=%.2fs",
+                    "Train alerts run #%d SUCCESS: received=%d, stored=%d, cleaned=%d, duration=%.2fs",
                     self._run_count, result.train_alerts_received, result.train_alerts_stored,
-                    duration,
+                    deleted, duration,
                 )
 
         except Exception as e:

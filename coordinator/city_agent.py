@@ -12,7 +12,7 @@ from langgraph.graph import END, StateGraph
 
 # Domain report imports
 from backend.app.environment.result import EnvironmentReport
-from backend.app.mobility.traffic.models import TrafficReport
+from backend.app.mobility.traffic.data import TrafficReport
 from backend.app.environment.flood.models import FloodReport
 
 # Coordinator report imports

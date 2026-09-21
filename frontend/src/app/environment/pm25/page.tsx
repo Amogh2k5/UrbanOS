@@ -94,30 +94,16 @@ export default function PollutionPage() {
     );
   }, [report]);
 
-  // Format prediction timestamp for display
-  const formatPredictionTime = (ts: string) => {
-    try {
-      return new Date(ts).toLocaleString([], { 
-        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' 
-      });
-    } catch {
-      return ts;
-    }
-  };
-
-  // Format target window
-  const formatTargetWindow = (start: string, end: string) => {
-    try {
-      const s = new Date(start).toLocaleString([], { 
-        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' 
-      });
-      const e = new Date(end).toLocaleString([], { 
-        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' 
-      });
-      return `${s} → ${e}`;
-    } catch {
-      return `${start} → ${end}`;
-    }
+  // Get current Singapore date (offsetDays: 0 = today, 1 = tomorrow, etc.)
+  const getSGDate = (offsetDays = 0) => {
+    const now = new Date();
+    now.setDate(now.getDate() + offsetDays);
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Singapore',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    }).format(now);
   };
 
   return (
@@ -240,12 +226,12 @@ export default function PollutionPage() {
                   {/* Prediction Metadata */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="p-4 bg-gray-900/40 rounded-lg border border-gray-800">
-                      <span className="text-xs text-gray-500 uppercase tracking-wider mb-1">Prediction Issued</span>
-                      <span className="font-mono text-amber-300">{formatPredictionTime(prediction.prediction_timestamp)}</span>
+                      <span className="text-xs text-gray-500 uppercase tracking-wider mb-1">Prediction For</span>
+                      <span className="font-mono text-amber-300">{getSGDate(0)}</span>
                     </div>
                     <div className="p-4 bg-gray-900/40 rounded-lg border border-gray-800">
                       <span className="text-xs text-gray-500 uppercase tracking-wider mb-1">Target Window</span>
-                      <span className="font-mono text-gray-300 text-sm">{formatTargetWindow(prediction.target_window.start, prediction.target_window.end)}</span>
+                      <span className="font-mono text-gray-300 text-sm">{getSGDate(1)} → {getSGDate(1)}</span>
                     </div>
                     <div className="p-4 bg-gray-900/40 rounded-lg border border-gray-800">
                       <span className="text-xs text-gray-500 uppercase tracking-wider mb-1">Horizon</span>

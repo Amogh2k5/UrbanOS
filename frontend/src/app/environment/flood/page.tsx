@@ -279,10 +279,9 @@ export default function FloodPage() {
                   Stations reporting: {data.malaysia_rainfall.stations_reporting ?? 0}
                 </div>
               </div>
-            ) : (
+) : (
               <div className="text-gray-500 font-mono italic p-6 bg-gray-900/20 rounded border border-dashed border-gray-800 text-sm text-center">
-                UNAVAILABLE
-                <div className="text-[10px] mt-2 text-gray-600 uppercase tracking-wider">Credentials required</div>
+                Rainfall data unavailable
               </div>
             )}
           </div>

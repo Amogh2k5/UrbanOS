@@ -17,12 +17,12 @@ from datetime import datetime, timezone, timedelta
 from threading import Event, Lock
 from typing import Any, Dict, List, Optional
 
-from backend.app.environment.weather.collector import (
+from backend.app.environment.weather.data import (
     WeatherCollectionResult,
     WeatherForecastCollector,
     collect_weather_once,
+    WeatherForecastStore,
 )
-from backend.app.environment.weather.storage import WeatherForecastStore
 
 log = logging.getLogger(__name__)
 

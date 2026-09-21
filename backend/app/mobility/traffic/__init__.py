@@ -1,6 +1,6 @@
 """Traffic mobility module - First-class backend integration."""
 
-from backend.app.mobility.traffic.models import (
+from backend.app.mobility.traffic.data import (
     TrafficReport,
     ZoneReport,
     IncidentReport,
@@ -13,6 +13,12 @@ from backend.app.mobility.traffic.agent import (
     run_traffic_agent,
     create_traffic_agent,
 )
+from backend.app.mobility.traffic.api import (
+    TrafficIncidentsApiClient,
+    TrafficIncidentsSnapshot,
+    TrafficSpeedBandsV2ApiClient,
+    TrafficSpeedBandsV2Snapshot,
+)
 
 __all__ = [
     "TrafficReport",
@@ -22,4 +28,8 @@ __all__ = [
     "get_all_zones",
     "run_traffic_agent",
     "create_traffic_agent",
+    "TrafficIncidentsApiClient",
+    "TrafficIncidentsSnapshot",
+    "TrafficSpeedBandsV2ApiClient",
+    "TrafficSpeedBandsV2Snapshot",
 ]

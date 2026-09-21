@@ -25,18 +25,16 @@ from unittest.mock import patch, MagicMock
 import pytest
 import httpx
 
-from backend.app.mobility.traffic.speed_bands_v2 import (
+from backend.app.mobility.traffic.api import (
     TrafficSpeedBandsV2ApiClient,
     TrafficSpeedBandsV2Snapshot,
     TrafficSpeedBandV2,
     _now_iso,
 )
-from backend.app.mobility.traffic.storage import (
+from backend.app.mobility.traffic.data import (
     TrafficObservationStore,
     TrafficObservation,
     snapshot_to_observations,
-)
-from backend.app.mobility.traffic.collector import (
     TrafficCollector,
     collect_traffic_once,
     get_collection_stats,

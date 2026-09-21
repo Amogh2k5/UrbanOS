@@ -25,12 +25,15 @@
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
+html {
+  overflow-y: auto;
+}
 body {
   background-color: var(--color-background);
   color: var(--color-foreground);
   font-family: var(--font-sans);
   height: 100vh;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .glass-panel {

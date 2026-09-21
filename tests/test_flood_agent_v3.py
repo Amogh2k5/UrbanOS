@@ -32,9 +32,11 @@ from backend.app.environment.flood.models import (
     RegionalWeatherStatus, FloodRiskLevel
 )
 from backend.app.environment.flood.api import FloodAlertsApiClient, FloodAlertsSnapshot
-from backend.app.environment.rain.api import RainfallApiClient, RainfallSnapshot
-from backend.app.environment.rain.malaysia_api import MalaysiaRainfallApiClient, MalaysiaRainfallSnapshot
-from backend.app.environment.rain.sumatra_api import SumatraForecastApiClient, SumatraForecastSnapshot
+from backend.app.environment.flood.rainfall_clients import (
+    RainfallApiClient, RainfallSnapshot,
+    MalaysiaRainfallApiClient, MalaysiaRainfallSnapshot,
+    SumatraForecastApiClient, SumatraForecastSnapshot,
+)
 from backend.app.environment.weather.api import WeatherApiClient, WeatherLiveSnapshot
 
 

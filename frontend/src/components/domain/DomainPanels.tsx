@@ -2,16 +2,15 @@
 
 import { useAppStore } from '@/store';
 import { DomainStatus } from '@/types';
-import { Cloud, Car, Droplets, Activity } from 'lucide-react';
+import { Cloud, Car, Droplets } from 'lucide-react';
 
 interface DomainPanelProps {
   title: string;
-  domain: string;
   status: DomainStatus | undefined;
   icon: React.ReactNode;
 }
 
-function DomainPanel({ title, domain, status, icon }: DomainPanelProps) {
+function DomainPanel({ title, status, icon }: DomainPanelProps) {
   if (!status) return null;
 
   return (
@@ -63,19 +62,16 @@ export default function DomainPanels() {
     <div className="flex flex-col space-y-4 h-full">
       <DomainPanel 
         title="Traffic" 
-        domain="traffic" 
         status={report.domain_status?.traffic} 
         icon={<Car size={20} />} 
       />
       <DomainPanel 
         title="Environment" 
-        domain="environment" 
         status={report.domain_status?.environment} 
         icon={<Cloud size={20} />} 
       />
       <DomainPanel 
         title="Flood" 
-        domain="flood" 
         status={report.domain_status?.flood} 
         icon={<Droplets size={20} />} 
       />

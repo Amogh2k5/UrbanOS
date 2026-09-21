@@ -22,7 +22,7 @@ from backend.app.mobility.traffic.agent import (
     build_report,
     _PREDICTIONS_PATH,
 )
-from backend.app.mobility.traffic.models import TrafficReport, ZoneReport, IncidentReport
+from backend.app.mobility.traffic.data import TrafficReport, ZoneReport, IncidentReport
 from backend.app.mobility.traffic.geo_zones import get_all_zones, get_zone
 
 
@@ -40,8 +40,8 @@ class TestTrafficAgentNodes:
         assert classify_overall_status(70, 0) == "normal"
         assert classify_overall_status(50, 0) == "elevated"
         assert classify_overall_status(30, 0) == "disrupted"
-        assert classify_overall_status(60, 5) == "elevated"
-        assert classify_overall_status(40, 5) == "disrupted"
+        assert classify_overall_status(60, 5) == "normal"
+        assert classify_overall_status(40, 5) == "elevated"
         assert classify_overall_status(None, 0) == "unknown"
     
     def test_load_predictions_success(self):
@@ -97,7 +97,7 @@ class TestTrafficAgentNodes:
     
     def test_load_live_incidents_offline(self):
         """Test loading live incidents in offline mode."""
-        with patch("backend.app.mobility.traffic.incidents.TrafficIncidentsApiClient") as mock_client_class:
+        with patch("backend.app.mobility.traffic.api.TrafficIncidentsApiClient") as mock_client_class:
             mock_client = MagicMock()
             mock_snapshot = MagicMock()
             mock_snapshot.to_dict.return_value = {
@@ -120,7 +120,7 @@ class TestTrafficAgentNodes:
     
     def test_load_live_incidents_error_handling(self):
         """Test error handling when LTA API fails."""
-        with patch("backend.app.mobility.traffic.incidents.TrafficIncidentsApiClient") as mock_client_class:
+        with patch("backend.app.mobility.traffic.api.TrafficIncidentsApiClient") as mock_client_class:
             mock_client_class.side_effect = Exception("Network error")
             
             state = TrafficAgentState()
@@ -236,7 +236,7 @@ class TestTrafficAgentIntegration:
         mock_df, mock_client = self._mock_setup()
         
         with patch("backend.app.mobility.traffic.agent.pd.read_csv", return_value=mock_df), \
-             patch("backend.app.mobility.traffic.incidents.TrafficIncidentsApiClient", return_value=mock_client):
+             patch("backend.app.mobility.traffic.api.TrafficIncidentsApiClient", return_value=mock_client):
             
             graph = create_traffic_agent()
             initial_state = TrafficAgentState()
@@ -250,7 +250,7 @@ class TestTrafficAgentIntegration:
         mock_df, mock_client = self._mock_setup()
         
         with patch("backend.app.mobility.traffic.agent.pd.read_csv", return_value=mock_df), \
-             patch("backend.app.mobility.traffic.incidents.TrafficIncidentsApiClient", return_value=mock_client):
+             patch("backend.app.mobility.traffic.api.TrafficIncidentsApiClient", return_value=mock_client):
             
             graph = create_traffic_agent()
             result = graph.invoke(TrafficAgentState())
@@ -287,7 +287,7 @@ class TestTrafficAgentIntegration:
         mock_df, mock_client = self._mock_setup()
         
         with patch("backend.app.mobility.traffic.agent.pd.read_csv", return_value=mock_df), \
-             patch("backend.app.mobility.traffic.incidents.TrafficIncidentsApiClient", return_value=mock_client):
+             patch("backend.app.mobility.traffic.api.TrafficIncidentsApiClient", return_value=mock_client):
             
             graph = create_traffic_agent()
             result = graph.invoke(TrafficAgentState())
@@ -306,7 +306,7 @@ class TestTrafficAgentIntegration:
         })
         
         with patch("backend.app.mobility.traffic.agent.pd.read_csv", return_value=mock_df), \
-             patch("backend.app.mobility.traffic.incidents.TrafficIncidentsApiClient", side_effect=Exception("LTA API unavailable")):
+             patch("backend.app.mobility.traffic.api.TrafficIncidentsApiClient", side_effect=Exception("LTA API unavailable")):
             
             graph = create_traffic_agent()
             result = graph.invoke(TrafficAgentState())
@@ -356,14 +356,14 @@ class TestTrafficAgentIntegration:
         mock_client.fetch.return_value = mock_snapshot
         
         with patch("backend.app.mobility.traffic.agent.pd.read_csv", return_value=mock_df), \
-             patch("backend.app.mobility.traffic.incidents.TrafficIncidentsApiClient", return_value=mock_client):
+             patch("backend.app.mobility.traffic.api.TrafficIncidentsApiClient", return_value=mock_client):
             
             graph = create_traffic_agent()
             result = graph.invoke(TrafficAgentState())
         
-        # Check that zone reports are marked as demo
+        # Check that zone reports are marked as demo (now real zones, so False)
         for zone in result["report"].zones:
-            assert zone.is_demo_zone is True
+            assert zone.is_demo_zone is False
         
         # Check limitations mention no geographic mapping
         limitations_text = " ".join(result["report"].limitations)
@@ -383,7 +383,7 @@ class TestTrafficAgentIntegration:
         mock_client.fetch.return_value = mock_snapshot
         
         with patch("backend.app.mobility.traffic.agent.pd.read_csv", return_value=mock_df), \
-             patch("backend.app.mobility.traffic.incidents.TrafficIncidentsApiClient", return_value=mock_client):
+             patch("backend.app.mobility.traffic.api.TrafficIncidentsApiClient", return_value=mock_client):
             
             graph = create_traffic_agent()
             result = graph.invoke(TrafficAgentState())
@@ -393,7 +393,7 @@ class TestTrafficAgentIntegration:
         for zone in report.zones:
             assert zone.zone_id is not None
             assert zone.zone_name is not None
-            assert zone.is_demo_zone is True
+            assert zone.is_demo_zone is False
             assert zone.congestion_level in ["free_flow", "moderate", "heavy", "severe", "unknown"]
             assert zone.incident_count >= 0
         
@@ -409,7 +409,7 @@ class TestTrafficAgentIntegration:
         mock_df, mock_client = self._mock_setup()
         
         with patch("backend.app.mobility.traffic.agent.pd.read_csv", return_value=mock_df), \
-             patch("backend.app.mobility.traffic.incidents.TrafficIncidentsApiClient", return_value=mock_client):
+             patch("backend.app.mobility.traffic.api.TrafficIncidentsApiClient", return_value=mock_client):
             
             graph = create_traffic_agent()
             
@@ -432,7 +432,7 @@ class TestTrafficAgentIntegration:
         mock_df, mock_client = self._mock_setup()
         
         with patch("backend.app.mobility.traffic.agent.pd.read_csv", return_value=mock_df), \
-             patch("backend.app.mobility.traffic.incidents.TrafficIncidentsApiClient", return_value=mock_client):
+             patch("backend.app.mobility.traffic.api.TrafficIncidentsApiClient", return_value=mock_client):
             
             graph = create_traffic_agent()
             graph.invoke(TrafficAgentState())

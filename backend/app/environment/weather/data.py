@@ -1,11 +1,4 @@
-"""SQLite storage for NEA 24-hour Weather Forecast historical data.
-
-Supports:
-- National forecast table (one row per issuance)
-- Period forecast table (one row per issuance per time period per region)
-- Duplicate prevention via upsert on natural keys
-- Query by time range
-"""
+"""Weather data models, collection, and storage."""
 
 from __future__ import annotations
 
@@ -19,17 +12,17 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from backend.app.environment.weather.api import WeatherLiveSnapshot
+
 log = logging.getLogger(__name__)
 
 SG_OFFSET = timezone(timedelta(hours=8))
-
 _DEFAULT_DB_PATH = Path("data/weather_forecasts.db")
 
 
-def _get_default_db_path() -> Path:
-    """Get the default database path (allows runtime override for testing)."""
-    return _DEFAULT_DB_PATH
-
+# ============================================================
+# MODELS
+# ============================================================
 
 @dataclass
 class WeatherNationalForecast:
@@ -67,11 +60,12 @@ class WeatherPeriodForecast:
     created_at: str
 
 
+@dataclass
 class WeatherForecastStore:
     """SQLite-backed storage for NEA 24h weather forecasts."""
 
     def __init__(self, db_path: Optional[Path] = None) -> None:
-        self.db_path = db_path or _get_default_db_path()
+        self.db_path = db_path or _DEFAULT_DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -150,7 +144,7 @@ class WeatherForecastStore:
         finally:
             conn.close()
 
-    def upsert_national_forecasts(self, forecasts: List[WeatherNationalForecast]) -> Tuple[int, int]:
+    def upsert_national_forecasts(self, forecasts: List["WeatherNationalForecast"]) -> Tuple[int, int]:
         """Insert or update national forecasts. Returns (inserted_count, updated_count)."""
         if not forecasts:
             return 0, 0
@@ -220,7 +214,7 @@ class WeatherForecastStore:
         log.info("Upserted %d national forecasts (%d inserted, %d updated)", len(forecasts), inserted, updated)
         return inserted, updated
 
-    def upsert_period_forecasts(self, forecasts: List[WeatherPeriodForecast]) -> Tuple[int, int]:
+    def upsert_period_forecasts(self, forecasts: List["WeatherPeriodForecast"]) -> Tuple[int, int]:
         """Insert or update period forecasts. Returns (inserted_count, updated_count)."""
         if not forecasts:
             return 0, 0
@@ -291,7 +285,7 @@ class WeatherForecastStore:
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
         limit: int = 10000,
-    ) -> List[WeatherNationalForecast]:
+    ) -> List["WeatherNationalForecast"]:
         """Query national forecasts within a time range."""
         sql = "SELECT * FROM weather_national_forecast WHERE 1=1"
         params: List[Any] = []
@@ -316,7 +310,7 @@ class WeatherForecastStore:
         end_time: Optional[str] = None,
         region: Optional[str] = None,
         limit: int = 10000,
-    ) -> List[WeatherPeriodForecast]:
+    ) -> List["WeatherPeriodForecast"]:
         """Query period forecasts within a time range."""
         sql = "SELECT * FROM weather_period_forecast WHERE 1=1"
         params: List[Any] = []
@@ -338,7 +332,7 @@ class WeatherForecastStore:
             rows = conn.execute(sql, params).fetchall()
             return [self._row_to_period_fc(row) for row in rows]
 
-    def get_latest_national_forecast(self) -> Optional[WeatherNationalForecast]:
+    def get_latest_national_forecast(self) -> Optional["WeatherNationalForecast"]:
         """Get the most recent national forecast."""
         with self._conn() as conn:
             row = conn.execute(
@@ -354,7 +348,7 @@ class WeatherForecastStore:
             ).fetchone()
             return row[0] if row and row[0] else None
 
-    def to_national_dataframe(self) -> pd.DataFrame:
+    def to_national_dataframe(self) -> "pd.DataFrame":
         """Export national forecasts to pandas DataFrame (for PM2.5 feature pipeline)."""
         with self._conn() as conn:
             df = pd.read_sql_query(
@@ -400,7 +394,7 @@ class WeatherForecastStore:
                 "latest_forecast": date_range[1],
             }
 
-    def _row_to_national_fc(self, row: sqlite3.Row) -> WeatherNationalForecast:
+    def _row_to_national_fc(self, row: sqlite3.Row) -> "WeatherNationalForecast":
         return WeatherNationalForecast(
             date=row["date"],
             timestamp=row["timestamp"],
@@ -417,7 +411,7 @@ class WeatherForecastStore:
             created_at=row["created_at"],
         )
 
-    def _row_to_period_fc(self, row: sqlite3.Row) -> WeatherPeriodForecast:
+    def _row_to_period_fc(self, row: sqlite3.Row) -> "WeatherPeriodForecast":
         return WeatherPeriodForecast(
             date=row["date"],
             timestamp=row["timestamp"],
@@ -434,66 +428,309 @@ class WeatherForecastStore:
             created_at=row["created_at"],
         )
 
+    
 
-def live_snapshot_to_national_forecasts(snapshot, created_at: str) -> List[WeatherNationalForecast]:
-    """Convert a WeatherLiveSnapshot to WeatherNationalForecast list."""
-    # The snapshot contains one issuance (the latest)
-    # We need the date from the issuance timestamp
-    issue_ts = pd.Timestamp(snapshot.issue_timestamp)
-    date_str = issue_ts.strftime("%Y-%m-%d")
 
-    g = snapshot.general
+# ============================================================
+# COLLECTOR (merged from collector.py)
+# ============================================================
+
+from backend.app.environment.weather.api import WeatherApiClient, WeatherLiveSnapshot
+
+log = logging.getLogger(__name__)
+
+SG_OFFSET = timezone(timedelta(hours=8))
+
+
+@dataclass
+class WeatherCollectionResult:
+    """Result of a single collection run."""
+    timestamp: str
+    national_forecasts_received: int
+    national_forecasts_stored: int
+    national_forecasts_updated: int
+    period_forecasts_received: int
+    period_forecasts_stored: int
+    period_forecasts_updated: int
+    errors: List[str]
+
+
+class WeatherForecastCollector:
+    """Service for collecting and storing NEA 24h weather forecasts."""
+
+    def __init__(
+        self,
+        api_client: Optional["WeatherApiClient"] = None,
+        store: Optional["WeatherForecastStore"] = None,
+    ) -> None:
+        from backend.app.environment.weather.api import WeatherApiClient
+        from backend.app.environment.weather.data import WeatherForecastStore
+
+        self.api_client = api_client or WeatherApiClient()
+        self.store = store or WeatherForecastStore()
+
+    def collect_once(self) -> "WeatherCollectionResult":
+        """Perform one collection run: fetch, normalize, store."""
+        errors: List[str] = []
+        timestamp = datetime.now(SG_OFFSET).isoformat()
+
+        try:
+            snapshot: WeatherLiveSnapshot = self.api_client.fetch()
+        except Exception as e:
+            error_msg = f"API fetch failed: {e}"
+            log.error(error_msg)
+            errors.append(error_msg)
+            return WeatherCollectionResult(
+                timestamp=timestamp,
+                national_forecasts_received=0,
+                national_forecasts_stored=0,
+                national_forecasts_updated=0,
+                period_forecasts_received=0,
+                period_forecasts_stored=0,
+                period_forecasts_updated=0,
+                errors=errors,
+            )
+
+        # Convert to storage objects
+        created_at = timestamp
+        national_fcs = live_snapshot_to_national_forecasts(snapshot, created_at)
+        period_fcs = live_snapshot_to_period_forecasts(snapshot, created_at)
+
+        national_received = len(national_fcs)
+        period_received = len(period_fcs)
+
+        # Store national forecasts
+        national_stored = 0
+        national_updated = 0
+        try:
+            inserted, updated = self.store.upsert_national_forecasts(national_fcs)
+            national_stored = inserted + updated
+            national_updated = updated
+        except Exception as e:
+            error_msg = f"National forecast storage upsert failed: {e}"
+            log.error(error_msg)
+            errors.append(error_msg)
+
+        # Store period forecasts
+        period_stored = 0
+        period_updated = 0
+        try:
+            inserted, updated = self.store.upsert_period_forecasts(period_fcs)
+            period_stored = inserted + updated
+            period_updated = updated
+        except Exception as e:
+            error_msg = f"Period forecast storage upsert failed: {e}"
+            log.error(error_msg)
+            errors.append(error_msg)
+
+        log.info(
+            "Weather collection complete: national received=%d, stored=%d (inserted=%d, updated=%d), "
+            "period received=%d, stored=%d (inserted=%d, updated=%d)",
+            national_received, national_stored, national_stored - national_updated, national_updated,
+            period_received, period_stored, period_stored - period_updated, period_updated
+        )
+
+        return WeatherCollectionResult(
+            timestamp=timestamp,
+            national_forecasts_received=national_received,
+            national_forecasts_stored=national_stored,
+            national_forecasts_updated=national_updated,
+            period_forecasts_received=period_received,
+            period_forecasts_stored=period_stored,
+            period_forecasts_updated=period_updated,
+            errors=errors,
+        )
+
+
+def live_snapshot_to_national_forecasts(snapshot, created_at: str):
+    """Convert WeatherLiveSnapshot to list of WeatherNationalForecast for storage."""
+    from datetime import datetime
+    
+    # Parse the issuance timestamp to get date
+    try:
+        if snapshot.issue_timestamp:
+            dt = datetime.fromisoformat(snapshot.issue_timestamp)
+            date = dt.date().isoformat()
+        else:
+            date = datetime.now(SG_OFFSET).date().isoformat()
+    except Exception:
+        date = datetime.now(SG_OFFSET).date().isoformat()
+    
     return [WeatherNationalForecast(
-        date=date_str,
-        timestamp=snapshot.issue_timestamp,
-        update_timestamp=snapshot.updated_timestamp or snapshot.issue_timestamp,
-        temperature_high=g.temperature_high_c or 0.0,
-        temperature_low=g.temperature_low_c or 0.0,
-        relative_humidity_high=g.relative_humidity_high_pct or 0.0,
-        relative_humidity_low=g.relative_humidity_low_pct or 0.0,
-        wind_speed_high=g.wind_speed_high_kmh or 0.0,
-        wind_speed_low=g.wind_speed_low_kmh or 0.0,
-        wind_speed_direction=g.wind_direction or "",
-        forecast_code=g.forecast_code or "",
-        forecast_text=g.forecast_text or "",
+        date=date,
+        timestamp=snapshot.issue_timestamp or snapshot.snapshot_at,
+        update_timestamp=snapshot.updated_timestamp or snapshot.snapshot_at,
+        temperature_high=snapshot.general.temperature_high_c or 0.0,
+        temperature_low=snapshot.general.temperature_low_c or 0.0,
+        relative_humidity_high=snapshot.general.relative_humidity_high_pct or 0.0,
+        relative_humidity_low=snapshot.general.relative_humidity_low_pct or 0.0,
+        wind_speed_high=snapshot.general.wind_speed_high_kmh or 0.0,
+        wind_speed_low=snapshot.general.wind_speed_low_kmh or 0.0,
+        wind_speed_direction=snapshot.general.wind_direction or "",
+        forecast_code=snapshot.general.forecast_code or "",
+        forecast_text=snapshot.general.forecast_text or "",
         created_at=created_at,
     )]
 
 
-def live_snapshot_to_period_forecasts(snapshot, created_at: str) -> List[WeatherPeriodForecast]:
-    """Convert a WeatherLiveSnapshot to WeatherPeriodForecast list.
-
-    The NEA live API returns periods with regional forecasts.
-    We expand each period into one row per region.
-    """
+def live_snapshot_to_period_forecasts(snapshot, created_at: str):
+    """Convert WeatherLiveSnapshot to list of WeatherPeriodForecast for storage."""
+    from datetime import datetime
+    
+    # Parse the issuance timestamp to get date
+    try:
+        if snapshot.issue_timestamp:
+            dt = datetime.fromisoformat(snapshot.issue_timestamp)
+            date = dt.date().isoformat()
+        else:
+            date = datetime.now(SG_OFFSET).date().isoformat()
+    except Exception:
+        date = datetime.now(SG_OFFSET).date().isoformat()
+    
     forecasts = []
-    if not snapshot.periods:
-        return forecasts
-
-    issue_ts = pd.Timestamp(snapshot.issue_timestamp)
-    date_str = issue_ts.strftime("%Y-%m-%d")
-
     for period in snapshot.periods:
-        vps = period.time_period_start or snapshot.issue_timestamp
-        vpe = period.time_period_end or snapshot.issue_timestamp
-        tps = period.time_period_start or vps
-        tpe = period.time_period_end or vpe
-
-        for region_name, region_data in period.regions.items():
+        for region, region_data in period.regions.items():
             forecasts.append(WeatherPeriodForecast(
-                date=date_str,
-                timestamp=snapshot.issue_timestamp,
-                update_timestamp=snapshot.updated_timestamp or snapshot.issue_timestamp,
-                valid_period_start=vps,
-                valid_period_end=vpe,
-                time_period_start=tps,
-                time_period_end=tpe,
+                date=date,
+                timestamp=snapshot.issue_timestamp or snapshot.snapshot_at,
+                update_timestamp=snapshot.updated_timestamp or snapshot.snapshot_at,
+                valid_period_start=snapshot.general.valid_period_start or "",
+                valid_period_end=snapshot.general.valid_period_end or "",
+                time_period_start=period.time_period_start or "",
+                time_period_end=period.time_period_end or "",
                 time_period_text=period.time_period_text or "",
-                region=region_name,
+                region=region,
                 forecast_code=region_data.forecast_code or "",
                 forecast_text=region_data.forecast_text or "",
                 data_quality_flag="ok",
                 created_at=created_at,
             ))
-
     return forecasts
+
+
+def collect_weather_once() -> "WeatherCollectionResult":
+    """Convenience function for scheduled collection runs."""
+    collector = WeatherForecastCollector()
+    return collector.collect_once()
+
+
+def get_weather_collection_stats() -> Dict[str, Any]:
+    """Get weather forecast storage statistics."""
+    store = WeatherForecastStore()
+    return store.get_stats()
+
+
+# ============================================================
+# WEATHER LOADER FUNCTIONS (merged from loader.py)
+# ============================================================
+
+from backend.app.environment.result import WeatherForecastSummary
+from ml.pm25.ingest_weather import ingest_weather
+
+SG_TZ = "Asia/Singapore"
+WEATHER_SOURCE = "NEA Historical24hourWeatherForecast"
+
+
+@dataclass
+class WeatherDiagnostics:
+    n_files_read: int
+    national_rows: int
+    period_rows: int
+    year_offset_rows: int
+    has_forecast_at_t0: bool
+    latest_issue_delta_hours: Optional[float]  # how stale latest issue is vs t0
+
+
+def load_weather(weather_dir: Path):
+    """Run ingestion. Returns (national_df, period_df, report)."""
+    return ingest_weather(str(weather_dir))
+
+
+def latest_forecast_summary(
+    national: pd.DataFrame,
+    t0: pd.Timestamp,
+    period: Optional[pd.DataFrame] = None,
+) -> Tuple[Optional[WeatherForecastSummary], Optional[pd.Timestamp]]:
+    """Find the latest NEA forecast issue with `timestamp <= t0` and return its summary.
+
+    The national table holds one row per `(date, timestamp)` with the national forecast
+    fields (temp/RH/wind/code) but does NOT carry `valid_period_start/end` (those live in
+    the period table). If `period` is provided, the latest issue's earliest valid_period_start
+    and latest valid_period_end are joined into the summary.
+
+    Returns (summary_or_None, latest_issue_timestamp_or_None).
+    """
+    if national.empty:
+        return None, None
+
+    # Ensure tz-aware
+    ts_col = national["timestamp"]
+    if ts_col.dt.tz is None:
+        ts_col = ts_col.dt.tz_localize(SG_TZ)
+    else:
+        ts_col = ts_col.dt.tz_convert(SG_TZ)
+
+    eligible = national[ts_col <= t0]
+    if eligible.empty:
+        return None, None
+
+    latest = eligible.sort_values("timestamp").iloc[-1]
+    latest_ts = pd.Timestamp(latest["timestamp"])
+
+    # valid_period_* come from the period table for the same issue timestamp.
+    vps = vpe = None
+    if period is not None and not period.empty:
+        per_ts = period["timestamp"]
+        if per_ts.dt.tz is None:
+            per_ts = per_ts.dt.tz_localize(SG_TZ)
+        else:
+            per_ts = per_ts.dt.tz_convert(SG_TZ)
+        matching = period[per_ts == latest_ts]
+        if not matching.empty:
+            # Earliest valid_period_start and latest valid_period_end across
+            # the sub-period rows for this issue: the full coverage window.
+            start_vals = matching["valid_period_start"].dropna()
+            end_vals = matching["valid_period_end"].dropna()
+            if not start_vals.empty:
+                vps = pd.Timestamp(start_vals.min())
+                if vps.tzinfo is None:
+                    vps = vps.tz_localize(SG_TZ)
+                else:
+                    vps = vps.tz_convert(SG_TZ)
+            if not end_vals.empty:
+                vpe = pd.Timestamp(end_vals.max())
+                if vpe.tzinfo is None:
+                    vpe = vpe.tz_localize(SG_TZ)
+                else:
+                    vpe = vpe.tz_convert(SG_TZ)
+
+    summary = WeatherForecastSummary(
+        source=WEATHER_SOURCE,
+        forecast_issue_timestamp=latest_ts,
+        valid_period_start=vps,
+        valid_period_end=vpe,
+        national_forecast_code=_str(latest, "forecast_code"),
+        national_forecast_text=_str(latest, "forecast_text"),
+        temperature_high_c=_num(latest, "temperature_high"),
+        temperature_low_c=_num(latest, "temperature_low"),
+        relative_humidity_high_pct=_num(latest, "relative_humidity_high"),
+        relative_humidity_low_pct=_num(latest, "relative_humidity_low"),
+        wind_speed_high_kmh=_num(latest, "wind_speed_high"),
+        wind_speed_low_kmh=_num(latest, "wind_speed_low"),
+        wind_direction=_str(latest, "wind_speed_direction"),
+    )
+    return summary, latest_ts
+
+
+def _str(latest_row: pd.Series, col: str) -> Optional[str]:
+    val = latest_row.get(col)
+    if pd.isna(val):
+        return None
+    return str(val)
+
+
+def _num(latest_row: pd.Series, col: str) -> Optional[float]:
+    val = latest_row.get(col)
+    if pd.isna(val):
+        return None
+    return float(val)

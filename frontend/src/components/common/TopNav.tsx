@@ -86,10 +86,8 @@ export default function TopNav() {
     return pathname.startsWith(href);
   };
 
-  const isActiveModule = (href: string) => pathname === href;
-
   return (
-    <nav className="bg-slate-950 border-b border-slate-800">
+    <nav className="bg-slate-950 border-b border-slate-800 sticky top-0 z-50">
       {/* Primary top bar */}
       <div className="max-w-full mx-auto px-4 h-16 flex items-center justify-between">
         {/* Left brand */}

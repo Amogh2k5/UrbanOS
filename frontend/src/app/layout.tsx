@@ -26,10 +26,10 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body
-        className={`${inter.variable} ${spaceGrotesk.variable} antialiased bg-black h-screen overflow-hidden text-slate-100 flex flex-col`}
+        className={`${inter.variable} ${spaceGrotesk.variable} antialiased bg-black h-screen overflow-visible text-slate-100 flex flex-col`}
       >
         <TopNav />
-        <main className="flex-1 overflow-auto pt-16">{children}</main>
+        <main className="flex-1 overflow-visible">{children}</main>
       </body>
     </html>
   );

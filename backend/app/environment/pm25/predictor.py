@@ -1,9 +1,9 @@
 """PM2.5 predictor — reuses the trained Phase 1 ML artifacts.
 
 This module does NOT train or retrain. It loads joblib artifacts from
-`<runs_dir>/<run_id>/models/{region}_{target}_{model_name}.joblib`, builds the
+`ml/pm25/models/production/{region}_{target}_catboost.joblib`, builds the
 exact leakage-safe feature row expected by those models (reusing
-`ml.phase1_pm25.features.build_modelling_dataset`), and produces next-day PM2.5
+`ml.pm25.features.build_modelling_dataset`), and produces next-day PM2.5
 mean/max predictions per region.
 
 Selection rule (from `selections.csv`):
@@ -32,7 +32,7 @@ from backend.app.environment.selectors import (
     SelectionDecision, load_selections, per_region_target_decisions,
 )
 from backend.app.environment.result import RegionPrediction
-from backend.app.environment.weather.storage import WeatherForecastStore
+from backend.app.environment.weather.data import WeatherForecastStore
 from ml.pm25.config import REPO_ROOT
 from ml.pm25.features import build_modelling_dataset
 from ml.pm25.ingest_pm25 import ingest_pm25
@@ -62,12 +62,17 @@ class PM25Predictor:
         runs_dir: Path,
         run_id: str,
         selections: Optional[Dict[Tuple[str, str], SelectionDecision]] = None,
+        models_dir: Optional[Path] = None,
     ) -> None:
         self.runs_dir = Path(runs_dir)
         self.run_id = run_id
         self.run_dir = self.runs_dir / run_id
-        self.models_dir = self.run_dir / "models"
-        self.selections_csv = self.run_dir / "selections.csv"
+        # Use production models directory by default
+        self.models_dir = models_dir or Path("ml/pm25/models/production")
+        # Selections file: prefer production models dir, then run dir
+        self.selections_csv = self.models_dir / "selections.csv"
+        if not self.selections_csv.exists():
+            self.selections_csv = self.run_dir / "selections.csv"
         self.experiment_config_path = self.run_dir / "experiment_config.json"
 
         if selections is None:
@@ -91,6 +96,7 @@ class PM25Predictor:
         weather_dir: Path,
         ingest_cache: Optional[_IngestCache] = None,
         weather_store: Optional[WeatherForecastStore] = None,
+        pm25_store: Optional["Pm25ObservationStore"] = None,
     ) -> Tuple[pd.DataFrame, Dict[str, RegionPrediction], Dict[str, object]]:
         """Build features for one t0 = prediction_timestamp and predict for all 5 regions.
 
@@ -99,11 +105,10 @@ class PM25Predictor:
             per_region:  {region: RegionPrediction}.
             diagnostics: misc provenance + flags.
 
-        If weather_store is provided and prediction_timestamp is recent (within 7 days
-        of latest collected forecast), weather features will be sourced from the
-        collected live data instead of the historical CSV.
+        If weather_store/pm25_store are provided and prediction_timestamp is recent (within 7 days
+        of latest collected data), features will be sourced from the collected live data instead of the historical CSV.
         """
-        cache = ingest_cache or self._ensure_ingested(pm25_csv, weather_dir, weather_store, prediction_timestamp)
+        cache = ingest_cache or self._ensure_ingested(pm25_csv, weather_dir, weather_store, pm25_store, prediction_timestamp)
 
         # The feature builder takes issuance_dates (calendar dates).
         t0 = pd.Timestamp(prediction_timestamp).tz_convert(SG_TZ)
@@ -204,27 +209,52 @@ class PM25Predictor:
         pm25_csv: Path,
         weather_dir: Path,
         weather_store: Optional[WeatherForecastStore] = None,
+        pm25_store: Optional["Pm25ObservationStore"] = None,
         prediction_timestamp: Optional[pd.Timestamp] = None,
     ) -> _IngestCache:
         """Ensure PM2.5 and weather data are ingested.
 
-        If weather_store is provided and prediction_timestamp is recent, use
-        collected live weather data. Otherwise fall back to historical CSVs.
+        If weather_store/pm25_store are provided and prediction_timestamp is recent,
+        use collected live data. Otherwise fall back to historical CSVs.
         """
         if self._ingest_cache is None:
-            log.info("Ingesting PM2.5 from %s", pm25_csv)
-            pm25_long, _pm25_report = ingest_pm25(str(pm25_csv), REGIONS)
+            # Try to use live PM2.5 observations for current predictions
+            use_live_pm25 = False
+            pm25_long = None
+            if pm25_store is not None and prediction_timestamp is not None:
+                latest_obs_ts = pm25_store.get_latest_observation_timestamp()
+                if latest_obs_ts is not None:
+                    latest_obs = pd.Timestamp(latest_obs_ts)
+                    pred_ts = pd.Timestamp(prediction_timestamp).tz_convert(SG_TZ)
+                    age_days = (pred_ts - latest_obs).total_seconds() / 86400
+                    if 0 <= age_days <= 7 and latest_obs <= pred_ts:
+                        use_live_pm25 = True
+                        log.info("Using collected live PM2.5 observations (latest obs: %s, age: %.1f days)",
+                                 latest_obs_ts, age_days)
+
+            if use_live_pm25:
+                log.info("Loading PM2.5 from observation store")
+                pm25_long = pm25_store.to_long_dataframe(REGIONS)
+                # Filter to observations up to prediction_timestamp
+                pred_ts = pd.Timestamp(prediction_timestamp).tz_convert(SG_TZ)
+                pm25_long = pm25_long[pm25_long["observed_at"] <= pred_ts]
+                if pm25_long.empty:
+                    log.warning("No eligible live PM2.5 observations for t0=%s, falling back to CSV",
+                                prediction_timestamp)
+                    use_live_pm25 = False
+
+            if not use_live_pm25:
+                log.info("Ingesting PM2.5 from %s", pm25_csv)
+                pm25_long, _pm25_report = ingest_pm25(str(pm25_csv), REGIONS)
             self._pm25_long_cache = pm25_long
 
-            # Try to use collected weather data for current predictions
+            # Weather (same logic as before)
             use_live_weather = False
             if weather_store is not None and prediction_timestamp is not None:
                 latest_forecast_ts = weather_store.get_latest_forecast_timestamp()
                 if latest_forecast_ts is not None:
                     latest_forecast = pd.Timestamp(latest_forecast_ts)
                     pred_ts = pd.Timestamp(prediction_timestamp).tz_convert(SG_TZ)
-                    # Use live weather if forecast is within 7 days of prediction
-                    # and the forecast was issued at or before t0
                     age_days = (pred_ts - latest_forecast).total_seconds() / 86400
                     if 0 <= age_days <= 7 and latest_forecast <= pred_ts:
                         use_live_weather = True
@@ -234,38 +264,60 @@ class PM25Predictor:
             if use_live_weather:
                 log.info("Loading weather from collected forecast store")
                 nat = weather_store.to_national_dataframe()
-                per = weather_store.to_period_dataframe()
-                # Filter to only include forecasts issued at or before prediction_timestamp
+                per_long = weather_store.to_period_dataframe()
                 pred_ts = pd.Timestamp(prediction_timestamp).tz_convert(SG_TZ)
                 nat = nat[nat["timestamp"] <= pred_ts]
-                per = per[per["timestamp"] <= pred_ts]
-                if nat.empty or per.empty:
+                per_long = per_long[per_long["timestamp"] <= pred_ts]
+                if nat.empty or per_long.empty:
                     log.warning("No eligible live weather forecasts for t0=%s, falling back to CSV",
                                 prediction_timestamp)
                     use_live_weather = False
+                else:
+                    per = self._pivot_period_df(per_long)
 
             if not use_live_weather:
                 log.info("Ingesting Weather 24h from %s", weather_dir)
                 nat, per, _w_report = _ingest_weather_raw(str(weather_dir))
 
             self._ingest_cache = _IngestCache(self._pm25_long_cache, nat, per)
-        elif weather_store is not None and prediction_timestamp is not None:
-            # Cache exists but we might need to refresh weather for a different t0
-            # Check if we need to use live weather for this specific t0
-            latest_forecast_ts = weather_store.get_latest_forecast_timestamp()
-            if latest_forecast_ts is not None:
+        elif (weather_store is not None or pm25_store is not None) and prediction_timestamp is not None:
+            # Refresh cache if needed for a different t0
+            refresh = False
+            latest_forecast_ts = None
+            latest_obs_ts = None
+            if weather_store is not None:
+                latest_forecast_ts = weather_store.get_latest_forecast_timestamp()
+            if pm25_store is not None:
+                latest_obs_ts = pm25_store.get_latest_observation_timestamp()
+            pred_ts = pd.Timestamp(prediction_timestamp).tz_convert(SG_TZ)
+
+            if weather_store is not None and latest_forecast_ts is not None:
                 latest_forecast = pd.Timestamp(latest_forecast_ts)
-                pred_ts = pd.Timestamp(prediction_timestamp).tz_convert(SG_TZ)
                 age_days = (pred_ts - latest_forecast).total_seconds() / 86400
                 if 0 <= age_days <= 7 and latest_forecast <= pred_ts:
-                    # Rebuild cache with live weather
-                    log.info("Rebuilding ingest cache with live weather for t0=%s", prediction_timestamp)
+                    refresh = True
+            if pm25_store is not None and latest_obs_ts is not None:
+                latest_obs = pd.Timestamp(latest_obs_ts)
+                age_days = (pred_ts - latest_obs).total_seconds() / 86400
+                if 0 <= age_days <= 7 and latest_obs <= pred_ts:
+                    refresh = True
+
+            if refresh:
+                log.info("Rebuilding ingest cache with live data for t0=%s", prediction_timestamp)
+                pm25_long = self._pm25_long_cache
+                if pm25_store is not None and latest_obs_ts is not None:
+                    pm25_long = pm25_store.to_long_dataframe(REGIONS)
+                    pm25_long = pm25_long[pm25_long["observed_at"] <= pred_ts]
+                nat = None
+                per = None
+                if weather_store is not None and latest_forecast_ts is not None:
                     nat = weather_store.to_national_dataframe()
-                    per = weather_store.to_period_dataframe()
+                    per_long = weather_store.to_period_dataframe()
                     nat = nat[nat["timestamp"] <= pred_ts]
-                    per = per[per["timestamp"] <= pred_ts]
-                    if not nat.empty and not per.empty:
-                        self._ingest_cache = _IngestCache(self._pm25_long_cache, nat, per)
+                    per_long = per_long[per_long["timestamp"] <= pred_ts]
+                    per = self._pivot_period_df(per_long) if not per_long.empty else per_long
+                if pm25_long is not None and (nat is not None and not nat.empty) and (per is not None and not per.empty):
+                    self._ingest_cache = _IngestCache(pm25_long, nat, per)
 
         return self._ingest_cache
 
@@ -297,6 +349,31 @@ class PM25Predictor:
 
         return _IngestCache(pm25_long, nat, per)
 
+    def _pivot_period_df(self, per_long: pd.DataFrame) -> pd.DataFrame:
+        """Pivot long-format period forecast (region as column) to wide format
+        with one column per region for forecast_code and forecast_text, matching
+        the historical ingest schema expected by the feature pipeline."""
+        idx_cols = [
+            "date", "timestamp", "update_timestamp", "valid_period_start",
+            "valid_period_end", "time_period_start", "time_period_end", "time_period_text"
+        ]
+        missing = [c for c in idx_cols if c not in per_long.columns]
+        if missing:
+            raise ValueError(f"Period dataframe missing index columns: {missing}")
+
+        # Determine a single data_quality_flag per period group (take first)
+        dq = per_long.groupby(idx_cols)["data_quality_flag"].first().reset_index()
+        dq.rename(columns={"data_quality_flag": "data_quality_flag"}, inplace=True)
+
+        # Pivot forecast_code and forecast_text
+        pivoted = per_long.set_index(idx_cols + ["region"])[["forecast_code", "forecast_text"]].unstack("region")
+        pivoted.columns = [f"{region}_{col}" for col, region in pivoted.columns]
+        pivoted = pivoted.reset_index()
+
+        # Merge data_quality_flag back
+        pivoted = pivoted.merge(dq, on=idx_cols, how="left")
+        return pivoted
+
     def experiment_config(self) -> dict:
         if self._experiment_config is None:
             with open(self.experiment_config_path, "r", encoding="utf-8") as f:
@@ -321,9 +398,16 @@ class PM25Predictor:
     def _load_model(self, region: str, target: str, model_name: str):
         key = (region, target, model_name)
         if key not in self._model_cache:
+            # Use production models directory
             path = self.models_dir / f"{region}_{target}_{model_name}.joblib"
             if not path.exists():
-                raise FileNotFoundError(f"Model artifact missing: {path}")
+                # Fallback to run directory if production model not found
+                fallback_path = self.run_dir / "models" / f"{region}_{target}_{model_name}.joblib"
+                if fallback_path.exists():
+                    path = fallback_path
+                    log.warning("Using fallback model from run directory: %s", path)
+                else:
+                    raise FileNotFoundError(f"Model artifact missing: {path}")
             self._model_cache[key] = joblib.load(path)
         return self._model_cache[key]
 

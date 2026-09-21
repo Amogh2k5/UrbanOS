@@ -2,15 +2,15 @@
 
 Exposes:
     GET /health
-    GET /kpi/live/pm25       — normalized PM2.5 KPI from NEA live API (or fixture)
-    GET /kpi/live/weather    — normalized 24h weather forecast KPI from NEA live API (or fixture)
-    GET /kpi/live/traffic    — normalized Traffic Speed Bands KPI from LTA live API (or fixture)
+    GET /kpi/live/pm25       â€” normalized PM2.5 KPI from NEA live API (or fixture)
+    GET /kpi/live/weather    â€” normalized 24h weather forecast KPI from NEA live API (or fixture)
+    GET /kpi/live/traffic    â€” normalized Traffic Speed Bands KPI from LTA live API (or fixture)
 
 KPI endpoints return normalized JSON with values, timestamps and
 freshness/source. API-provider logic (adapter quirks) NEVER reaches the
 frontend; the frontend only sees normalized JSON.
 
-ML/artifacts/agent-graph are NOT wired to HTTP here — the LangGraph
+ML/artifacts/agent-graph are NOT wired to HTTP here â€” the LangGraph
 EnvironmentAgent is a separate offline orchestration invoked via CLI
 (see backend/app/environment/run_agent.py). Live API data does NOT enter ML.
 """
@@ -20,6 +20,8 @@ from __future__ import annotations
 import logging
 import os
 import time
+import asyncio
+import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -33,31 +35,32 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.environment.pm25.api import Pm25ApiClient, Pm25LiveSnapshot
-from backend.app.environment.weather.api import WeatherApiClient, WeatherLiveSnapshot
-from backend.app.mobility.traffic.speed_bands_v2 import TrafficSpeedBandsV2ApiClient, TrafficSpeedBandsV2Snapshot
-from backend.app.mobility.traffic.incidents import TrafficIncidentsApiClient, TrafficIncidentsSnapshot
+from backend.app.environment.weather.api import WeatherApiClient, WeatherLiveSnapshot, AirTemperatureApiClient, AirTemperatureSnapshot
+from backend.app.mobility.traffic.api import TrafficSpeedBandsV2ApiClient, TrafficSpeedBandsV2Snapshot, TrafficIncidentsApiClient, TrafficIncidentsSnapshot
 from backend.app.environment.flood.api import FloodAlertsApiClient, FloodAlertsSnapshot
-from backend.app.environment.rain.api import RainfallApiClient, RainfallSnapshot
-from backend.app.environment.weather.air_temperature import AirTemperatureApiClient, AirTemperatureSnapshot
-from backend.app.environment.rain.malaysia_api import MalaysiaRainfallApiClient, MalaysiaRainfallSnapshot
-from backend.app.environment.rain.sumatra_api import SumatraForecastApiClient, SumatraForecastSnapshot
-from backend.app.mobility.traffic.collector import collect_traffic_once, get_collection_stats, TrafficCollector
+from backend.app.mobility.traffic.data import collect_traffic_once, get_collection_stats, TrafficCollector
 from backend.app.environment.pm25.predictor import PM25Predictor, _IngestCache
-from backend.app.environment.weather.collector import collect_weather_once, get_weather_collection_stats, WeatherForecastCollector
+from backend.app.environment.weather.data import collect_weather_once, get_weather_collection_stats, WeatherForecastCollector, WeatherForecastStore
 from backend.app.environment.weather.scheduler import WeatherScheduler, run_weather_scheduler
-from backend.app.environment.weather.storage import WeatherForecastStore
-from backend.app.environment.pm25.collector import collect_pm25_once, get_pm25_collection_stats, Pm25Collector
+from backend.app.environment.pm25.data import collect_pm25_once, get_pm25_collection_stats, Pm25Collector, Pm25ObservationStore
 from backend.app.environment.pm25.scheduler import Pm25Scheduler, run_pm25_scheduler
-from backend.app.environment.pm25.storage import Pm25ObservationStore
 from backend.app.environment.selectors import load_selections
 from backend.app.environment.result import RegionPrediction
 from ml.pm25.config import RAW_PM25_CSV, RAW_WEATHER_DIR, RUNS_DIR
 from backend.app.mobility.traffic.api import router as traffic_router
 from backend.app.mobility.transit.api import router as transit_router
+from backend.app.mobility.transit.scheduler import TransitAlertsScheduler, SchedulerConfig
 
 log = logging.getLogger(__name__)
 
 SG_OFFSET = timezone(timedelta(hours=8))
+
+# City report: single-flight lock + short TTL cache. A coordinator run costs
+# ~60s of CPU; without this, every timed-out client leaves a full run grinding
+# in the threadpool and requests stack on top of each other.
+_city_report_lock = threading.Lock()
+_city_report_cache: Dict[str, Any] = {"payload": None, "expires_at": 0.0}
+_CITY_REPORT_CACHE_TTL_S = 120.0
 
 
 def _build_app() -> FastAPI:
@@ -89,9 +92,6 @@ def _build_app() -> FastAPI:
         app.state.traffic_client = None
     app.state.traffic_incidents_client = TrafficIncidentsApiClient(offline=offline)
     app.state.flood_client = FloodAlertsApiClient(offline=offline)
-    app.state.rainfall_client = RainfallApiClient(offline=offline)
-    app.state.malaysia_rainfall_client = MalaysiaRainfallApiClient(offline=offline)
-    app.state.sumatra_rainfall_client = SumatraForecastApiClient(offline=offline)
 
     # Traffic Agent (LangGraph) - lazy loaded
     app.state.traffic_agent = None
@@ -118,6 +118,11 @@ def _build_app() -> FastAPI:
     # PM2.5 scheduler
     app.state.pm25_scheduler = Pm25Scheduler(
         collector=app.state.pm25_collector,
+    )
+
+    # Transit alerts scheduler (runs every 5 minutes)
+    app.state.transit_alerts_scheduler = TransitAlertsScheduler(
+        config=SchedulerConfig(interval_seconds=300),
     )
 
     # ---------------------------------------------------------------- routes
@@ -178,16 +183,6 @@ def _build_app() -> FastAPI:
             raise HTTPException(status_code=502, detail=f"flood adapter error: {e}")
         return snap.to_dict()
 
-    @app.get("/kpi/live/rainfall")
-    def kpi_live_rainfall(date: Optional[str] = Query(None, description="YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS")) -> Dict[str, Any]:
-        client: RainfallApiClient = app.state.rainfall_client
-        try:
-            snap: RainfallSnapshot = client.fetch(date=date)
-        except Exception as e:
-            log.exception("Rainfall KPI fetch failed")
-            raise HTTPException(status_code=502, detail=f"rainfall adapter error: {e}")
-        return snap.to_dict()
-
     @app.get("/kpi/live/air-temperature")
     def kpi_live_air_temperature() -> Dict[str, Any]:
         client: AirTemperatureApiClient = app.state.air_temperature_client
@@ -197,37 +192,18 @@ def _build_app() -> FastAPI:
             log.exception("Air Temperature KPI fetch failed")
             raise HTTPException(status_code=502, detail=f"air temperature adapter error: {e}")
         return snap.to_dict()
-
-    @app.get("/kpi/live/rainfall/malaysia")
-    def kpi_live_rainfall_malaysia() -> Dict[str, Any]:
-        client: MalaysiaRainfallApiClient = app.state.malaysia_rainfall_client
-        try:
-            snap: MalaysiaRainfallSnapshot = client.fetch()
-        except Exception as e:
-            log.exception("Malaysia rainfall KPI fetch failed")
-            raise HTTPException(status_code=502, detail=f"malaysia rainfall adapter error: {e}")
-        return snap.to_dict()
-
-    @app.get("/kpi/live/rainfall/sumatra")
-    def kpi_live_rainfall_sumatra() -> Dict[str, Any]:
-        client: SumatraRainfallApiClient = app.state.sumatra_rainfall_client
-        try:
-            snap: SumatraRainfallSnapshot = client.fetch()
-        except Exception as e:
-            log.exception("Sumatra rainfall KPI fetch failed")
-            raise HTTPException(status_code=502, detail=f"sumatra rainfall adapter error: {e}")
-        return snap.to_dict()
-
+    
     # PM2.5 ML Prediction endpoint
     def _get_pm25_predictor() -> PM25Predictor:
-        """Initialize PM25Predictor with standard repo paths."""
-        selections = load_selections(RUNS_DIR / "phase1_v1" / "selections.csv")
+        """Initialize PM25Predictor with production model artifacts."""
+        # Use production models directory with CatBoost models (benchmark winner)
+        # The predictor will automatically load selections from ml/pm25/models/production/selections.csv
         return PM25Predictor(
             runs_dir=RUNS_DIR,
-            run_id="phase1_v1",
-            selections=selections,
+            run_id="phase1_v1",  # used for selections.csv fallback and weather data
+            models_dir=Path("ml/pm25/models/production"),
         )
-
+    
     def _build_pm25_prediction_response(
         predictor: PM25Predictor,
         per_region: Dict[str, RegionPrediction],
@@ -251,7 +227,7 @@ def _build_app() -> FastAPI:
                     "fallback_reason": None,
                 })
                 continue
-            
+    
             predictions.append({
                 "region": region,
                 "available": pred.selected_model != "MISSING_FEATURES",
@@ -264,7 +240,7 @@ def _build_app() -> FastAPI:
                 "persistence_value_pm25_t0": round(pred.persistence_value_pm25_t0, 1) if pred.persistence_value_pm25_t0 is not None else None,
                 "fallback_reason": pred.fallback_reason,
             })
-        
+    
         return {
             "prediction_timestamp": prediction_timestamp.isoformat(),
             "prediction_horizon_hours": 24,
@@ -288,35 +264,35 @@ def _build_app() -> FastAPI:
             },
             "source": "UrbanOS PM2.5 ML (Phase 1 CatBoost / persistence baseline)",
         }
-
+    
     def _default_t0_from_pm25(pm25_csv: Path, weather_dir: Path) -> tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp | None]:
         """Replicate EnvironmentModule._default_t0_from_pm25 logic to determine t0 from latest data.
-        
+    
         Returns:
             (prediction_timestamp, max_pm25_obs, max_weather_issue or None if no weather data)
         """
         from backend.app.environment.pm25_predictor import _IngestCache
         from ml.pm25.ingest_pm25 import ingest_pm25
         from ml.pm25.ingest_weather import ingest_weather as _ingest_weather_raw
-        
+    
         # Ingest PM2.5 and weather to get the latest available data
         pm25_long, _ = ingest_pm25(str(pm25_csv), ("north", "south", "east", "west", "central"))
         nat, per, _ = _ingest_weather_raw(str(weather_dir))
-        
+    
         obs = pm25_long["observed_at"]
         if obs.dt.tz is None:
             obs = obs.dt.tz_localize("Asia/Singapore")
         else:
             obs = obs.dt.tz_convert("Asia/Singapore")
         max_obs = obs.max()
-        
+    
         # Try the calendar day of max_obs at 23:00
         t0_candidate = max_obs.normalize() + pd.Timedelta(hours=23)
         if t0_candidate > max_obs:
             t0_candidate = max_obs.normalize() - pd.Timedelta(days=1) + pd.Timedelta(hours=23)
             if t0_candidate > max_obs:
                 t0_candidate = max_obs.floor("h")
-        
+    
         # Cap by latest weather issue if provided
         max_weather = None
         if nat is not None and not nat.empty:
@@ -329,37 +305,37 @@ def _build_app() -> FastAPI:
             cap = max_weather.normalize() + pd.Timedelta(hours=23)
             if cap < t0_candidate:
                 t0_candidate = cap if cap <= max_obs else max_obs.floor("h")
-        
+    
         return t0_candidate, max_obs, max_weather
-
+    
     @app.get("/api/pollution/predict")
     def pollution_predict(
         t0: Optional[str] = Query(None, description="Issuance cutoff t0, ISO format (e.g., 2024-12-30T23:00:00+08:00). Defaults to latest available PM2.5 observation hour (D 23:00 Asia/Singapore)."),
     ) -> Dict[str, Any]:
         """Generate next-day PM2.5 predictions using Phase 1 trained models.
-        
+    
         Returns per-region next-day mean and max PM2.5 predictions with model provenance.
         Uses the same leakage-safe feature construction as the training pipeline.
-        
+    
         For current predictions (no explicit t0): uses collected live NEA weather forecast data.
         Returns 503 if no sufficiently recent weather forecast is available.
-        
+    
         For historical predictions (explicit t0): uses historical CSV data.
         """
         import pandas as pd
         from pathlib import Path
         from datetime import datetime, timezone, timedelta
-        
+    
         SG_OFFSET = timezone(timedelta(hours=8))
         now_sg = pd.Timestamp(datetime.now(SG_OFFSET))
         STALENESS_THRESHOLD_DAYS = 7
-        
+    
         # Parse prediction timestamp
         explicit_t0 = t0 is not None
         max_pm25_obs = None
         max_weather_issue = None
         weather_store = None
-        
+    
         if explicit_t0:
             # Historical prediction: use CSVs
             try:
@@ -380,7 +356,7 @@ def _build_app() -> FastAPI:
             else:
                 obs = obs.dt.tz_convert("Asia/Singapore")
             max_pm25_obs = obs.max()
-            
+    
             from ml.pm25.ingest_weather import ingest_weather as _ingest_weather_raw
             nat, per, _ = _ingest_weather_raw(str(RAW_WEATHER_DIR))
             if nat is not None and not nat.empty:
@@ -393,8 +369,9 @@ def _build_app() -> FastAPI:
         else:
             # Current prediction: use collected live weather data
             weather_store = app.state.weather_store
+            pm25_store = app.state.pm25_store
             latest_forecast_ts = weather_store.get_latest_forecast_timestamp()
-            
+    
             if latest_forecast_ts is None:
                 log.warning("PM2.5 prediction refused: no weather forecast data collected")
                 raise HTTPException(
@@ -405,11 +382,11 @@ def _build_app() -> FastAPI:
                         "staleness_threshold_days": STALENESS_THRESHOLD_DAYS,
                         "current_time_sg": now_sg.isoformat(),
                     }
-                )
+)
             
             latest_forecast = pd.Timestamp(latest_forecast_ts)
             weather_age_days = (now_sg - latest_forecast).total_seconds() / 86400
-            
+    
             if weather_age_days > STALENESS_THRESHOLD_DAYS:
                 log.warning(
                     "PM2.5 prediction refused: collected weather data is stale (latest: %s, age: %.1f days > %d days)",
@@ -428,100 +405,277 @@ def _build_app() -> FastAPI:
                         "current_time_sg": now_sg.isoformat(),
                     }
                 )
-            
-            # Determine t0 from latest PM2.5 observation (capped by latest weather forecast)
-            from backend.app.environment.pm25.predictor import _IngestCache
-            from ml.pm25.ingest_pm25 import ingest_pm25
+    
+            # PM2.5 observation freshness check
+            PM25_STALENESS_DAYS = 2
+            latest_pm25_obs_ts = pm25_store.get_latest_observation_timestamp()
+            if latest_pm25_obs_ts is None:
+                log.warning("PM2.5 prediction refused: no PM2.5 observations collected")
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "Prediction unavailable: no PM2.5 observations collected",
+                        "message": "Run the PM2.5 collector first to populate the observation database.",
+                        "staleness_threshold_days": PM25_STALENESS_DAYS,
+                        "current_time_sg": now_sg.isoformat(),
+                    }
+                )
+            latest_pm25_obs = pd.Timestamp(latest_pm25_obs_ts)
+            pm25_age_days = (now_sg - latest_pm25_obs).total_seconds() / 86400
+            if pm25_age_days > PM25_STALENESS_DAYS:
+                log.warning(
+                    "PM2.5 prediction refused: collected PM2.5 data is stale (latest: %s, age: %.1f days > %d days)",
+                    latest_pm25_obs_ts, pm25_age_days, PM25_STALENESS_DAYS
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "Prediction unavailable: PM2.5 observation data is stale",
+                        "message": (
+                            f"Latest collected PM2.5 observation is {latest_pm25_obs_ts} "
+                            f"({pm25_age_days:.1f} days old). Run the PM2.5 collector to fetch a current observation."
+                        ),
+                        "latest_pm25_observation": latest_pm25_obs_ts,
+                        "staleness_threshold_days": PM25_STALENESS_DAYS,
+                        "current_time_sg": now_sg.isoformat(),
+                    }
+                )
+
+# Determine t0 from latest PM2.5 observation (capped by latest weather forecast)
             from ml.pm25.config import REGIONS
-            
-            pm25_long, _ = ingest_pm25(str(RAW_PM25_CSV), REGIONS)
+
+            # Use live PM2.5 observations from store for current predictions
+            pm25_store = app.state.pm25_store
+            pm25_long = pm25_store.to_long_dataframe(REGIONS)
             obs = pm25_long["observed_at"]
             if obs.dt.tz is None:
                 obs = obs.dt.tz_localize("Asia/Singapore")
             else:
                 obs = obs.dt.tz_convert("Asia/Singapore")
             max_obs = obs.max()
-            
+
             # Try the calendar day of max_obs at 23:00
             t0_candidate = max_obs.normalize() + pd.Timedelta(hours=23)
             if t0_candidate > max_obs:
                 t0_candidate = max_obs.normalize() - pd.Timedelta(days=1) + pd.Timedelta(hours=23)
                 if t0_candidate > max_obs:
                     t0_candidate = max_obs.floor("h")
-            
+
             # Cap by latest weather forecast issue
             cap = latest_forecast.normalize() + pd.Timedelta(hours=23)
             if cap < t0_candidate:
                 t0_candidate = cap if cap <= max_obs else max_obs.floor("h")
-            
+
             prediction_timestamp = t0_candidate
             max_pm25_obs = max_obs
             max_weather_issue = latest_forecast
-        
-        try:
-            predictor = _get_pm25_predictor()
-            
-            # Run prediction (uses weather_store if provided for current predictions)
-            features_df, per_region, diagnostics = predictor.predict_all_regions(
-                prediction_timestamp=prediction_timestamp,
-                pm25_csv=RAW_PM25_CSV,
-                weather_dir=RAW_WEATHER_DIR,
-                weather_store=weather_store,
-            )
-            
-            response = _build_pm25_prediction_response(predictor, per_region, diagnostics, prediction_timestamp)
-            # Add data source info
-            response["data_source"] = {
-                "pm25": "historical_csv" if explicit_t0 else "historical_csv",
-                "weather": "historical_csv" if explicit_t0 else "collected_live_forecast",
-                "weather_forecast_timestamp": max_weather_issue.isoformat() if max_weather_issue is not None else None,
-            }
-            return response
-            
-        except FileNotFoundError as e:
-            log.error("PM2.5 model artifact missing: %s", e)
-            raise HTTPException(status_code=503, detail=f"Model artifact unavailable: {e}")
-        except ValueError as e:
-            log.error("PM2.5 prediction failed: %s", e)
-            raise HTTPException(status_code=503, detail=f"Insufficient data for prediction: {e}")
-        except Exception as e:
-            log.exception("PM2.5 prediction failed")
-            raise HTTPException(status_code=500, detail=f"Prediction error: {e}")
 
+            try:
+                predictor = _get_pm25_predictor()
+                pm25_store = app.state.pm25_store
+
+                # Run prediction (uses weather_store and pm25_store if provided for current predictions)
+                features_df, per_region, diagnostics = predictor.predict_all_regions(
+                    prediction_timestamp=prediction_timestamp,
+                    pm25_csv=RAW_PM25_CSV,
+                    weather_dir=RAW_WEATHER_DIR,
+                    weather_store=weather_store,
+                    pm25_store=pm25_store,
+                )
+
+                response = _build_pm25_prediction_response(predictor, per_region, diagnostics, prediction_timestamp)
+                # Add data source info
+                response["data_source"] = {
+                    "pm25": "historical_csv" if explicit_t0 else "collected_live_observations",
+                    "weather": "historical_csv" if explicit_t0 else "collected_live_forecast",
+                    "weather_forecast_timestamp": max_weather_issue.isoformat() if max_weather_issue is not None else None,
+                    "pm25_observation_timestamp": pm25_store.get_latest_observation_timestamp() if hasattr(pm25_store, 'get_latest_observation_timestamp') else None,
+                }
+                return response
+
+            except FileNotFoundError as e:
+                log.error("PM2.5 model artifact missing: %s", e)
+                raise HTTPException(status_code=503, detail=f"Model artifact unavailable: {e}")
+            except ValueError as e:
+                log.error("PM2.5 prediction failed: %s", e)
+                raise HTTPException(status_code=503, detail=f"Insufficient data for prediction: {e}")
+            except Exception as e:
+                log.exception("PM2.5 prediction failed")
+                raise HTTPException(status_code=500, detail=f"Prediction error: {e}")
+    
+    @app.get("/api/mobility/traffic/predict")
+    async def traffic_predict() -> Dict[str, Any]:
+        """Generate real-time per-link traffic speed predictions using production XGBoost.
+
+        Returns:
+            - prediction_timestamp
+            - target_timestamp (t+5min)
+            - model info
+            - list of link predictions with current/predicted speed
+            - division aggregation (8 zones)
+        """
+        try:
+            import asyncio
+            from backend.app.mobility.traffic.predictor import TrafficPredictor
+            from backend.app.mobility.traffic.data import TrafficObservationStore
+
+            store = TrafficObservationStore()
+            predictor = TrafficPredictor()
+            features_df, link_preds, diagnostics = await asyncio.to_thread(predictor.predict_latest, store)
+
+            # Aggregate to divisions (zones)
+            divisions = {}
+            for lp in link_preds:
+                zone = lp.zone_id or "UNKNOWN"
+                divisions.setdefault(zone, {"current": [], "predicted": [], "count": 0})
+                divisions[zone]["current"].append(lp.current_speed)
+                divisions[zone]["predicted"].append(lp.predicted_speed)
+                divisions[zone]["count"] += 1
+            
+            # Define the 5 expected regions and their corresponding zone mappings
+            region_zone_map = {
+                "Central North": ["SG_CENTRAL_NORTH"],
+                "Central South": ["SG_CENTRAL_SOUTH"],
+                "East": ["SG_EAST"],
+                "North": ["SG_NORTH", "SG_NORTH_EAST"],
+                "West": ["SG_WEST_NORTH", "SG_WEST_SOUTH"],
+            }
+            
+            # Ensure zones with zero links in latest snapshot still get segment counts from historical data
+            for region_name, zone_ids in region_zone_map.items():
+                for zid in zone_ids:
+                    if zid not in divisions:
+                        with store._conn() as conn:
+                            cnt_row = conn.execute(
+                                "SELECT COUNT(DISTINCT link_id) FROM traffic_observations WHERE zone_id = ?",
+                                (zid,)
+                            ).fetchone()
+                            cnt = cnt_row[0] if cnt_row else 0
+                        if cnt:
+                            divisions[zid] = {"current": [], "predicted": [], "count": cnt}
+            
+            # Aggregate link predictions to the 5 regions
+            region_data = {}
+            for region_name, zone_ids in region_zone_map.items():
+                region_data = {"current": [], "predicted": [], "count": 0}
+                for zone_id in zone_ids:
+                    if zone_id in divisions:
+                        vals = divisions[zone_id]
+                        region_data["current"].extend(vals["current"])
+                        region_data["predicted"].extend(vals["predicted"])
+                        region_data["count"] += vals["count"]
+                # We'll build the division_list below
+            
+            division_list = []
+            region_order = ["Central North", "Central South", "East", "North", "West"]
+            for region_name in region_order:
+                zone_ids = region_zone_map[region_name]
+                current_vals = []
+                predicted_vals = []
+                total_count = 0
+                for zid in zone_ids:
+                    if zid in divisions:
+                        vals = divisions[zid]
+                        current_vals.extend(vals["current"])
+                        predicted_vals.extend(vals["predicted"])
+                        total_count += vals["count"]
+                
+                cur_avg = sum(current_vals) / len(current_vals) if current_vals else None
+                pred_avg = sum(predicted_vals) / len(predicted_vals) if predicted_vals else None
+                
+                # Determine congestion level based on predicted speed (or current if no prediction)
+                speed_for_congestion = pred_avg if pred_avg is not None else cur_avg
+                
+                if speed_for_congestion is not None:
+                    if speed_for_congestion >= 70:
+                        congestion = "free_flow"
+                    elif speed_for_congestion >= 50:
+                        congestion = "moderate"
+                    elif speed_for_congestion >= 30:
+                        congestion = "heavy"
+                    else:
+                        congestion = "severe"
+                else:
+                    congestion = "unknown"
+                
+                division_list.append({
+                    "division": region_name,
+                    "current_avg_speed": round(cur_avg, 1) if cur_avg is not None else None,
+                    "predicted_avg_speed": round(pred_avg, 1) if pred_avg is not None else None,
+                    "speed_change": round((pred_avg - cur_avg), 1) if (cur_avg is not None and pred_avg is not None) else None,
+                    "speed_change_percent": round((pred_avg - cur_avg) / cur_avg * 100, 1) if (cur_avg is not None and cur_avg != 0 and pred_avg is not None) else None,
+                    "congestion_level": congestion,
+                    "segment_count": total_count,
+                })
+            
+            # Sort divisions by predefined order
+            division_list.sort(key=lambda d: region_order.index(d["division"]) if d["division"] in region_order else 99)
+            
+            # Use first link's timestamps
+            pred_ts = link_preds[0].prediction_timestamp if link_preds else None
+            target_ts = link_preds[0].target_timestamp if link_preds else None
+            
+            return {
+                "prediction_timestamp": pred_ts,
+                "target_timestamp": target_ts,
+                "prediction_horizon_minutes": 5,
+                "model": "xgboost",
+                "is_ml_model": True,
+                "source": "live_lta_observations",
+                "diagnostics": diagnostics,
+                "link_predictions": [
+                    {
+                        "link_id": lp.link_id,
+                        "road_name": lp.road_name,
+                        "road_category": lp.road_category,
+                        "zone_id": lp.zone_id,
+                        "zone_name": lp.zone_name,
+                        "current_speed": lp.current_speed,
+                        "predicted_speed": lp.predicted_speed,
+                        "speed_change": lp.speed_change,
+                    }
+                    for lp in link_preds
+                ],
+                "divisions": division_list,
+            }
+        except Exception as e:
+            log.exception("Traffic prediction failed")
+            raise HTTPException(status_code=500, detail=f"traffic prediction error: {e}")
+    
     @app.get("/api/traffic/report")
     def traffic_report(offline: bool = Query(False, description="Use offline mode for live incidents")) -> Dict[str, Any]:
         """Generate full Traffic Report via LangGraph Traffic Agent.
-        
+    
         Combines:
         - XGBoost segment-level predictions (aggregated to zones)
         - Live LTA Traffic Incidents (with zone assignment)
         - 8 geographic traffic zones
-        
+    
         Returns structured TrafficReport.
         """
         try:
             from backend.app.mobility.traffic.agent import run_traffic_agent
-            
+    
             report = run_traffic_agent(offline=offline)
             return report.model_dump()
         except Exception as e:
             log.exception("Traffic report generation failed")
             raise HTTPException(status_code=500, detail=f"traffic agent error: {e}")
-
+    
     @app.get("/api/flood/report")
     def flood_report(offline: bool = Query(False, description="Use offline mode for live alerts")) -> Dict[str, Any]:
         """Generate full Flood Report V3 via LangGraph Flood Agent.
-        
+    
         Live Evidence (determines current risk):
-        - Singapore rainfall (NEA 5-min API) — PRIMARY signal
-        - Malaysia/Johor rainfall (MetMalaysia API) — SUPPORTING
-        - Sumatra rainfall (BMKG API) — SUPPORTING
-        - Regional weather systems (NEA 24h forecast) — SUPPORTING
-        - PUB Flood Alerts — CONFIRMATION
-        
+        - Singapore rainfall (NEA 5-min API) â€” PRIMARY signal
+        - Malaysia/Johor rainfall (MetMalaysia API) â€” SUPPORTING
+        - Sumatra rainfall (BMKG API) â€” SUPPORTING
+        - Regional weather systems (NEA 24h forecast) â€” SUPPORTING
+        - PUB Flood Alerts â€” CONFIRMATION
+    
         Reference Only:
         - Past flood events catalogue (78 events)
-        
+    
         Returns structured FloodReport V3 with:
         - risk_level (LOW/MODERATE/HIGH/CRITICAL/UNKNOWN)
         - risk_score (0.0-2.0)
@@ -539,22 +693,22 @@ def _build_app() -> FastAPI:
             from pathlib import Path
             sys.path.insert(0, str(Path(__file__).parent.parent.parent))
             from backend.app.environment.flood.agent import run_flood_agent_v3
-            
+    
             report = run_flood_agent_v3(offline=offline)
             return report.model_dump()
         except Exception as e:
             log.exception("Flood report V3 generation failed")
             raise HTTPException(status_code=500, detail=f"flood agent v3 error: {e}")
-
+    
     @app.get("/api/city/report")
     def city_report() -> Dict[str, Any]:
         """Generate City Situation Report via LangGraph City Coordinator.
-        
+
         Orchestrates:
         - Environment Agent (PM2.5 ML + Weather)
         - Traffic Agent (XGBoost + Live Incidents)
         - Flood Agent (Historical Catalogue + Live Alerts)
-        
+
         Returns structured CitySituationReport with:
         - overall_city_status / overall_risk_level
         - domain_status (environment, traffic, flood)
@@ -571,22 +725,46 @@ def _build_app() -> FastAPI:
             from pathlib import Path
             sys.path.insert(0, str(Path(__file__).parent.parent.parent))
             from coordinator.city_agent import run_city_coordinator
-            
-            report = run_city_coordinator()
-            return report.model_dump()
+
+            # The coordinator run costs ~60s of CPU. Without protection, every
+            # client request (and every timed-out retry) spawns another full
+            # run; the aborted ones keep grinding in the threadpool and stack
+            # up until nothing completes within a useful time. Coalesce
+            # concurrent requests onto a single run, and serve a short-lived
+            # cache so bursts/refreshes don't each re-run the whole graph.
+            now = time.time()
+            cached = _city_report_cache["payload"]
+            if cached is not None and now < _city_report_cache["expires_at"]:
+                return cached
+
+            with _city_report_lock:
+                # Re-check after acquiring the lock: the request that held it
+                # may already have produced a fresh report we can share.
+                now = time.time()
+                cached = _city_report_cache["payload"]
+                if cached is not None and now < _city_report_cache["expires_at"]:
+                    return cached
+
+                started = time.time()
+                report = run_city_coordinator()
+                payload = report.model_dump()
+                _city_report_cache["payload"] = payload
+                _city_report_cache["expires_at"] = time.time() + _CITY_REPORT_CACHE_TTL_S
+                log.info("City coordinator run completed in %.1fs", time.time() - started)
+                return payload
         except Exception as e:
             log.exception("City report generation failed")
             raise HTTPException(status_code=500, detail=f"city coordinator error: {e}")
-
+    
     # ---------------------------------------------------------------- internal traffic collection
-
+    
     @app.post("/internal/traffic/collect")
     def internal_traffic_collect() -> Dict[str, Any]:
         """Trigger one LTA Traffic Speed Bands v2 collection run.
-
+    
         Internal endpoint for manual/scheduled data ingestion.
         Fetches live data, maps to zones, stores observations.
-
+    
         Returns:
             - timestamp: collection time
             - records_received: number of segments from API
@@ -614,7 +792,7 @@ def _build_app() -> FastAPI:
         except Exception as e:
             log.exception("Traffic collection failed")
             raise HTTPException(status_code=502, detail=f"traffic collection error: {e}")
-
+    
     @app.get("/internal/traffic/stats")
     def internal_traffic_stats() -> Dict[str, Any]:
         """Get traffic observation storage statistics."""
@@ -623,16 +801,16 @@ def _build_app() -> FastAPI:
         except Exception as e:
             log.exception("Traffic stats failed")
             raise HTTPException(status_code=500, detail=f"traffic stats error: {e}")
-
+    
     # ---------------------------------------------------------------- internal weather collection
-
+    
     @app.post("/internal/weather/collect")
     def internal_weather_collect() -> Dict[str, Any]:
         """Trigger one NEA 24h Weather Forecast collection run.
-
+    
         Internal endpoint for manual/scheduled data ingestion.
         Fetches live forecast, normalizes, stores in forecast database.
-
+    
         Returns:
             - timestamp: collection time
             - national_forecasts_received: number of national forecasts from API
@@ -661,7 +839,7 @@ def _build_app() -> FastAPI:
         except Exception as e:
             log.exception("Weather collection failed")
             raise HTTPException(status_code=502, detail=f"weather collection error: {e}")
-
+    
     @app.get("/internal/weather/stats")
     def internal_weather_stats() -> Dict[str, Any]:
         """Get weather forecast storage statistics."""
@@ -670,16 +848,16 @@ def _build_app() -> FastAPI:
         except Exception as e:
             log.exception("Weather stats failed")
             raise HTTPException(status_code=500, detail=f"weather stats error: {e}")
-
+    
     # ---------------------------------------------------------------- internal PM2.5 collection
-
+    
     @app.post("/internal/pm25/collect")
     def internal_pm25_collect() -> Dict[str, Any]:
         """Trigger one NEA PM2.5 observation collection run.
-
+    
         Internal endpoint for manual/scheduled data ingestion.
         Fetches live PM2.5 observations, normalizes, stores in observation database.
-
+    
         Returns:
             - timestamp: collection time
             - records_received: number of observations from API
@@ -707,7 +885,7 @@ def _build_app() -> FastAPI:
         except Exception as e:
             log.exception("PM2.5 collection failed")
             raise HTTPException(status_code=502, detail=f"pm25 collection error: {e}")
-
+    
     @app.get("/internal/pm25/stats")
     def internal_pm25_stats() -> Dict[str, Any]:
         """Get PM2.5 observation storage statistics."""
@@ -716,13 +894,13 @@ def _build_app() -> FastAPI:
         except Exception as e:
             log.exception("PM2.5 stats failed")
             raise HTTPException(status_code=500, detail=f"pm25 stats error: {e}")
-
+    
     # ---------------------------------------------------------------- internal Weather/PM2.5 schedulers
-
+    
     @app.post("/internal/weather/scheduler/run")
     def internal_weather_scheduler_run() -> Dict[str, Any]:
         """Run one weather collection cycle manually.
-
+    
         Returns:
             - timestamp: collection time
             - national_forecasts_received/stored/updated
@@ -746,7 +924,7 @@ def _build_app() -> FastAPI:
         except Exception as e:
             log.exception("Weather scheduler manual run failed")
             raise HTTPException(status_code=502, detail=f"weather scheduler error: {e}")
-
+    
     @app.get("/internal/weather/scheduler/status")
     def internal_weather_scheduler_status() -> Dict[str, Any]:
         """Get weather scheduler status."""
@@ -756,11 +934,11 @@ def _build_app() -> FastAPI:
             "run_count": scheduler._run_count,
             "last_result": scheduler.get_last_result().__dict__ if scheduler.get_last_result() else None,
         }
-
+    
     @app.post("/internal/pm25/scheduler/run")
     def internal_pm25_scheduler_run() -> Dict[str, Any]:
         """Run one PM2.5 collection cycle manually.
-
+    
         Returns:
             - timestamp: collection time
             - records_received/stored/updated
@@ -784,7 +962,7 @@ def _build_app() -> FastAPI:
         except Exception as e:
             log.exception("PM2.5 scheduler manual run failed")
             raise HTTPException(status_code=502, detail=f"pm25 scheduler error: {e}")
-
+    
     @app.get("/internal/pm25/scheduler/status")
     def internal_pm25_scheduler_status() -> Dict[str, Any]:
         """Get PM2.5 scheduler status."""
@@ -794,12 +972,18 @@ def _build_app() -> FastAPI:
             "run_count": scheduler._run_count,
             "last_result": scheduler.get_last_result().__dict__ if scheduler.get_last_result() else None,
         }
-
+    
     # Register mobility traffic router
     app.include_router(traffic_router)
     # Register mobility transit router
     app.include_router(transit_router)
 
+    # Start transit alerts scheduler in background thread
+    import threading
+    def _run_transit_alerts_scheduler():
+        app.state.transit_alerts_scheduler.run()
+    threading.Thread(target=_run_transit_alerts_scheduler, daemon=True, name="transit-alerts-scheduler").start()
+    
     return app
 
 

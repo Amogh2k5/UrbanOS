@@ -19,17 +19,16 @@ _temp_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
 _TEMP_DB_PATH = Path(_temp_db.name)
 _temp_db.close()
 
-import backend.app.environment.weather.storage as ws
-from backend.app.environment.weather.storage import WeatherForecastStore
-import backend.app.environment.weather.collector as wc
-_original_collector_init = wc.WeatherForecastCollector.__init__
+import backend.app.environment.weather.data as ws
+from backend.app.environment.weather.data import WeatherForecastStore, WeatherForecastCollector
+_original_collector_init = WeatherForecastCollector.__init__
 
 def _patched_collector_init(self, api_client=None, store=None):
     if store is None:
         store = WeatherForecastStore(_TEMP_DB_PATH)
     _original_collector_init(self, api_client=api_client, store=store)
 
-wc.WeatherForecastCollector.__init__ = _patched_collector_init
+WeatherForecastCollector.__init__ = _patched_collector_init
 
 # Now import main (which will use our patched database path)
 from backend.app.main import _build_app

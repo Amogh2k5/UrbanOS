@@ -2,7 +2,6 @@
 
 import { useAppStore } from '@/store';
 import { ShieldAlert, AlertTriangle } from 'lucide-react';
-import { formatDistanceToNow } from 'date-fns';
 
 export default function PriorityIncidentFeed() {
   const { report } = useAppStore();

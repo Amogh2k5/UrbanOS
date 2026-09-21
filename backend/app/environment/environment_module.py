@@ -39,7 +39,7 @@ from backend.app.environment.result import (
     EnvironmentReport, RegionPrediction, utcnow_sg,
 )
 from backend.app.environment.selectors import load_selections, SelectionDecision
-from backend.app.environment.weather.loader import (
+from backend.app.environment.weather.data import (
     load_weather, latest_forecast_summary, WeatherDiagnostics,
 )
 from ml.pm25.config import (

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backend.app.environment.weather.air_temperature import (
+from backend.app.environment.weather.api import (
     AirTemperatureApiClient,
     AirTemperatureSnapshot,
     aggregate_city_temperature,
@@ -57,7 +57,7 @@ class TestAirTemperatureApiClient:
 
     def test_live_fetch_fails_gracefully(self):
         """Test that live fetch failure returns unavailable state."""
-        with patch("backend.app.environment.weather.air_temperature.httpx.Client") as mock_client_class:
+        with patch("backend.app.environment.weather.api.httpx.Client") as mock_client_class:
             mock_client = MagicMock()
             mock_client.get.side_effect = Exception("Network error")
             mock_client_class.return_value.__enter__.return_value = mock_client
@@ -75,7 +75,7 @@ class TestAggregateCityTemperature:
         """Helper to create a snapshot with given readings."""
         readings = {}
         for station_id, data in readings_dict.items():
-            from backend.app.environment.weather.air_temperature import AirTemperatureReading
+            from backend.app.environment.weather.api import AirTemperatureReading
             readings[station_id] = AirTemperatureReading(
                 station_id=station_id,
                 station_name=data.get("name", station_id),
@@ -225,7 +225,7 @@ class TestWeatherApiWithAirTemperature:
 
     def test_air_temp_failure_handled(self):
         """Test that air temperature fetch failure is handled gracefully."""
-        with patch("backend.app.environment.weather.air_temperature.AirTemperatureApiClient.fetch") as mock_fetch:
+        with patch("backend.app.environment.weather.api.AirTemperatureApiClient.fetch") as mock_fetch:
             mock_fetch.side_effect = Exception("API error")
             
             air_client = AirTemperatureApiClient(offline=False, allow_fallback_fixture=False)
