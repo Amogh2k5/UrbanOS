@@ -361,6 +361,15 @@ class Pm25Collector:
                 errors=errors,
             )
 
+        # Notify the shared PM2.5 live-snapshot service so /kpi/live/pm25 and
+        # the status endpoint reflect this collection immediately. A failure
+        # here must never break collection.
+        try:
+            from backend.app.environment.pm25.live_service import get_pm25_live_service
+            get_pm25_live_service().on_collected_snapshot(snapshot)
+        except Exception:
+            log.exception("PM2.5 live snapshot service hook failed")
+
         log.info(
             "PM2.5 collection complete: received=%d, stored=%d (inserted=%d, updated=%d), "
             "regions=%s, api_failed=%s",

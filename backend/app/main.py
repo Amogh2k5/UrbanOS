@@ -44,6 +44,7 @@ from backend.app.environment.pm25.predictor import PM25Predictor, _IngestCache
 from backend.app.environment.weather.data import collect_weather_once, get_weather_collection_stats, WeatherForecastCollector, WeatherForecastStore
 from backend.app.environment.weather.scheduler import WeatherScheduler, run_weather_scheduler
 from backend.app.environment.pm25.data import collect_pm25_once, get_pm25_collection_stats, Pm25Collector, Pm25ObservationStore
+from backend.app.environment.pm25.live_service import get_pm25_live_service
 from backend.app.environment.pm25.scheduler import Pm25Scheduler, run_pm25_scheduler
 from backend.app.environment.selectors import load_selections
 from backend.app.environment.result import RegionPrediction
@@ -124,6 +125,12 @@ def _build_app() -> FastAPI:
         collector=app.state.weather_collector,
     )
 
+    # PM2.5 live snapshot service: seeds from the observation store, then
+    # refreshes the shared latest snapshot from the live NEA API in the
+    # background (hourly). /kpi/live/pm25 reads it; requests never hit the API.
+    app.state.pm25_live_service = get_pm25_live_service()
+    app.state.pm25_live_service.start()
+
     # PM2.5 scheduler
     app.state.pm25_scheduler = Pm25Scheduler(
         collector=app.state.pm25_collector,
@@ -142,6 +149,14 @@ def _build_app() -> FastAPI:
 
     @app.get("/kpi/live/pm25")
     def kpi_live_pm25(date: Optional[str] = Query(None, description="YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS")) -> Dict[str, Any]:
+        # Latest reading: serve the shared in-memory snapshot (refreshed hourly
+        # by the background PM2.5 live service) instead of calling the NEA API
+        # on every frontend request. Historical lookups (?date=...) still go
+        # through the adapter directly.
+        if date is None:
+            snap = app.state.pm25_live_service.snapshot()
+            if snap is not None:
+                return snap.to_dict()
         client: Pm25ApiClient = app.state.pm25_client
         try:
             snap: Pm25LiveSnapshot = client.fetch(date=date)
@@ -980,7 +995,11 @@ def _build_app() -> FastAPI:
             "run_count": scheduler._run_count,
             "last_result": scheduler.get_last_result().__dict__ if scheduler.get_last_result() else None,
         }
-    
+
+    @app.get("/internal/environment/pm25/status")
+    def internal_environment_pm25_status() -> Dict[str, Any]:
+        """Status of the shared PM2.5 live snapshot service."""
+        return app.state.pm25_live_service.status()    
     # Register mobility traffic router
     app.include_router(traffic_router)
     # Register mobility transit router
@@ -991,7 +1010,15 @@ def _build_app() -> FastAPI:
     def _run_transit_alerts_scheduler():
         app.state.transit_alerts_scheduler.run()
     threading.Thread(target=_run_transit_alerts_scheduler, daemon=True, name="transit-alerts-scheduler").start()
-    
+
+    # Start weather forecast scheduler in background thread (NEA 24h forecast,
+    # 4h interval by default; collects immediately at boot). The PM2.5 CatBoost
+    # models genuinely require fresh wf_* forecast features; without this the
+    # forecast store goes stale and /api/pollution/predict correctly refuses.
+    def _run_weather_scheduler():
+        app.state.weather_scheduler.run()
+    threading.Thread(target=_run_weather_scheduler, daemon=True, name="weather-forecast-scheduler").start()
+
     return app
 
 
