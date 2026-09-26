@@ -93,14 +93,22 @@ def classify_overall_status(avg_speed: Optional[float], incident_count: int = 0)
 # ============================================================
 def load_predictions(state: TrafficAgentState) -> TrafficAgentState:
     """Load real-time XGBoost predictions from live traffic observations."""
-    log.info("Loading real-time traffic predictions via TrafficPredictor...")
+    log.info("Loading real-time traffic predictions via TrafficPredictor (CSV-backed)...")
     
     try:
-        from backend.app.mobility.traffic.data import TrafficObservationStore
-        store = TrafficObservationStore()
-        predictor = TrafficPredictor()
-        features_df, link_preds, diagnostics = predictor.predict_latest(store)
-        
+        # Consume the shared PredictionBundle from TrafficPredictionService:
+        # one XGBoost computation per new snapshot, computed in the background
+        # by the service — this node never runs predict_latest() itself.
+        from backend.app.mobility.traffic.prediction_service import (
+            get_traffic_prediction_service,
+        )
+        bundle = get_traffic_prediction_service().get_bundle()
+        if bundle is None or not bundle.link_preds:
+            # Preserve the historical no-data behaviour (fallback below).
+            raise ValueError("No traffic observations available (prediction bundle not found)")
+        link_preds = bundle.link_preds
+        diagnostics = bundle.diagnostics
+
         # Convert LinkPrediction list to DataFrame compatible with downstream nodes
         pred_rows = []
         for lp in link_preds:
@@ -138,7 +146,7 @@ def load_predictions(state: TrafficAgentState) -> TrafficAgentState:
         log.info(f"Generated {len(df)} real-time predictions for {df['entity_id'].nunique()} segments")
         
     except Exception as e:
-        state.errors.append(f"Failed to generate real-time predictions: {str(e)}")
+        state.errors.append(f"Failed to load predictions: {str(e)}")
         log.exception("Error generating real-time predictions")
         # Fallback to static CSV if available
         try:
@@ -147,6 +155,26 @@ def load_predictions(state: TrafficAgentState) -> TrafficAgentState:
                 if not df.empty:
                     state.predictions_df = df
                     state.warnings.append("Fell back to static CSV predictions")
+                    # Summarize the fallback frame defensively (columns vary).
+                    try:
+                        cols = set(df.columns)
+                        state.predictions_summary = {
+                            "total_rows": len(df),
+                            "unique_segments": int(df["entity_id"].nunique()) if "entity_id" in cols else 0,
+                            "timestamp_range": {
+                                "min": df["timestamp"].min() if "timestamp" in cols else None,
+                                "max": df["timestamp"].max() if "timestamp" in cols else None,
+                            },
+                            "overall_actual_avg": float(df["traffic_speed"].mean()) if "traffic_speed" in cols else None,
+                            "overall_predicted_avg": float(df["predicted_speed"].mean()) if "predicted_speed" in cols else None,
+                            "overall_mae": (
+                                float((df["traffic_speed"] - df["predicted_speed"]).abs().mean())
+                                if {"traffic_speed", "predicted_speed"} <= cols else None
+                            ),
+                            "diagnostics": {"fallback": "static_csv"},
+                        }
+                    except Exception:
+                        log.exception("Failed to summarize fallback predictions")
                     log.warning("Using static CSV predictions as fallback")
         except Exception:
             pass

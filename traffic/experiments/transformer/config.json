@@ -1,0 +1,33 @@
+{
+  "seq_len": 6,
+  "pred_horizon": 1,
+  "d_model": 32,
+  "nhead": 4,
+  "num_layers": 2,
+  "dim_feedforward": 64,
+  "dropout": 0.1,
+  "lr": 0.001,
+  "epochs": 100,
+  "patience": 15,
+  "features": [
+    "avg_speed",
+    "min_speed",
+    "max_speed",
+    "link_count",
+    "hour",
+    "minute",
+    "day_of_week",
+    "is_weekend",
+    "is_peak"
+  ],
+  "zones": [
+    "SG_CENTRAL_NORTH",
+    "SG_CENTRAL_SOUTH",
+    "SG_EAST",
+    "SG_NORTH",
+    "SG_NORTH_EAST",
+    "SG_SENTOSA",
+    "SG_WEST_NORTH",
+    "SG_WEST_SOUTH"
+  ]
+}

@@ -22,7 +22,7 @@ _DEFAULT_BASE = "https://datamall2.mytransport.sg/ltaodataservice"
 _INCIDENTS_ENDPOINT = "/TrafficIncidents"
 _SPEED_BANDS_ENDPOINT = "/v4/TrafficSpeedBands"
 _TIMEOUT = 15.0
-_PAGE_SIZE = 10000
+_PAGE_SIZE = 500
 
 # ============================================================
 # TRAFFIC INCIDENTS ADAPTER (from incidents.py)

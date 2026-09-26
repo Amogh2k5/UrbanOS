@@ -155,6 +155,18 @@ class TrafficCollector:
                 errors=errors,
             )
 
+        # Feed the successful snapshot into the shared traffic prediction
+        # service: updates the rolling per-link history (deque maxlen=7) and
+        # triggers a single-flight background PredictionBundle refresh.
+        # A failure here must never break collection.
+        try:
+            from backend.app.mobility.traffic.prediction_service import (
+                get_traffic_prediction_service,
+            )
+            get_traffic_prediction_service().on_new_snapshot(observations)
+        except Exception:
+            log.exception("Traffic prediction service hook failed")
+
         log.info(
             "Collection complete: received=%d, stored=%d (inserted=%d, updated=%d), "
             "zones_mapped=%d, zones_unmapped=%d",
@@ -533,6 +545,249 @@ class TrafficObservationStore:
             zone_name=row["zone_name"],
             created_at=row["created_at"],
         )
+
+    def get_link_history(
+        self,
+        link_ids: List[str],
+        limit_per_link: int = 7,
+    ) -> List[TrafficObservation]:
+        """Get last N observations for each link_id (replaces raw SQL window function)."""
+        if not link_ids:
+            return []
+        placeholders = ','.join('?' for _ in link_ids)
+        query = f"""
+            WITH ranked AS (
+                SELECT observed_at, link_id, road_name, road_category, speed_band,
+                       minimum_speed, maximum_speed, speed_midpoint,
+                       start_latitude, start_longitude, end_latitude, end_longitude,
+                       zone_id, zone_name, created_at,
+                       ROW_NUMBER() OVER (PARTITION BY link_id ORDER BY observed_at DESC) as rn
+                FROM traffic_observations
+                WHERE link_id IN ({placeholders})
+            )
+            SELECT observed_at, link_id, road_name, road_category, speed_band,
+                   minimum_speed, maximum_speed, speed_midpoint,
+                   start_latitude, start_longitude, end_latitude, end_longitude,
+                   zone_id, zone_name, created_at
+            FROM ranked WHERE rn <= ?
+            ORDER BY link_id, observed_at DESC
+        """
+        params = link_ids + [limit_per_link]
+        with self._conn() as conn:
+            rows = conn.execute(query, params).fetchall()
+            return [self._row_to_obs(row) for row in rows]
+
+    def export_latest_seven_per_link(self, csv_path: Path) -> None:
+        """
+        Export the latest 7 real observations for EVERY link_id
+        from the SQLite table into a CSV that matches the exact
+        schema expected by TrafficObservationCSVStore.
+        The query uses a window function and streams rows
+        without ever materialising the full result set.
+        The CSV is written atomically via a temporary file.
+        """
+        import csv
+        import os
+        from pathlib import Path
+
+        tmp_path = Path(str(csv_path) + ".tmp")
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+        sql = """
+            WITH ranked AS (
+                SELECT
+                    observed_at,
+                    link_id,
+                    road_name,
+                    road_category,
+                    speed_band,
+                    minimum_speed,
+                    maximum_speed,
+                    speed_midpoint,
+                    start_latitude,
+                    start_longitude,
+                    end_latitude,
+                    end_longitude,
+                    zone_id,
+                    zone_name,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY link_id
+                        ORDER BY observed_at DESC
+                    ) AS rn
+                FROM traffic_observations
+            )
+            SELECT
+                observed_at,
+                link_id,
+                road_name,
+                road_category,
+                speed_band,
+                minimum_speed,
+                maximum_speed,
+                speed_midpoint,
+                start_latitude,
+                start_longitude,
+                end_latitude,
+                end_longitude,
+                zone_id,
+                zone_name
+            FROM ranked
+            WHERE rn <= 7
+            ORDER BY observed_at, link_id;
+        """
+
+        total_rows = 0
+        with self._conn() as con, open(tmp_path, "w", newline="", encoding="utf-8") as tmp_f:
+            writer = csv.writer(tmp_f)
+            writer.writerow([
+                "observed_at", "link_id", "road_name", "road_category", "speed_band",
+                "minimum_speed", "maximum_speed", "speed_midpoint",
+                "start_latitude", "start_longitude",
+                "end_latitude", "end_longitude",
+                "zone_id", "zone_name"
+            ])
+
+            cur = con.execute(sql)
+
+            for row in cur:
+                writer.writerow(row)
+                total_rows += 1
+
+        # Atomic replace only after successful write
+        os.replace(str(csv_path) + ".tmp", csv_path)
+        log.info("CSV cache rebuilt – %d rows written", total_rows)
+
+    def export_to_csv(self, csv_path: Path) -> None:
+        """Export all observations to CSV for prediction cache."""
+        query = """
+            SELECT observed_at, link_id, road_name, road_category, speed_band,
+                   minimum_speed, maximum_speed, speed_midpoint,
+                   start_latitude, start_longitude, end_latitude, end_longitude,
+                   zone_id, zone_name
+            FROM traffic_observations
+            ORDER BY observed_at, link_id
+        """
+        with self._conn() as conn:
+            rows = conn.execute(query).fetchall()
+        # Convert to DataFrame
+        df = pd.DataFrame([dict(row) for row in rows])
+        # Ensure column order matches CSV store expectations
+        cols = [
+            "observed_at", "link_id", "road_name", "road_category", "speed_band",
+            "minimum_speed", "maximum_speed", "speed_midpoint",
+            "start_latitude", "start_longitude", "end_latitude", "end_longitude",
+            "zone_id", "zone_name"
+        ]
+        df = df[cols]
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(csv_path, index=False)
+        log.info("Exported %d observations to CSV: %s", len(df), csv_path)
+
+
+_DEFAULT_CSV_PATH = Path("data/traffic/traffic_observations.csv")
+
+
+class TrafficObservationCSVStore:
+    """CSV-backed storage for traffic speed band observations (read-only, for fast prediction)."""
+
+    def __init__(self, csv_path: Path = _DEFAULT_CSV_PATH) -> None:
+        self.csv_path = csv_path
+        self._df: Optional[pd.DataFrame] = None
+        self._load_csv()
+
+    def _load_csv(self) -> None:
+        """Load CSV into memory."""
+        if not self.csv_path.exists():
+            log.warning("Traffic CSV not found at %s, will use empty DataFrame", self.csv_path)
+            self._df = pd.DataFrame(columns=[
+                "observed_at", "link_id", "road_name", "road_category", "speed_band",
+                "minimum_speed", "maximum_speed", "speed_midpoint",
+                "start_latitude", "start_longitude", "end_latitude", "end_longitude",
+                "zone_id", "zone_name"
+            ])
+            return
+        
+        log.info("Loading traffic observations from CSV: %s", self.csv_path)
+        self._df = pd.read_csv(self.csv_path, dtype={"link_id": str})
+        # Ensure observed_at is string (already ISO format from export)
+        if "observed_at" in self._df.columns:
+            self._df["observed_at"] = self._df["observed_at"].astype(str)
+        # Ensure link_id is string
+        if "link_id" in self._df.columns:
+            self._df["link_id"] = self._df["link_id"].astype(str)
+        log.info("Loaded %d observations for %d unique links from CSV",
+                 len(self._df), self._df["link_id"].nunique() if "link_id" in self._df.columns else 0)
+
+    def _row_to_obs(self, row: pd.Series) -> TrafficObservation:
+        return TrafficObservation(
+            observed_at=row["observed_at"],
+            link_id=str(row["link_id"]),
+            road_name=str(row["road_name"]),
+            road_category=str(row["road_category"]),
+            speed_band=int(row["speed_band"]),
+            minimum_speed=float(row["minimum_speed"]) if pd.notna(row["minimum_speed"]) else None,
+            maximum_speed=float(row["maximum_speed"]) if pd.notna(row["maximum_speed"]) else None,
+            speed_midpoint=float(row["speed_midpoint"]),
+            start_latitude=float(row["start_latitude"]) if pd.notna(row["start_latitude"]) else None,
+            start_longitude=float(row["start_longitude"]) if pd.notna(row["start_longitude"]) else None,
+            end_latitude=float(row["end_latitude"]) if pd.notna(row["end_latitude"]) else None,
+            end_longitude=float(row["end_longitude"]) if pd.notna(row["end_longitude"]) else None,
+            zone_id=str(row["zone_id"]) if pd.notna(row["zone_id"]) else None,
+            zone_name=str(row["zone_name"]) if pd.notna(row["zone_name"]) else None,
+            created_at=row["observed_at"],  # Use observed_at as created_at for CSV data
+        )
+
+    def get_latest_snapshot(self, limit: int = 1000) -> List[TrafficObservation]:
+        """Get the most recent observations (latest snapshot)."""
+        if self._df is None or self._df.empty:
+            return []
+        
+        latest_ts = self._df["observed_at"].max()
+        latest_rows = self._df[self._df["observed_at"] == latest_ts].head(limit)
+        return [self._row_to_obs(row) for _, row in latest_rows.iterrows()]
+
+    def get_link_history(
+        self,
+        link_ids: List[str],
+        limit_per_link: int = 7,
+    ) -> List[TrafficObservation]:
+        """Get last N observations for each link_id (fast in-memory operation)."""
+        if self._df is None or self._df.empty or not link_ids:
+            return []
+        
+        # Filter for requested link_ids
+        mask = self._df["link_id"].isin(link_ids)
+        filtered = self._df[mask].copy()
+        
+        if filtered.empty:
+            return []
+        
+        # Sort by link_id, observed_at DESC and take first N per link
+        filtered = filtered.sort_values(["link_id", "observed_at"], ascending=[True, False])
+        filtered = filtered.groupby("link_id").head(limit_per_link)
+        
+        return [self._row_to_obs(row) for _, row in filtered.iterrows()]
+
+    # Stub methods for compatibility (not used by predictor)
+    def upsert_observations(self, observations: List[TrafficObservation]) -> Tuple[int, int]:
+        raise NotImplementedError("CSV store is read-only")
+
+    def query_by_timerange(self, *args, **kwargs) -> List[TrafficObservation]:
+        raise NotImplementedError("Use get_link_history for prediction")
+
+    def query_by_link_id(self, *args, **kwargs) -> List[TrafficObservation]:
+        raise NotImplementedError("Use get_link_history for prediction")
+
+    def get_stats(self) -> Dict[str, Any]:
+        if self._df is None or self._df.empty:
+            return {"total_observations": 0, "unique_link_ids": 0, "unique_zones_mapped": 0}
+        return {
+            "total_observations": len(self._df),
+            "unique_link_ids": self._df["link_id"].nunique(),
+            "unique_zones_mapped": self._df["zone_id"].nunique() if "zone_id" in self._df.columns else 0,
+            "earliest_observation": self._df["observed_at"].min(),
+            "latest_observation": self._df["observed_at"].max(),
+        }
 
 
 def snapshot_to_observations(snapshot) -> List[TrafficObservation]:

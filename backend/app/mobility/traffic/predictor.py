@@ -83,32 +83,30 @@ class TrafficPredictor:
         latest_ts = latest_snapshot[0].observed_at
         log.info("Latest observation timestamp: %s, snapshot size: %d", latest_ts, len(latest_snapshot))
 
-        # 2. Fetch last 7 observations per link in a single query using window function
+        # 2. Fetch last 7 observations per link using store's get_link_history method
         link_ids = [obs.link_id for obs in latest_snapshot]
-        placeholders = ','.join('?' for _ in link_ids)
-        query = f"""
-            WITH ranked AS (
-                SELECT observed_at, link_id, road_name, road_category, speed_band,
-                       minimum_speed, maximum_speed, speed_midpoint,
-                       start_latitude, start_longitude, end_latitude, end_longitude,
-                       zone_id, zone_name,
-                       ROW_NUMBER() OVER (PARTITION BY link_id ORDER BY observed_at DESC) as rn
-                FROM traffic_observations
-                WHERE link_id IN ({placeholders}) AND observed_at <= ?
-            )
-            SELECT observed_at, link_id, road_name, road_category, speed_band,
-                   minimum_speed, maximum_speed, speed_midpoint,
-                   start_latitude, start_longitude, end_latitude, end_longitude,
-                   zone_id, zone_name
-            FROM ranked WHERE rn <= 7
-            ORDER BY link_id, observed_at DESC
-        """
-        params = link_ids + [latest_ts]
-        with store._conn() as conn:
-            all_rows = conn.execute(query, params).fetchall()
+        history_obs = store.get_link_history(link_ids, limit_per_link=7)
+        
+        if not history_obs:
+            raise ValueError("No recent history for links")
 
         # Convert to DataFrame
-        df = pd.DataFrame([dict(r) for r in all_rows])
+        df = pd.DataFrame([{
+            "observed_at": obs.observed_at,
+            "link_id": obs.link_id,
+            "road_name": obs.road_name,
+            "road_category": obs.road_category,
+            "speed_band": obs.speed_band,
+            "minimum_speed": obs.minimum_speed,
+            "maximum_speed": obs.maximum_speed,
+            "speed_midpoint": obs.speed_midpoint,
+            "start_latitude": obs.start_latitude,
+            "start_longitude": obs.start_longitude,
+            "end_latitude": obs.end_latitude,
+            "end_longitude": obs.end_longitude,
+            "zone_id": obs.zone_id,
+            "zone_name": obs.zone_name,
+        } for obs in history_obs])
         if df.empty:
             raise ValueError("No recent history for links")
         df["observed_at"] = pd.to_datetime(df["observed_at"]).dt.tz_convert(SG_OFFSET)
@@ -211,22 +209,26 @@ class TrafficPredictor:
         # 4. Predict
         dmatrix = xgb.DMatrix(X)
         preds = self._booster.predict(dmatrix)
-        # preds are predicted speed_midpoint at t+5min (target_speed)
+        # Model predicts SPEED CHANGE (delta): target_speed_change = speed_midpoint(t+5min) - speed_midpoint(t)
         # current speed is speed_midpoint at latest_ts (latest_rows["speed_midpoint"])
         current_speeds = latest_rows["speed_midpoint"].clip(0, 120).values
 
         predictions = []
         for i, (idx, row) in enumerate(latest_rows.iterrows()):
-            pred_speed = float(preds[i])
-            # Clip predictions to realistic range
-            pred_speed = max(0.0, min(pred_speed, 120.0))
+            predicted_speed_change = float(preds[i])
             cur_speed = float(row["speed_midpoint"])
             # Clip current speed as safety
             cur_speed = max(0.0, min(cur_speed, 120.0))
+            # Predicted absolute speed = current + predicted change
+            pred_speed = cur_speed + predicted_speed_change
+            # Clip predicted speed to realistic range (0-120 km/h)
+            pred_speed = max(0.0, min(pred_speed, 120.0))
             # Guard: limit unrealistic drop in 5 minutes (max 30% drop)
             max_drop = 0.30 * cur_speed
             if cur_speed - pred_speed > max_drop:
                 pred_speed = cur_speed - max_drop
+            # speed_change must equal the actual applied change (after clipping/guards)
+            final_speed_change = pred_speed - cur_speed
             predictions.append(LinkPrediction(
                 link_id=row["link_id"],
                 road_name=row["road_name"],
@@ -235,7 +237,7 @@ class TrafficPredictor:
                 zone_name=row.get("zone_name"),
                 current_speed=cur_speed,
                 predicted_speed=pred_speed,
-                speed_change=pred_speed - cur_speed,
+                speed_change=final_speed_change,
                 prediction_timestamp=latest_ts,
                 target_timestamp=(pd.Timestamp(latest_ts) + pd.Timedelta(minutes=5)).isoformat(),
             ))

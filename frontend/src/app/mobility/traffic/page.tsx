@@ -7,23 +7,23 @@ import { Car, TrendingUp } from 'lucide-react';
 import TrafficMap from './TrafficMap';
 
 const DIVISION_ORDER = [
-  'SG_CENTRAL_NORTH',
-  'SG_CENTRAL_SOUTH',
-  'SG_EAST',
-  'SG_NORTH',
-  'SG_WEST',
+  'Central',
+  'East',
+  'North',
+  'North-East',
+  'West',
 ];
 
 const DIVISION_CODE_TO_NAME: Record<string, string> = {
-  'SG_CENTRAL_NORTH': 'Central North',
-  'SG_CENTRAL_SOUTH': 'Central South',
-  'SG_EAST': 'East',
-  'SG_NORTH': 'North',
-  'SG_WEST': 'West',
+  'Central': 'Central',
+  'East': 'East',
+  'North': 'North',
+  'North-East': 'North-East',
+  'West': 'West',
 };
 
 function formatDivisionName(id: string) {
-  return id.replace('SG_', '').replace(/_/g, ' ');
+  return id;
 }
 
 function getCongestionColor(level: string) {
@@ -53,33 +53,39 @@ export default function TrafficPage() {
 
   const [selectedIncident, setSelectedIncident] = useState<any | null>(null);
 
-  // LIVE effect: only the latest request may commit state; interval cleaned on unmount.
+  // LIVE effect: serialized polling loop — at most ONE live request
+  // in flight at any time. The next poll is scheduled ONLY after the current
+  // request fully settles (success or failure); no setInterval that could
+  // fire while a request is still running. Cleanup stops any pending timer
+  // and blocks late state updates (Strict Mode safe).
   useEffect(() => {
     let cancelled = false;
-    let latestRequestId = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
-    const loadLive = async () => {
-      const requestId = ++latestRequestId;
+    const runOnce = async () => {
       try {
         const res = await fetchTrafficReport();
-        if (cancelled || requestId !== latestRequestId) return; // stale response
+        if (cancelled) return;
         setLiveData(res);
         setLiveError(null);
       } catch (err: any) {
-        if (cancelled || requestId !== latestRequestId) return; // stale failure
+        if (cancelled) return;
         setLiveError(err.message);
       } finally {
-        if (!cancelled && requestId === latestRequestId) {
-          setLiveLoading(false);
-        }
+        if (cancelled) return;
+        // A failed refresh must not erase the last successful live data
+        // (we never clear `liveData` here; skeletons only render when
+        // there is no live data at all).
+        setLiveLoading(false);
+        // Schedule the next refresh only after this request has completed.
+        timer = setTimeout(runOnce, 30000);
       }
     };
 
-    loadLive();
-    const intv = setInterval(loadLive, 30000);
+    runOnce();
     return () => {
       cancelled = true;
-      clearInterval(intv);
+      if (timer) clearTimeout(timer);
     };
   }, []);
 
@@ -146,7 +152,7 @@ export default function TrafficPage() {
         </div>
 
         {/* Compact KPI Row — driven ONLY by the Live request */}
-        <div className={`grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 ${liveLoading && !liveData ? 'animate-pulse' : ''}`}>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <div className="glass-panel p-4 rounded-lg border border-gray-800">
             <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Current Avg Speed</div>
             <div className="text-2xl font-bold text-white">{currentAvgSpeed !== null ? `${currentAvgSpeed.toFixed(1)} km/h` : '--'}</div>
@@ -159,21 +165,18 @@ export default function TrafficPage() {
             <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Live Incidents</div>
             <div className="text-2xl font-bold text-white">{activeIncidentsCount}</div>
           </div>
-          <div className="glass-panel p-4 rounded-lg border border-gray-800">
-            <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Next 5‑min ML Forecast</div>
-            <div className="flex items-center gap-2 text-lg font-bold text-white">
-              {forecastLoading && !prediction ? (
-                <span className="text-gray-500">…</span>
-              ) : prediction?.is_ml_model ? (
-                <>
-                  <span className="text-green-400">ML</span>
-                  <span className="text-gray-400 text-xs">({prediction?.model?.toUpperCase() || 'XGBOOST'})</span>
-                </>
-              ) : (
-                <span className="text-yellow-400">Unavailable</span>
-              )}
-            </div>
-          </div>
+<div className="glass-panel p-4 rounded-lg border border-gray-800">
+             <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Next 5‑min Forecast</div>
+             <div className="flex items-center gap-2 text-lg font-bold text-white">
+               {forecastLoading && !prediction ? (
+                 <span className="text-gray-500">…</span>
+               ) : prediction ? (
+                 <span className="text-green-400">Forecast</span>
+               ) : (
+                 <span className="text-yellow-400">Unavailable</span>
+               )}
+             </div>
+           </div>
         </div>
 
         {/* Live-scoped status: loading/error NEVER affects Forecast */}
@@ -196,12 +199,12 @@ export default function TrafficPage() {
           />
         </div>
 
-        {/* ML Forecast Section — driven ONLY by the Forecast request */}
+        {/* Forecast Section — driven ONLY by the Forecast request */}
         <section className="mb-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-bold text-cyan-400 flex items-center gap-2 uppercase tracking-widest text-xs">
               <TrendingUp size={18} />
-              <span>Traffic ML Forecast – Next 5 min</span>
+              <span>Traffic Forecast – Next 5 min</span>
             </h3>
             {prediction && (
               <div className="text-xs text-gray-500 font-mono">

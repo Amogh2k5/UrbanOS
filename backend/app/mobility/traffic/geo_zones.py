@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_GEOJSON_PATH = Path("traffic/data/processed/singapore_traffic_zones.geojson")
+_DEFAULT_GEOJSON_PATH = Path("traffic/data/processed/singapore_planning_regions.geojson")
 
 
 class ZoneLookup:

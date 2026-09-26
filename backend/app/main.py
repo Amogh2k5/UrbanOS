@@ -39,6 +39,7 @@ from backend.app.environment.weather.api import WeatherApiClient, WeatherLiveSna
 from backend.app.mobility.traffic.api import TrafficSpeedBandsV2ApiClient, TrafficSpeedBandsV2Snapshot, TrafficIncidentsApiClient, TrafficIncidentsSnapshot
 from backend.app.environment.flood.api import FloodAlertsApiClient, FloodAlertsSnapshot
 from backend.app.mobility.traffic.data import collect_traffic_once, get_collection_stats, TrafficCollector
+from backend.app.mobility.traffic.prediction_service import get_traffic_prediction_service
 from backend.app.environment.pm25.predictor import PM25Predictor, _IngestCache
 from backend.app.environment.weather.data import collect_weather_once, get_weather_collection_stats, WeatherForecastCollector, WeatherForecastStore
 from backend.app.environment.weather.scheduler import WeatherScheduler, run_weather_scheduler
@@ -95,6 +96,14 @@ def _build_app() -> FastAPI:
 
     # Traffic Agent (LangGraph) - lazy loaded
     app.state.traffic_agent = None
+
+    # Traffic live-prediction service: seeds rolling per-link history from the
+    # latest 7 complete SQLite snapshots (indexed skip-scan, no full scans),
+    # then refreshes the shared XGBoost PredictionBundle in a background thread
+    # once per new snapshot. /api/mobility/traffic/predict and
+    # /api/traffic/report both READ this bundle; they never compute their own.
+    app.state.traffic_prediction_service = get_traffic_prediction_service()
+    app.state.traffic_prediction_service.start()
 
     # Weather forecast store and collector
     app.state.weather_store = WeatherForecastStore()
@@ -516,74 +525,70 @@ def _build_app() -> FastAPI:
         """
         try:
             import asyncio
-            from backend.app.mobility.traffic.predictor import TrafficPredictor
-            from backend.app.mobility.traffic.data import TrafficObservationStore
 
-            store = TrafficObservationStore()
-            predictor = TrafficPredictor()
-            features_df, link_preds, diagnostics = await asyncio.to_thread(predictor.predict_latest, store)
+            # Read the shared PredictionBundle computed once per new snapshot by
+            # the background TrafficPredictionService (rolling 7-obs-per-link
+            # history + existing TrafficPredictor, unchanged). Single-flight:
+            # concurrent cold-start requests coalesce onto ONE computation; a
+            # stale bundle is served with its real observed_at; when nothing has
+            # ever been computed, raise the same no-data error as before.
+            service = get_traffic_prediction_service()
+            bundle = await asyncio.to_thread(service.get_bundle)
+            if bundle is None or not bundle.link_preds:
+                raise ValueError("No traffic observations available")
+            link_preds = bundle.link_preds
+            diagnostics = bundle.diagnostics
 
-            # Aggregate to divisions (zones)
-            divisions = {}
-            for lp in link_preds:
-                zone = lp.zone_id or "UNKNOWN"
-                divisions.setdefault(zone, {"current": [], "predicted": [], "count": 0})
-                divisions[zone]["current"].append(lp.current_speed)
-                divisions[zone]["predicted"].append(lp.predicted_speed)
-                divisions[zone]["count"] += 1
-            
-            # Define the 5 expected regions and their corresponding zone mappings
-            region_zone_map = {
-                "Central North": ["SG_CENTRAL_NORTH"],
-                "Central South": ["SG_CENTRAL_SOUTH"],
-                "East": ["SG_EAST"],
-                "North": ["SG_NORTH", "SG_NORTH_EAST"],
-                "West": ["SG_WEST_NORTH", "SG_WEST_SOUTH"],
+            # Compatibility mapping from legacy LTA zone IDs to official 5 regions
+            LEGACY_TO_REGION = {
+                "SG_CENTRAL_NORTH": "Central",
+                "SG_CENTRAL_SOUTH": "Central",
+                "SG_EAST": "East",
+                "SG_NORTH": "North",
+                "SG_NORTH_EAST": "North-East",
+                "SG_WEST_NORTH": "West",
+                "SG_WEST_SOUTH": "West",
+                "SG_SENTOSA": "Central",
             }
             
-            # Ensure zones with zero links in latest snapshot still get segment counts from historical data
-            for region_name, zone_ids in region_zone_map.items():
-                for zid in zone_ids:
-                    if zid not in divisions:
-                        with store._conn() as conn:
-                            cnt_row = conn.execute(
-                                "SELECT COUNT(DISTINCT link_id) FROM traffic_observations WHERE zone_id = ?",
-                                (zid,)
-                            ).fetchone()
-                            cnt = cnt_row[0] if cnt_row else 0
-                        if cnt:
-                            divisions[zid] = {"current": [], "predicted": [], "count": cnt}
+            # Define the 5 official Singapore regions in required order
+            region_order = ["Central", "East", "North", "North-East", "West"]
             
-            # Aggregate link predictions to the 5 regions
-            region_data = {}
-            for region_name, zone_ids in region_zone_map.items():
-                region_data = {"current": [], "predicted": [], "count": 0}
-                for zone_id in zone_ids:
-                    if zone_id in divisions:
-                        vals = divisions[zone_id]
-                        region_data["current"].extend(vals["current"])
-                        region_data["predicted"].extend(vals["predicted"])
-                        region_data["count"] += vals["count"]
-                # We'll build the division_list below
+            # Aggregate by official region using legacy-to-region mapping
+            divisions = {}
+            unrecognized = set()
+            for lp in link_preds:
+                legacy = lp.zone_id or "UNKNOWN"
+                region = LEGACY_TO_REGION.get(legacy)
+                if region is None:
+                    unrecognized.add(legacy)
+                    region = "UNKNOWN"
+                divisions.setdefault(region, {"current": [], "predicted": [], "count": 0})
+                divisions[region]["current"].append(lp.current_speed)
+                divisions[region]["predicted"].append(lp.predicted_speed)
+                divisions[region]["count"] += 1
+            
+            if unrecognized:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Unrecognized legacy zone IDs encountered: %s", sorted(unrecognized)
+                )
             
             division_list = []
-            region_order = ["Central North", "Central South", "East", "North", "West"]
             for region_name in region_order:
-                zone_ids = region_zone_map[region_name]
-                current_vals = []
-                predicted_vals = []
-                total_count = 0
-                for zid in zone_ids:
-                    if zid in divisions:
-                        vals = divisions[zid]
-                        current_vals.extend(vals["current"])
-                        predicted_vals.extend(vals["predicted"])
-                        total_count += vals["count"]
+                vals = divisions.get(region_name)
+                if vals:
+                    current_vals = vals["current"]
+                    predicted_vals = vals["predicted"]
+                    total_count = vals["count"]
+                else:
+                    current_vals = []
+                    predicted_vals = []
+                    total_count = 0
                 
                 cur_avg = sum(current_vals) / len(current_vals) if current_vals else None
                 pred_avg = sum(predicted_vals) / len(predicted_vals) if predicted_vals else None
                 
-                # Determine congestion level based on predicted speed (or current if no prediction)
                 speed_for_congestion = pred_avg if pred_avg is not None else cur_avg
                 
                 if speed_for_congestion is not None:
@@ -607,9 +612,7 @@ def _build_app() -> FastAPI:
                     "congestion_level": congestion,
                     "segment_count": total_count,
                 })
-            
-            # Sort divisions by predefined order
-            division_list.sort(key=lambda d: region_order.index(d["division"]) if d["division"] in region_order else 99)
+            # No need to sort; region_order already defines order
             
             # Use first link's timestamps
             pred_ts = link_preds[0].prediction_timestamp if link_preds else None
@@ -801,6 +804,11 @@ def _build_app() -> FastAPI:
         except Exception as e:
             log.exception("Traffic stats failed")
             raise HTTPException(status_code=500, detail=f"traffic stats error: {e}")
+
+    @app.get("/internal/traffic/predictions/status")
+    def internal_traffic_prediction_status() -> Dict[str, Any]:
+        """Status of the shared traffic PredictionBundle service."""
+        return app.state.traffic_prediction_service.status()
     
     # ---------------------------------------------------------------- internal weather collection
     
