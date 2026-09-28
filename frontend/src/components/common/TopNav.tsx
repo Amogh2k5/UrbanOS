@@ -30,8 +30,7 @@ const divisions = [
     modules: [
       { key: "pm25", label: "PM2.5", href: "/environment/pm25" },
       { key: "weather", label: "Weather", href: "/environment/weather" },
-      { key: "rain", label: "Rain", href: "/environment/rain" },
-      { key: "flood", label: "Flood", href: "/environment/flood" },
+      { key: "flood", label: "Rain & Flood", href: "/environment/flood" },
     ],
   },
   {

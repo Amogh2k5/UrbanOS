@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { fetchFloodReport } from '@/services/api';
 
-import { Waves, AlertTriangle, History, CloudRain, Database, ShieldAlert, Wind, Info, Target } from 'lucide-react';
+import { Waves, AlertTriangle, History, CloudRain, ShieldAlert, Wind, Info, Target, Calendar } from 'lucide-react';
 
 interface FloodAlert {
   alert_id?: string;
@@ -110,6 +110,7 @@ export default function FloodPage() {
     }
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const formatSourceBadge = (source: string) => {
     const s = source.toLowerCase();
     if (s.includes('offline_fixture')) {
@@ -158,7 +159,7 @@ export default function FloodPage() {
         
         <h2 className="text-2xl font-heading text-[var(--color-primary)] flex items-center gap-3">
           <Waves size={24} />
-          Flood Intelligence Dashboard
+          Rain & Flood Intelligence Dashboard
         </h2>
         
         {/* ROW 1: RISK & WHY THIS RISK */}
@@ -187,7 +188,7 @@ export default function FloodPage() {
               <ul className="space-y-3">
                 {data.primary_risk_factors.map((factor, i) => (
                   <li key={i} className="flex gap-3 text-sm text-gray-200">
-                    <span className="text-cyan-500 flex-shrink-0 mt-0.5">▪</span>
+                    <span className="text-cyan-500 flex-shrink-0 mt-0.5">&bull;</span>
                     <span className="font-semibold tracking-wide">{factor}</span>
                   </li>
                 ))}
@@ -252,7 +253,7 @@ export default function FloodPage() {
                 {data.regional_weather && (
                   <div className="pt-3 border-t border-gray-800/50 flex justify-between items-center">
                     <span className="text-xs text-gray-400 flex items-center gap-1"><Wind size={12} /> {data.regional_weather.singapore_forecast_text || 'Unknown'}</span>
-                    <span className="text-xs font-mono text-gray-500">{data.regional_weather.singapore_temperature_low}-{data.regional_weather.singapore_temperature_high}°C</span>
+                    <span className="text-xs font-mono text-gray-500">{data.regional_weather.singapore_temperature_low}-{data.regional_weather.singapore_temperature_high}&deg;C</span>
                   </div>
                 )}
               </div>
@@ -262,6 +263,25 @@ export default function FloodPage() {
               </div>
             )}
           </div>
+
+          {/* NEA 24-Hour Forecast */}
+          {data.regional_weather?.singapore_forecast_text && (
+            <div className="glass-panel p-4 rounded-lg border border-amber-500/30 bg-amber-900/10">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-bold text-sm text-amber-400 flex items-center gap-2 uppercase tracking-widest text-xs">
+                  <Calendar size={14} />
+                  <span>NEA 24-Hour Forecast</span>
+                </h3>
+                <span className="px-2 py-1 bg-amber-900/30 text-amber-300 border border-amber-700 rounded text-[10px] tracking-wider font-bold">FORECAST</span>
+              </div>
+              <div className="text-base font-medium text-amber-200 bg-amber-900/20 p-3 rounded border border-amber-700/50">
+                {data.regional_weather.singapore_forecast_text}
+              </div>
+              <div className="text-[10px] text-amber-500 mt-2 text-center">
+                <span className="font-bold">24-Hour Forecast</span> — Not Current Rainfall
+              </div>
+            </div>
+          )}
 
           {/* MALAYSIA / JOHOR (SUPPORTING) */}
           <div className="glass-panel p-6 rounded-lg border-l-4 border-blue-800">
@@ -353,7 +373,7 @@ export default function FloodPage() {
           )}
         </div>
 
-        {/* ROW 4: RECOMMENDATIONS & LIMITATIONS */}
+        {/* ROW 4: RECOMMENDATIONS */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Recommendations */}
           <div className="glass-panel p-6 rounded-lg border-t-4 border-cyan-800">
@@ -364,7 +384,7 @@ export default function FloodPage() {
               <ul className="space-y-3">
                 {data.recommendations.map((rec, i) => (
                   <li key={i} className="flex gap-3 text-sm text-gray-300">
-                    <span className="text-cyan-500 flex-shrink-0 mt-0.5">▪</span>
+                    <span className="text-cyan-500 flex-shrink-0 mt-0.5">&bull;</span>
                     <span>{rec}</span>
                   </li>
                 ))}
@@ -374,28 +394,8 @@ export default function FloodPage() {
             )}
           </div>
 
-          {/* Data Limitations */}
-          <div className="glass-panel p-6 rounded-lg border-t-4 border-gray-700">
-            <h3 className="font-bold text-lg mb-4 text-gray-400 flex items-center gap-2 uppercase tracking-widest text-xs">
-              <AlertTriangle size={16} /> Data Limitations
-            </h3>
-            {data.limitations && data.limitations.length > 0 ? (
-              <ul className="space-y-2">
-                {data.limitations.map((lim, i) => (
-                  <li key={i} className="flex gap-2 text-xs text-gray-400 font-mono">
-                    <span className="text-gray-600">-</span>
-                    <span>{lim}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <div className="text-gray-500 italic text-sm">No listed limitations.</div>
-            )}
-          </div>
-        </div>
-
-        {/* ROW 5: PAST EVENTS & PROVENANCE */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 opacity-90">
+          {/* ROW 5: PAST EVENTS */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 opacity-90">
           
           {/* Past Flood Events */}
           <div className="glass-panel p-6 rounded-lg lg:col-span-2">
@@ -404,7 +404,7 @@ export default function FloodPage() {
                 <History size={16} /> Past Flood Events
               </h3>
               <p className="text-[11px] text-gray-500 mt-1 uppercase tracking-widest font-mono">
-                Reference only — does not determine current flood risk
+                Reference only &mdash; does not determine current flood risk
               </p>
             </div>
             
@@ -450,30 +450,11 @@ export default function FloodPage() {
                 No relevant historical events match current conditions.
               </div>
             )}
-          </div>
-
-          {/* Provenance */}
-          <div className="glass-panel p-6 rounded-lg">
-            <h3 className="font-bold text-lg mb-4 text-gray-400 flex items-center gap-2 uppercase tracking-widest text-xs">
-              <Database size={16} /> Data Provenance
-            </h3>
-            {data.data_sources && data.data_sources.length > 0 ? (
-              <div className="space-y-3">
-                {data.data_sources.map((source, i) => (
-                  <div key={i} className="flex flex-col gap-2 p-3 bg-gray-900/30 rounded border border-gray-800">
-                    <span className="text-[10px] font-mono text-gray-400 break-all">{source}</span>
-                    <div>{formatSourceBadge(source)}</div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-gray-500 italic text-sm">No data sources declared.</div>
-            )}
-          </div>
-          
+</div>
+           
         </div>
-
       </div>
+    </div>
     </div>
   );
 }
