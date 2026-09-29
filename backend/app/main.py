@@ -51,6 +51,7 @@ from backend.app.environment.result import RegionPrediction
 from ml.pm25.config import RAW_PM25_CSV, RAW_WEATHER_DIR, RUNS_DIR
 from backend.app.mobility.traffic.api import router as traffic_router
 from backend.app.mobility.transit.api import router as transit_router
+from backend.app.mobility.roads.api import router as roads_router
 from backend.app.mobility.transit.scheduler import TransitAlertsScheduler, SchedulerConfig
 
 log = logging.getLogger(__name__)
@@ -1004,6 +1005,8 @@ def _build_app() -> FastAPI:
     app.include_router(traffic_router)
     # Register mobility transit router
     app.include_router(transit_router)
+    # Register mobility roads router
+    app.include_router(roads_router)
 
     # Start transit alerts scheduler in background thread
     import threading

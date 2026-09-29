@@ -47,15 +47,17 @@ def export_latest_snapshot_history():
         print("No links in latest snapshot!")
         return
     
-    # 3. For these link_ids, get last 7 observations each using window function
-    # This is the same query as in predictor.py but run once for all links
-    placeholders = ','.join('?' for _ in link_ids)
+    # 3. Use a single query with window function across all latest snapshot links
+    # This is much faster than batching
     query = f"""
-        WITH ranked AS (
+        WITH latest_links AS (
+            SELECT link_id FROM traffic_observations WHERE observed_at = ?
+        ),
+        ranked AS (
             SELECT {', '.join(COLUMNS)},
                    ROW_NUMBER() OVER (PARTITION BY link_id ORDER BY observed_at DESC) as rn
             FROM traffic_observations
-            WHERE link_id IN ({placeholders})
+            WHERE link_id IN latest_links
         )
         SELECT {', '.join(COLUMNS)}
         FROM ranked
@@ -64,7 +66,7 @@ def export_latest_snapshot_history():
     """
     
     print("Fetching last 7 observations per link using window function...")
-    cursor = conn.execute(query, link_ids)
+    cursor = conn.execute(query, (latest_ts,))
     
     rows = []
     for row in cursor:

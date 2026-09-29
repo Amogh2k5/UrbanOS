@@ -457,7 +457,7 @@ export default function TransitMap() {
       <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
         <Kpi label="MRT" value={6} icon={<Train size={17} />} detail="6 main metro lines" />
           <Kpi label="LRT" value={3} icon={<Train size={17} />} detail="3 local rail networks" />
-        <Kpi label="Rail alerts" value={alerts.length} icon={<AlertCircle size={17} />} alert={alerts.length > 0} detail={`${affectedLines} known affected line${affectedLines === 1 ? "" : "s"}`} />
+        <Kpi label="Alerts" value={alerts.length} icon={<AlertCircle size={17} />} alert={alerts.length > 0} detail={`${affectedLines} known affected line${affectedLines === 1 ? "" : "s"}`} />
         <Kpi label="Bus services" value={status?.bus_services_count ?? 0} icon={<Bus size={17} />} detail="Current stored network" />
         <Kpi label="Bus stops" value={status?.bus_stops_count ?? 0} icon={<Bus size={17} />} detail="Current stored network" />
       </div>
