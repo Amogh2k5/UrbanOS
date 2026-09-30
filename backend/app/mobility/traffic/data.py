@@ -24,31 +24,9 @@ log = logging.getLogger(__name__)
 SG_OFFSET = timezone(timedelta(hours=8))
 _DEFAULT_DB_PATH = Path("data/traffic_observations.db")
 
-# Below this row count, exact DISTINCT scans used by get_stats() are cheap
-# enough to run synchronously on every call.
-_EXACT_SCAN_ROW_LIMIT = 200_000
-
-_stats_refresh_lock = threading.Lock()
-_stats_refresh_thread: Optional[threading.Thread] = None
-
-
 # ============================================================
 # MODELS (from models.py)
 # ============================================================
-
-class TrafficReport(BaseModel):
-    """Structured traffic report combining ML predictions and live incidents."""
-    generated_at: datetime
-    prediction_horizon_minutes: int = 10
-    overall_status: Literal["normal", "elevated", "disrupted", "unknown"] = "unknown"
-    overall_average_speed: Optional[float] = None
-    overall_predicted_speed: Optional[float] = None
-    overall_speed_change_percent: Optional[float] = None
-    overall_congestion_level: Literal["free_flow", "moderate", "heavy", "severe", "unknown"] = "unknown"
-    zones: List[ZoneReport] = Field(default_factory=list)
-    incidents: List[IncidentReport] = Field(default_factory=list)
-    limitations: List[str] = Field(default_factory=list)
-
 
 class ZoneReport(BaseModel):
     """Zone-level traffic summary."""
@@ -72,6 +50,20 @@ class IncidentReport(BaseModel):
     longitude: Optional[float] = None
     zone_id: Optional[str] = None
     zone_name: Optional[str] = None
+
+
+class TrafficReport(BaseModel):
+    """Structured traffic report combining ML predictions and live incidents."""
+    generated_at: datetime
+    prediction_horizon_minutes: int = 10
+    overall_status: Literal["normal", "elevated", "disrupted", "unknown"] = "unknown"
+    overall_average_speed: Optional[float] = None
+    overall_predicted_speed: Optional[float] = None
+    overall_speed_change_percent: Optional[float] = None
+    overall_congestion_level: Literal["free_flow", "moderate", "heavy", "severe", "unknown"] = "unknown"
+    zones: List[ZoneReport] = Field(default_factory=list)
+    incidents: List[IncidentReport] = Field(default_factory=list)
+    limitations: List[str] = Field(default_factory=list)
 
 
 # ============================================================
@@ -101,7 +93,7 @@ class TrafficCollector:
         # Import here to avoid circular import
         from backend.app.mobility.traffic.api import TrafficSpeedBandsV2ApiClient
         from backend.app.mobility.traffic.data import TrafficObservationStore
-        
+         
         self.api_client = api_client or TrafficSpeedBandsV2ApiClient()
         self.store = store or TrafficObservationStore()
 
@@ -558,17 +550,17 @@ class TrafficObservationStore:
         query = f"""
             WITH ranked AS (
                 SELECT observed_at, link_id, road_name, road_category, speed_band,
-                       minimum_speed, maximum_speed, speed_midpoint,
-                       start_latitude, start_longitude, end_latitude, end_longitude,
-                       zone_id, zone_name, created_at,
-                       ROW_NUMBER() OVER (PARTITION BY link_id ORDER BY observed_at DESC) as rn
+                        minimum_speed, maximum_speed, speed_midpoint,
+                        start_latitude, start_longitude, end_latitude, end_longitude,
+                        zone_id, zone_name,
+                        ROW_NUMBER() OVER (PARTITION BY link_id ORDER BY observed_at DESC) as rn
                 FROM traffic_observations
                 WHERE link_id IN ({placeholders})
             )
             SELECT observed_at, link_id, road_name, road_category, speed_band,
-                   minimum_speed, maximum_speed, speed_midpoint,
-                   start_latitude, start_longitude, end_latitude, end_longitude,
-                   zone_id, zone_name, created_at
+                    minimum_speed, maximum_speed, speed_midpoint,
+                    start_latitude, start_longitude, end_latitude, end_longitude,
+                    zone_id, zone_name
             FROM ranked WHERE rn <= ?
             ORDER BY link_id, observed_at DESC
         """
@@ -609,7 +601,7 @@ class TrafficObservationStore:
                     end_latitude,
                     end_longitude,
                     zone_id,
-                    zone_name,
+                    zone_name
                     ROW_NUMBER() OVER (
                         PARTITION BY link_id
                         ORDER BY observed_at DESC
@@ -706,7 +698,7 @@ class TrafficObservationCSVStore:
                 "zone_id", "zone_name"
             ])
             return
-        
+         
         log.info("Loading traffic observations from CSV: %s", self.csv_path)
         self._df = pd.read_csv(self.csv_path, dtype={"link_id": str})
         # Ensure observed_at is string (already ISO format from export)
@@ -741,7 +733,7 @@ class TrafficObservationCSVStore:
         """Get the most recent observations (latest snapshot)."""
         if self._df is None or self._df.empty:
             return []
-        
+         
         latest_ts = self._df["observed_at"].max()
         latest_rows = self._df[self._df["observed_at"] == latest_ts].head(limit)
         return [self._row_to_obs(row) for _, row in latest_rows.iterrows()]
@@ -754,18 +746,18 @@ class TrafficObservationCSVStore:
         """Get last N observations for each link_id (fast in-memory operation)."""
         if self._df is None or self._df.empty or not link_ids:
             return []
-        
+         
         # Filter for requested link_ids
         mask = self._df["link_id"].isin(link_ids)
         filtered = self._df[mask].copy()
-        
+         
         if filtered.empty:
             return []
-        
+         
         # Sort by link_id, observed_at DESC and take first N per link
         filtered = filtered.sort_values(["link_id", "observed_at"], ascending=[True, False])
         filtered = filtered.groupby("link_id").head(limit_per_link)
-        
+         
         return [self._row_to_obs(row) for _, row in filtered.iterrows()]
 
     # Stub methods for compatibility (not used by predictor)

@@ -270,6 +270,236 @@ export async function fetchTransitStats(): Promise<any> {
   return response.json();
 }
 
+// Roads API
+export interface RoadWork {
+  event_id: string;
+  start_date: string;
+  end_date: string;
+  svc_dept: string;
+  road_name: string;
+  other: string;
+  is_active: boolean;
+  is_upcoming: boolean;
+  days_until_start: number | null;
+  days_until_end: number | null;
+}
+
+export interface RoadOpening {
+  event_id: string;
+  start_date: string;
+  end_date: string;
+  svc_dept: string;
+  road_name: string;
+  other: string;
+  is_active: boolean;
+  is_upcoming: boolean;
+  days_until_start: number | null;
+  days_until_end: number | null;
+}
+
+export interface TaxiStand {
+  taxi_code: string;
+  latitude: number;
+  longitude: number;
+  bfa: string;
+  ownership: string;
+  type: string;
+  name: string;
+  is_bfa_accessible: boolean;
+}
+
+export interface RoadEvent {
+  event_id: string;
+  event_type: 'road_work' | 'road_opening';
+  road_name: string;
+  start_date: string;
+  end_date: string;
+  svc_dept: string;
+  description: string;
+  status: 'active' | 'upcoming' | 'completed';
+}
+
+export interface RoadsAnalytics {
+  road_works: {
+    total: number;
+    active: number;
+    upcoming: number;
+    completed: number;
+  };
+  road_openings: {
+    total: number;
+    active: number;
+    upcoming: number;
+  };
+  taxi_stands: {
+    total: number;
+    bfa_accessible: number;
+    by_ownership: Record<string, number>;
+  };
+  timestamp: string;
+}
+
+export interface RoadSpeedContext {
+  timestamp: string;
+  roads: {
+    road: string;
+    avg_current_speed: number;
+    avg_predicted_speed: number;
+    avg_change: number;
+    segment_count: number;
+  }[];
+  total_roads: number;
+}
+
+export interface MapFeature {
+  type: 'Feature';
+  geometry: {
+    type: 'Point';
+    coordinates: [number, number];
+  };
+  properties: {
+    type: string;
+    taxi_code: string;
+    name: string;
+    ownership: string;
+    bfa_accessible: boolean;
+  };
+}
+
+export interface RoadsMapData {
+  type: 'FeatureCollection';
+  features: MapFeature[];
+  bbox: [number, number, number, number];
+}
+
+export async function fetchRoadWorks(limit = 100, offset = 0, status?: string, roadName?: string): Promise<{ total: number; limit: number; offset: number; works: RoadWork[] }> {
+  const url = new URL(`${API_BASE}/api/mobility/roads/works`);
+  url.searchParams.set('limit', limit.toString());
+  url.searchParams.set('offset', offset.toString());
+  if (status) url.searchParams.set('status', status);
+  if (roadName) url.searchParams.set('road_name', roadName);
+  const response = await fetch(url.toString(), { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch road works: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchRoadOpenings(limit = 100, offset = 0, status?: string): Promise<{ total: number; limit: number; offset: number; openings: RoadOpening[] }> {
+  const url = new URL(`${API_BASE}/api/mobility/roads/openings`);
+  url.searchParams.set('limit', limit.toString());
+  url.searchParams.set('offset', offset.toString());
+  if (status) url.searchParams.set('status', status);
+  const response = await fetch(url.toString(), { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch road openings: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchTaxiStands(limit = 500, offset = 0, bfaOnly = false, ownership?: string): Promise<{ total: number; limit: number; offset: number; stands: TaxiStand[] }> {
+  const url = new URL(`${API_BASE}/api/mobility/roads/taxi-stands`);
+  url.searchParams.set('limit', limit.toString());
+  url.searchParams.set('offset', offset.toString());
+  if (bfaOnly) url.searchParams.set('bfa_only', 'true');
+  if (ownership) url.searchParams.set('ownership', ownership);
+  const response = await fetch(url.toString(), { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch taxi stands: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchRoadEvents(limit = 100, offset = 0, eventType?: string, status?: string): Promise<{ total: number; limit: number; offset: number; events: RoadEvent[] }> {
+  const url = new URL(`${API_BASE}/api/mobility/roads/events`);
+  url.searchParams.set('limit', limit.toString());
+  url.searchParams.set('offset', offset.toString());
+  if (eventType) url.searchParams.set('event_type', eventType);
+  if (status) url.searchParams.set('status', status);
+  const response = await fetch(url.toString(), { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch road events: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchRoadsAnalytics(): Promise<RoadsAnalytics> {
+  const response = await fetch(`${API_BASE}/api/mobility/roads/analytics/summary`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch roads analytics: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchRoadSpeedContext(): Promise<RoadSpeedContext> {
+  const response = await fetch(`${API_BASE}/api/mobility/roads/speed-context`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch road speed context: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchRoadsMapData(): Promise<RoadsMapData> {
+  const response = await fetch(`${API_BASE}/api/mobility/roads/map-data`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch roads map data: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+// Fire API
+export interface FireIncident {
+  id: string;
+  title: string;
+  source: string;
+  source_url: string | null;
+  reported_at: string | null; // ISO string
+  location: string | null;
+  incident_type: string | null;
+  severity: 'CRITICAL' | 'HIGH' | 'MODERATE' | 'LOW' | 'UNKNOWN';
+  status: 'ACTIVE' | 'RESOLVED' | 'UNKNOWN';
+  affected_area: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  region: string | null;
+  summary: string | null;
+  data_quality_flags: string[];
+}
+
+export interface FireHistoryPoint {
+  year: number;
+  fires: number | null;
+  source: string;
+}
+
+export interface FireReport {
+  generated_at: string;
+  domain: string;
+  subdomain: string;
+  active_incidents: FireIncident[];
+  recent_incidents: FireIncident[];
+  active_incident_count: number | null;
+  critical_incident_count: number | null;
+  incidents_today: number | null;
+  resolved_recent_count: number | null;
+  regional_counts: Record<string, number | null>;
+  historical_fire_counts: FireHistoryPoint[];
+  source_status: string;
+  data_sources: string[];
+  limitations: string[];
+  warnings: string[];
+  errors: string[];
+  is_ml_prediction: boolean;
+}
+
+export async function fetchFireReport(): Promise<FireReport> {
+  const response = await fetch(`${API_BASE}/api/fire/report`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch fire report: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 // Traffic ML Prediction
 export interface TrafficLinkPrediction {
   link_id: string;

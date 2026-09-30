@@ -1,16 +1,16 @@
-"""FastAPI app for the UrbanOS Environment module.
+﻿"""FastAPI app for the UrbanOS Environment module.
 
 Exposes:
     GET /health
-    GET /kpi/live/pm25       â€” normalized PM2.5 KPI from NEA live API (or fixture)
-    GET /kpi/live/weather    â€” normalized 24h weather forecast KPI from NEA live API (or fixture)
-    GET /kpi/live/traffic    â€” normalized Traffic Speed Bands KPI from LTA live API (or fixture)
+    GET /kpi/live/pm25       ├óΓé¼ΓÇ¥ normalized PM2.5 KPI from NEA live API (or fixture)
+    GET /kpi/live/weather    ├óΓé¼ΓÇ¥ normalized 24h weather forecast KPI from NEA live API (or fixture)
+    GET /kpi/live/traffic    ├óΓé¼ΓÇ¥ normalized Traffic Speed Bands KPI from LTA live API (or fixture)
 
 KPI endpoints return normalized JSON with values, timestamps and
 freshness/source. API-provider logic (adapter quirks) NEVER reaches the
 frontend; the frontend only sees normalized JSON.
 
-ML/artifacts/agent-graph are NOT wired to HTTP here â€” the LangGraph
+ML/artifacts/agent-graph are NOT wired to HTTP here ├óΓé¼ΓÇ¥ the LangGraph
 EnvironmentAgent is a separate offline orchestration invoked via CLI
 (see backend/app/environment/run_agent.py). Live API data does NOT enter ML.
 """
@@ -52,6 +52,7 @@ from ml.pm25.config import RAW_PM25_CSV, RAW_WEATHER_DIR, RUNS_DIR
 from backend.app.mobility.traffic.api import router as traffic_router
 from backend.app.mobility.transit.api import router as transit_router
 from backend.app.mobility.roads.api import router as roads_router
+from backend.app.safety.fire.api import router as fire_router
 from backend.app.mobility.transit.scheduler import TransitAlertsScheduler, SchedulerConfig
 
 log = logging.getLogger(__name__)
@@ -686,11 +687,11 @@ def _build_app() -> FastAPI:
         """Generate full Flood Report V3 via LangGraph Flood Agent.
     
         Live Evidence (determines current risk):
-        - Singapore rainfall (NEA 5-min API) â€” PRIMARY signal
-        - Malaysia/Johor rainfall (MetMalaysia API) â€” SUPPORTING
-        - Sumatra rainfall (BMKG API) â€” SUPPORTING
-        - Regional weather systems (NEA 24h forecast) â€” SUPPORTING
-        - PUB Flood Alerts â€” CONFIRMATION
+        - Singapore rainfall (NEA 5-min API) ├óΓé¼ΓÇ¥ PRIMARY signal
+        - Malaysia/Johor rainfall (MetMalaysia API) ├óΓé¼ΓÇ¥ SUPPORTING
+        - Sumatra rainfall (BMKG API) ├óΓé¼ΓÇ¥ SUPPORTING
+        - Regional weather systems (NEA 24h forecast) ├óΓé¼ΓÇ¥ SUPPORTING
+        - PUB Flood Alerts ├óΓé¼ΓÇ¥ CONFIRMATION
     
         Reference Only:
         - Past flood events catalogue (78 events)
@@ -1007,6 +1008,8 @@ def _build_app() -> FastAPI:
     app.include_router(transit_router)
     # Register mobility roads router
     app.include_router(roads_router)
+    # Register safety fire router
+    app.include_router(fire_router)
 
     # Start transit alerts scheduler in background thread
     import threading

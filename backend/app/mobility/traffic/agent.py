@@ -385,8 +385,7 @@ def analyze_traffic(state: TrafficAgentState) -> TrafficAgentState:
         
         valid_predicted = [z.predicted_average_speed for z in zone_reports if z.predicted_average_speed is not None]
         overall_pred = sum(valid_predicted) / len(valid_predicted) if valid_predicted else None
-        overall_pred = sum(valid_predicted) / len(valid_predicted) if valid_predicted else None
-        overall_change_pct = ((overall_pred - overall_avg) / overall_avg * 100) if overall_avg and overall_avg != 0 else None
+        overall_change_pct = ((overall_pred - overall_avg) / overall_avg * 100) if overall_pred is not None and overall_avg and overall_avg != 0 else None
         total_incidents = sum(z.incident_count for z in zone_reports)
         
         state.overall_stats = {
