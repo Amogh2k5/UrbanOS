@@ -1,0 +1,417 @@
+"use client";
+
+import { useEffect, useState } from 'react';
+import {
+  fetchOverviewCity,
+  fetchOverviewModule,
+  OverviewCityResponse,
+  OverviewModuleResponse,
+} from '@/services/api';
+import {
+  Car,
+  Truck,
+  Train,
+  Wind,
+  Cloud,
+  Droplets,
+  FireExtinguisher,
+  ShieldAlert,
+  AlertTriangle,
+  Clock,
+  MapPin,
+  BarChart,
+  TrendingUp,
+  List,
+  Check,
+  FileText,
+  ArrowRight,
+} from 'lucide-react';
+
+// Module configuration
+const MODULES = [
+  { id: 'traffic', name: 'Traffic', icon: Car, detailRoute: '/traffic' },
+  { id: 'roads', name: 'Roads', icon: Truck, detailRoute: '/roads' },
+  { id: 'transit', name: 'Transit', icon: Train, detailRoute: '/transit' },
+  { id: 'pm25', name: 'Air Quality', icon: Wind, detailRoute: '/pollution' },
+  { id: 'weather', name: 'Weather', icon: Cloud, detailRoute: '/weather' },
+  { id: 'flood', name: 'Flood & Rain', icon: Droplets, detailRoute: '/flood' },
+  { id: 'fire', name: 'Fire', icon: FireExtinguisher, detailRoute: '/safety/fire' },
+  { id: 'crime', name: 'Crime', icon: ShieldAlert, detailRoute: '/safety/incidents' },
+];
+
+export default function OverviewPage() {
+  // City overview state
+  const [overviewCity, setOverviewCity] = useState<OverviewCityResponse | null>(null);
+  const [overviewCityError, setOverviewCityError] = useState<string | null>(null);
+  const [overviewCityLoading, setOverviewCityLoading] = useState(true);
+
+  // Module overview state
+  const [selectedModule, setSelectedModule] = useState<string | null>(null);
+  const [overviewModule, setOverviewModule] = useState<OverviewModuleResponse | null>(null);
+  const [overviewModuleError, setOverviewModuleError] = useState<string | null>(null);
+  const [overviewModuleLoading, setOverviewModuleLoading] = useState(false);
+
+
+   // Helper function to format an ISO string to HH:MM:SS in Singapore time
+   const formatSingaporeTime = (isoString: string | null): string => {
+     if (!isoString) return "--";
+     const date = new Date(isoString);
+     const singaporeTime = new Date(date.toLocaleString("en-US", {timeZone: "Asia/Singapore"}));
+     return singaporeTime.toTimeString().slice(0, 8); // HH:MM:SS
+   };
+
+  // Fetch city overview on mount
+  useEffect(() => {
+    let cancelled = false;
+    const fetchOverviewCityData = async () => {
+      setOverviewCityLoading(true);
+      setOverviewCityError(null);
+      try {
+        const data = await fetchOverviewCity();
+        if (!cancelled) {
+          setOverviewCity(data);
+          setOverviewCityLoading(false);
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setOverviewCityError(err.message);
+          setOverviewCityLoading(false);
+        }
+      }
+    };
+
+    fetchOverviewCityData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Handle module selection
+  const handleModuleSelect = (moduleId: string) => {
+    setSelectedModule(moduleId);
+    setOverviewModule(null);
+    setOverviewModuleError(null);
+    setOverviewModuleLoading(true);
+
+    // Fetch module overview
+    let cancelled = false;
+    const fetchOverviewModuleData = async () => {
+      try {
+        const data = await fetchOverviewModule(moduleId);
+        if (!cancelled) {
+          setOverviewModule(data);
+          setOverviewModuleLoading(false);
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setOverviewModuleError(err.message);
+          setOverviewModuleLoading(false);
+        }
+      }
+    };
+
+    fetchOverviewModuleData();
+
+    return () => {
+      cancelled = true;
+    };
+  };
+
+  // Handle going back to city overview
+  const handleBackToOverview = () => {
+    setSelectedModule(null);
+    setOverviewModule(null);
+    setOverviewModuleError(null);
+    setOverviewModuleLoading(false);
+  };
+
+  // Render module intelligence view
+  if (selectedModule) {
+    const moduleConfig = MODULES.find((m) => m.id === selectedModule);
+    const moduleName = moduleConfig ? moduleConfig.name : selectedModule;
+    const detailRoute = moduleConfig ? moduleConfig.detailRoute : '#';
+
+    return (
+      <div className="flex flex-col h-full bg-[var(--color-background)] text-[var(--color-foreground)] overflow-y-auto overflow-x-hidden font-sans">
+        {/* Header */}
+        <div className="flex flex-col flex-grow min-h-0 overflow-y-auto">
+          {/* Header with back button */}
+          <div className="mb-4 flex items-center justify-between p-4">
+            <button
+              onClick={handleBackToOverview}
+              className="flex items-center gap-2 text-sm font-medium text-gray-400 hover:text-white"
+            >
+              <ArrowRight size={20} className="rotate-180" /> Overview
+            </button>
+            <h2 className="text-2xl font-heading text-white">{moduleName} Intelligence</h2>
+          </div>
+
+          {/* AI Brief */}
+          <section className="mb-6">
+            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              <AlertTriangle size={20} className="text-cyan-400" />
+              <span>AI Brief</span>
+            </h3>
+            {overviewModuleLoading && !overviewModule && (
+              <div className="glass-panel p-4 rounded-lg border border-gray-800">
+                <div className="h-4 bg-gray-700 rounded w-3/4 mb-2"></div>
+                <div className="h-6 bg-gray-700 rounded w-1/2"></div>
+              </div>
+            )}
+            {overviewModuleError && !overviewModuleLoading && (
+              <div className="glass-panel p-4 rounded-lg border border-red-500/30 text-red-500 text-sm">
+                Failed to load AI brief: {overviewModuleError}
+              </div>
+            )}
+            {overviewModule && !overviewModuleLoading && !overviewModuleError && (
+              <div className="glass-panel p-4 rounded-lg border border-gray-800">
+                <p className="text-white">{overviewModule.ai_brief || 'AI briefing unavailable.'}</p>
+              </div>
+            )}
+          </section>
+
+          {/* Current Status */}
+          <section className="mb-6">
+            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              <AlertTriangle size={20} className="text-yellow-400" />
+              <span>Current Status</span>
+            </h3>
+            {overviewModuleLoading && !overviewModule && (
+              <div className="grid grid-cols-2 gap-4">
+                {[...Array(2)].map((_, i) => (
+                  <div key={i} className="glass-panel p-4 rounded-lg border border-gray-800 animate-pulse">
+                    <div className="h-4 bg-gray-700 rounded w-3/4 mb-2"></div>
+                    <div className="h-6 bg-gray-700 rounded w-1/2"></div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {overviewModuleError && !overviewModuleLoading && (
+              <div className="p-4 text-red-500 text-sm">Failed to load module data: {overviewModuleError}</div>
+            )}
+            {overviewModule && !overviewModuleLoading && !overviewModuleError && (
+              <div className="glass-panel p-4 rounded-lg border border-gray-800">
+                {/* We will display some key information from the module data.
+                    For simplicity, we will show a placeholder. In a real implementation,
+                    we would extract relevant KPIs based on the module. */}
+                <div className="space-y-4">
+                  <div className="text-white">Module data received. In a full implementation, this would show key metrics and status.</div>
+                  <pre className="text-xs text-gray-400 bg-gray-800 p-2 rounded overflow-auto max-h-96">
+                    {JSON.stringify(overviewModule.module_data, null, 2)}
+                  </pre>
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* Alerts */}
+          <section className="mb-6">
+            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              <AlertTriangle size={20} className="text-red-400" />
+              <span>Alerts</span>
+            </h3>
+            {overviewModuleLoading && !overviewModule && (
+              <div className="h-12 flex items-center justify-center text-gray-500">Loading...</div>
+            )}
+            {overviewModuleError && !overviewModuleLoading && (
+              <div className="p-4 text-red-500 text-sm">Failed to load alerts: {overviewModuleError}</div>
+            )}
+            {overviewModule && !overviewModuleLoading && !overviewModuleError && (
+              <div className="glass-panel p-4 rounded-lg border border-gray-800">
+                {/* We would extract alerts from the module data.
+                    For now, we show a placeholder. */}
+                <div className="text-white">
+                  No specific alerts for this module in the overview data.
+                  In a full implementation, we would show module-specific alerts.
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* Cross-Domain Intelligence */}
+          <section className="mb-6">
+            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              <AlertTriangle size={20} className="text-blue-400" />
+              <span>Cross-Domain Intelligence</span>
+            </h3>
+            {overviewModuleLoading && !overviewModule && (
+              <div className="h-12 flex items-center justify-center text-gray-500">Loading...</div>
+            )}
+            {overviewModuleError && !overviewModuleLoading && (
+              <div className="p-4 text-red-500 text-sm">Failed to load cross-domain insights: {overviewModuleError}</div>
+            )}
+            {overviewModule && !overviewModuleLoading && !overviewModuleError && (
+              <div className="glass-panel p-4 rounded-lg border border-gray-800">
+                {/* We would generate cross-domain insights from the module data and city context.
+                    For now, we show a placeholder. */}
+                <div className="text-white">
+                  Cross-domain intelligence would show relationships with other modules.
+                  In a full implementation, we would display relevant insights.
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* Link to full module dashboard */}
+          <section className="mt-6">
+            <div className="text-right">
+              <a
+                href={detailRoute}
+                className="text-sm font-medium text-cyan-400 hover:text-cyan-200 underline"
+              >
+                View Full {moduleName} Dashboard <ArrowRight size={16} />
+              </a>
+            </div>
+          </section>
+
+          {/* Bottom Chat Bar */}
+          <div className="mt-auto border-t border-gray-800">
+            <div className="flex items-center px-4 py-3">
+              <span className="text-gray-400">✦</span>
+              <span className="ml-2 text-white">Ask UrbanOS about {moduleName}...</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Render city overview
+  return (
+    <div className="flex flex-col h-full bg-[var(--color-background)] text-[var(--color-foreground)] overflow-y-auto overflow-x-hidden font-sans">
+      <div className="flex flex-col flex-grow min-h-0 overflow-y-auto">
+        {/* Header */}
+<div className="mb-6 flex items-center justify-between p-4">
+            <h1 className="text-2xl font-heading text-white">
+              UrbanOS &middot; Singapore
+            </h1>
+            <div className="flex items-center gap-2 text-sm text-gray-400">
+               <span className="text-gray-400">Last updated: {formatSingaporeTime(overviewCity?.generated_at)}</span>
+            </div>
+          </div>
+
+        {/* AI City Brief */}
+        <section className="mb-6">
+          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+            <AlertTriangle size={20} className="text-cyan-400" />
+            <span>AI City Brief</span>
+          </h3>
+          {overviewCityLoading && !overviewCity && (
+            <div className="glass-panel p-4 rounded-lg border border-gray-800">
+              <div className="h-4 bg-gray-700 rounded w-3/4 mb-2"></div>
+              <div className="h-6 bg-gray-700 rounded w-1/2"></div>
+            </div>
+          )}
+          {overviewCityError && !overviewCityLoading && (
+            <div className="glass-panel p-4 rounded-lg border border-red-500/30 text-red-500 text-sm">
+              Failed to load AI brief: {overviewCityError}
+            </div>
+          )}
+          {overviewCity && !overviewCityLoading && !overviewCityError && (
+            <div className="glass-panel p-4 rounded-lg border border-gray-800">
+              <p className="text-white">{overviewCity.ai_brief || 'AI briefing unavailable.'}</p>
+            </div>
+          )}
+        </section>
+
+        {/* Module Intelligence Grid */}
+        <section className="mb-6">
+          <h3 className="text-lg font-bold text-white mb-4">Module Intelligence</h3>
+          {overviewCityLoading && !overviewCity && (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              {[...Array(8)].map((_, i) => (
+                <div key={i} className="glass-panel p-4 rounded-lg border border-gray-800 animate-pulse">
+                  <div className="h-4 bg-gray-700 rounded w-3/4 mb-2"></div>
+                  <div className="h-6 bg-gray-700 rounded w-1/2"></div>
+                </div>
+              ))}
+            </div>
+          )}
+          {overviewCityError && !overviewCityLoading && (
+            <div className="p-4 text-red-500 text-sm">Failed to load module data: {overviewCityError}</div>
+          )}
+          {overviewCity && !overviewCityLoading && !overviewCityError && (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+{MODULES.map((module) => {
+                 const Icon = module.icon;
+                 return (
+                   <div
+                     key={module.id}
+                     className="glass-panel p-4 rounded-lg border border-gray-800 cursor-pointer hover:border-gray-700 transition-colors"
+                     onClick={() => handleModuleSelect(module.id)}
+                   >
+                     <div className="flex flex-col items-center text-center h-full">
+                       <div className="mb-3">
+                         <Icon className="w-8 h-8 text-gray-400" />
+                       </div>
+                       <div className="text-sm font-medium text-white">{module.name}</div>
+                       {/* We would extract a status chip and KPI from the city report.
+                           For simplicity, we show a placeholder. */}
+                       <div className="mt-2">
+                         <div className="px-2 py-0.5 text-xs font-medium rounded-full border-gray-600">
+                           Status: {overviewCity?.city_report?.domain_status?.[module.id as keyof typeof overviewCity.city_report.domain_status]?.available ? 'Available' : 'Unavailable'}
+                         </div>
+                       </div>
+                       <div className="mt-2 text-xs text-gray-400">
+                         KPI: See details
+                       </div>
+                     </div>
+                   </div>
+                 );
+               })}
+            </div>
+          )}
+        </section>
+
+        {/* Alerts & Anomalies */}
+        <section className="mb-6">
+          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+            <AlertTriangle size={20} className="text-yellow-400" />
+            <span>Alerts & Anomalies</span>
+          </h3>
+          {overviewCityLoading && !overviewCity && (
+            <div className="h-12 flex items-center justify-center text-gray-500">Loading...</div>
+          )}
+          {overviewCityError && !overviewCityLoading && (
+            <div className="p-4 text-red-500 text-sm">Failed to load alerts: {overviewCityError}</div>
+          )}
+          {overviewCity && !overviewCityLoading && !overviewCityError && (
+            <div className="glass-panel p-4 rounded-lg border border-gray-800">
+              {overviewCity.city_report?.priority_incidents?.length > 0 ? (
+                <div className="space-y-2">
+                  {overviewCity.city_report.priority_incidents.map((incident: any, index: number) => (
+                    <div key={index} className="p-3 bg-[var(--color-surface-low)] rounded border-l-2 border-red-500 text-sm">
+                      <div className="flex justify-between mb-1">
+                        <span className="font-bold text-red-400 uppercase text-xs">
+                          {incident.domain} - {incident.severity}
+                        </span>
+                        <span className="text-[10px] text-gray-500 font-mono">{incident.id.substring(0, 8)}</span>
+                      </div>
+                      <div className="text-gray-200">{incident.description}</div>
+                      <div className="text-xs text-gray-500 mt-1 font-mono">
+                        {incident.affected_zones?.join(', ')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-8 text-center text-gray-500">
+                  No significant alerts
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
+        {/* Bottom Chat Bar */}
+        <div className="mt-auto border-t border-gray-800">
+          <div className="flex items-center px-4 py-3">
+            <span className="text-gray-400">✦</span>
+            <span className="ml-2 text-white">Ask UrbanOS anything...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

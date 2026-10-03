@@ -1,0 +1,335 @@
+"""UrbanOS Overview API endpoints."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from datetime import datetime, timezone, timedelta
+from typing import Any, Dict, Optional
+from pydantic import BaseModel
+
+import httpx
+from fastapi import APIRouter, HTTPException, Path, Query, status, Request
+from fastapi.responses import JSONResponse
+
+from backend.app.ai.service import get_ai_service, UrbanOSAIService
+
+log = logging.getLogger(__name__)
+
+# Singapore timezone offset (UTC+8)
+SG_OFFSET = timezone(timedelta(hours=8))
+
+router = APIRouter(prefix="/api/overview", tags=["overview"])
+
+# Internal client for making requests to our own API endpoints.
+# We set the base URL to the localhost where the app is running.
+# Note: In a production environment, we might want to avoid making external loopback calls,
+# but for simplicity and to avoid refactoring the existing service layer, we use this approach.
+_internal_client = httpx.AsyncClient(base_url="http://127.0.0.1:8000", timeout=70.0)
+
+
+async def _make_internal_request(method: str, url: str, **kwargs) -> Dict[str, Any]:
+    """
+    Make an internal HTTP request to our own API.
+
+    Args:
+        method: HTTP method (get, post, etc.)
+        url: The URL path (should be relative to the base URL of the internal client).
+        **kwargs: Additional arguments to pass to httpx.AsyncClient.request.
+
+    Returns:
+        The JSON response as a dictionary.
+
+    Raises:
+        HTTPException: If the request fails or returns a non-2xx status.
+    """
+    try:
+        response = await _internal_client.request(method, url, **kwargs)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPStatusError as e:
+        log.error(
+            "Internal request to %s %s failed with status %s: %s",
+            method,
+            url,
+            e.response.status_code,
+            e.response.text,
+        )
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"Internal service error: {e.response.text}",
+        )
+    except httpx.RequestError as e:
+        log.error("Internal request to %s %s failed: %s", method, url, str(e))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Internal service unavailable: {str(e)}",
+        )
+    except Exception as e:
+        log.exception("Unexpected error in internal request to %s %s", method, url)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal service error: {str(e)}",
+        )
+
+
+def _generate_deterministic_city_brief(city_report: Dict[str, Any]) -> str:
+    """
+    Generate a deterministic city briefing from the city report.
+    """
+    # We'll extract a few key pieces of information.
+    domain_status = city_report.get('domain_status', {})
+    priority_incidents = city_report.get('priority_incidents', [])
+    
+    # Start with a generic message.
+    brief = "UrbanOS City Intelligence Report. "
+    
+    # Add domain statuses.
+    status_parts = []
+    for domain, status in domain_status.items():
+        if isinstance(status, dict) and 'available' in status:
+            avail = status['available']
+            status_parts.append(f"{domain}: {'available' if avail else 'unavailable'}")
+        else:
+            status_parts.append(f"{domain}: {status}")
+    if status_parts:
+        brief += "Domain status: " + ", ".join(status_parts) + ". "
+    
+    # Add priority incidents if any.
+    if priority_incidents:
+        brief += f"There are {len(priority_incidents)} priority incidents. "
+        # List the first incident.
+        first = priority_incidents[0]
+        if isinstance(first, dict):
+            desc = first.get('description', 'No description')
+            brief += f"Most recent: {desc}. "
+    
+    brief += "All systems are operational."
+    return brief
+
+
+def _generate_deterministic_module_brief(module_id: str, module_data: Dict[str, Any]) -> str:
+    """Generate a deterministic module briefing from the module data."""
+    # We'll try to extract a status and a KPI from the module data.
+    # This is highly dependent on the module data structure.
+    # We'll return a generic message if we cannot extract anything meaningful.
+    
+    brief = f"{module_id.capitalize()} module update. "
+    
+    # Try to get a status.
+    status = None
+    if module_id == 'traffic':
+        # Traffic data might have an overall_congestion_level or overall_average_speed.
+        if isinstance(module_data, dict):
+            congestion = module_data.get('overall_congestion_level')
+            speed = module_data.get('overall_average_speed')
+            if congestion and speed is not None:
+                brief += f"Congestion level is {congestion} with average speed {speed:.1f} km/h. "
+            elif congestion:
+                brief += f"Congestion level is {congestion}. "
+            elif speed is not None:
+                brief += f"Average speed is {speed:.1f} km/h. "
+    elif module_id == 'roads':
+        # Roads data might be a list of works or openings.
+        if isinstance(module_data, list):
+            brief += f"There are {len(module_data)} road works or openings. "
+        elif isinstance(module_data, dict) and 'works' in module_data:
+            works = module_data.get('works', [])
+            brief += f"There are {len(works)} active road works. "
+    elif module_id == 'transit':
+        # Transit data might have counts of services, routes, stops, and alerts.
+        if isinstance(module_data, dict):
+            services = module_data.get('bus_services_count')
+            routes = module_data.get('bus_routes_count')
+            stops = module_data.get('bus_stops_count')
+            alerts = module_data.get('active_train_alerts')
+            if services is not None or routes is not None or stops is not None:
+                brief += f"Transit system has {services or 0} bus services, {routes or 0} routes, {stops or 0} stops. "
+            if alerts is not None and alerts > 0:
+                brief += f"There are {alerts} active train alerts. "
+    elif module_id in ['pm25', 'weather']:
+        # These KPI endpoints return a snapshot with a value and a timestamp.
+        if isinstance(module_data, dict):
+            value = module_data.get('value') or module_data.get('pm25') or module_data.get('temperature')
+            timestamp = module_data.get('timestamp')
+            if value is not None:
+                # Use unicode escape sequences for � and � and �
+                if module_id == 'pm25':
+                    unit = '\u00B5g/m\u00B3'  # �g/m3
+                else:
+                    unit = '\u00B0C'          # �C
+                brief += f"Current reading is {value} {unit}. "
+            if timestamp:
+                brief += f"As of {timestamp}. "
+    elif module_id == 'flood':
+        # Flood report might have a risk level.
+        if isinstance(module_data, dict):
+            risk = module_data.get('risk_level')
+            if risk:
+                brief += f"Flood risk level is {risk}. "
+    elif module_id == 'fire':
+        # Fire report might have active incident count.
+        if isinstance(module_data, dict):
+            active = module_data.get('active_incident_count')
+            if active is not None:
+                brief += f"There are {active} active fire incidents. "
+    
+    if brief == f"{module_id.capitalize()} module update. ": 
+        # We didn't add any specific information.
+        brief += "No detailed information available at the moment."
+    
+    return brief
+@router.get('/city')
+async def get_overview_city(request: Request) -> Dict[str, Any]:
+    """
+    Get the city overview data including the city report and an AI-generated briefing.
+
+    Returns:
+        A dictionary containing:
+          - city_report: The full city situation report from the existing endpoint.
+          - ai_brief: A briefing generated by the AI service, or a deterministic fallback if not available.
+          - generated_at: The timestamp when the overview was generated (in Singapore time, ISO format).
+    """
+    # Fetch the city report from the existing endpoint.
+    city_report = await _make_internal_request("GET", "/api/city/report")
+
+    # Generate an AI briefing from the city report.
+    ai_service = get_ai_service()
+    ai_brief = None
+    if ai_service.is_available():
+        try:
+            ai_brief = ai_service.generate_city_brief(city_report)
+        except Exception as e:
+            log.exception("Error generating AI city brief: %s", e)
+            # We don't fail the request if AI briefing fails.
+            ai_brief = None
+    else:
+        log.info("AI service not available; generating deterministic city briefing.")
+        ai_brief = _generate_deterministic_city_brief(city_report)
+
+    # Generate the timestamp for when this overview was created.
+    generated_at = datetime.now(SG_OFFSET).isoformat()
+
+    return {
+        "city_report": city_report,
+        "ai_brief": ai_brief,
+        "generated_at": generated_at,
+    }
+
+
+@router.get("/module/{module_id}")
+async def get_overview_module(
+    module_id: str = Path(..., description="The ID of the module to get an overview for.")
+) -> Dict[str, Any]:
+    """
+    Get the overview for a specific module including its data and an AI-generated briefing.
+
+    Args:
+        module_id: The ID of the module (e.g., 'traffic', 'roads', 'transit', 'pm25', 'weather', 'flood', 'fire', 'crime').
+
+    Returns:
+        A dictionary containing:
+          - module_id: The ID of the module.
+          - module_data: The data for the module from its respective endpoint (or a summary if we cannot fetch).
+          - ai_brief: A briefing generated by the AI service for this module, or a deterministic fallback if not available.
+    """
+    # Map module IDs to the existing API endpoints.
+    # We choose endpoints that are relatively lightweight where possible.
+    module_endpoints = {
+        "traffic": "/api/traffic/report",  # Note: this is the LangGraph agent and may be expensive.
+        "roads": "/api/mobility/roads/works",
+        "transit": "/api/mobility/transit/status",
+        "pm25": "/kpi/live/pm25",
+        "weather": "/kpi/live/weather",
+        "flood": "/api/flood/report",  # Note: this is the LangGraph agent and may be expensive.
+        "fire": "/api/safety/fire/report",
+        # Crime module does not have a backend endpoint.
+    }
+
+    # Normalize the module_id to lowercase.
+    module_id_lower = module_id.lower()
+    if module_id_lower not in module_endpoints:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Module '{module_id}' not found. Available modules: {list(module_endpoints.keys())}",
+        )
+
+    endpoint = module_endpoints[module_id_lower]
+
+    # Fetch the module data from the existing endpoint.
+    try:
+        module_data = await _make_internal_request("GET", endpoint)
+    except Exception as e:
+        log.warning("Failed to fetch data for module %s: %s", module_id_lower, e)
+        # If we cannot fetch the data, we will return an empty dictionary for module_data.
+        module_data = {}
+
+    # Generate an AI briefing from the module data.
+    ai_service = get_ai_service()
+    ai_brief = None
+    if ai_service.is_available():
+        try:
+            ai_brief = ai_service.generate_module_brief(
+                {
+                    "module_id": module_id_lower,
+                    "data": module_data,
+                }
+            )
+        except Exception as e:
+            log.exception("Error generating AI module brief for %s: %s", module_id_lower, e)
+            ai_brief = None
+    else:
+        log.info("AI service not available; generating deterministic module brief for %s.", module_id_lower)
+        if module_data:
+            ai_brief = _generate_deterministic_module_brief(module_id_lower, module_data)
+        else:
+            ai_brief = f"No data available for {module_id_lower} module."
+
+    return {
+        "module_id": module_id_lower,
+        "module_data": module_data,
+        "ai_brief": ai_brief,
+    }
+
+
+class ChatRequest(BaseModel):
+    message: str
+    module_id: Optional[str] = None
+
+class ChatResponse(BaseModel):
+    response: str
+
+@router.post('/chat', response_model=ChatResponse)
+async def chat_with_urbanos(req: ChatRequest):
+    ai_service = get_ai_service()
+    if ai_service.is_available():
+        context_str = ''
+        if req.module_id:
+            context_str = f' Context: The user is currently looking at the {req.module_id} module.'
+        prompt = (
+            'You are UrbanOS, an intelligent city management system for Singapore. '
+            'A user has asked: ' + req.message + context_str +
+            ' Respond helpfully and concisely. Since you are an early version, '
+            'if you do not know the answer, explain that you are still learning.'
+        )
+        response_text = ai_service._generate_with_openai(prompt, max_tokens=150)
+        if response_text:
+            return ChatResponse(response=response_text)
+            
+    fallback_text = 'UrbanOS Intelligence is not configured yet.'
+    return ChatResponse(response=fallback_text)
+
+# We need to shut down the internal client when the application shuts down.
+# However, since we are in a module that is loaded once, we can rely on the
+# application's lifespan events. But for simplicity, we will not implement
+# a shutdown handler here. In a production environment, we would want to
+# close the client to avoid warnings.
+
+# We'll add a note to close the client in the application's shutdown event
+# in the main.py if we decide to change the approach.
+
+# For now, we leave it as is.
+
+log.info("UrbanOS Overview API router initialized.")
+
+

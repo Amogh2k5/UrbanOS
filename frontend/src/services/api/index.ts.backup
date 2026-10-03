@@ -1,7 +1,7 @@
-﻿/* eslint-disable @typescript-eslint/no-explicit-any */
-import { CitySituationReport } from '@/types';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { CitySituationReport } from "@/types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export async function fetchCityReport(): Promise<CitySituationReport> {
   const response = await fetch(`${API_BASE}/api/city/report`, { cache: 'no-store' });
@@ -130,7 +130,7 @@ export interface Pm25PredictionResponse {
   source: string;
 }
 
-export async function fetchPm25Prediction(t0?: string): Promise<any> {
+export async function fetchPm25Prediction(t0?: string): Promise<Pm25PredictionResponse> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 30_000); // 30 seconds
   const url = new URL(`${API_BASE}/api/pollution/predict`);
@@ -143,6 +143,7 @@ export async function fetchPm25Prediction(t0?: string): Promise<any> {
       signal: controller.signal,
     });
     if (!response.ok) {
+      // Try to extract backend detail for a clearer error message
       let detail = response.statusText;
       try {
         const errJson = await response.json();
@@ -218,7 +219,7 @@ export interface TransitStatus {
   limitations: string[];
 }
 
-export async function fetchTransitStatus(limitAlerts = 20): Promise<any> {
+export async function fetchTransitStatus(limitAlerts = 20): Promise<TransitStatus> {
   const response = await fetch(`${API_BASE}/api/mobility/transit/status?limit_alerts=${limitAlerts}`, { cache: 'no-store' });
   if (!response.ok) {
     throw new Error(`Failed to fetch transit status: ${response.statusText}`);
@@ -226,7 +227,7 @@ export async function fetchTransitStatus(limitAlerts = 20): Promise<any> {
   return response.json();
 }
 
-export async function fetchBusServices(limit = 1000, serviceNo?: string, operator?: string): Promise<any[]> {
+export async function fetchBusServices(limit = 1000, serviceNo?: string, operator?: string): Promise<BusService[]> {
   const url = new URL(`${API_BASE}/api/mobility/transit/bus-services`);
   url.searchParams.set('limit', limit.toString());
   if (serviceNo) url.searchParams.set('service_no', serviceNo);
@@ -238,7 +239,7 @@ export async function fetchBusServices(limit = 1000, serviceNo?: string, operato
   return response.json();
 }
 
-export async function fetchBusRoutes(serviceNo: string, operator: string, direction: number): Promise<any[]> {
+export async function fetchBusRoutes(serviceNo: string, operator: string, direction: number): Promise<BusRoute[]> {
   const url = new URL(`${API_BASE}/api/mobility/transit/bus-routes`);
   url.searchParams.set('service_no', serviceNo);
   url.searchParams.set('operator', operator);
@@ -257,7 +258,7 @@ export async function fetchBusStops(options?: {
   radiusKm?: number; 
   limit?: number; 
   allStops?: boolean 
-}): Promise<any[]> {
+}): Promise<BusStop[]> {
   const url = new URL(`${API_BASE}/api/mobility/transit/bus-stops`);
   if (options?.busStopCode) {
     url.searchParams.set('bus_stopCode', options.busStopCode);
@@ -279,7 +280,7 @@ export async function fetchBusStops(options?: {
   return response.json();
 }
 
-export async function fetchTrainAlerts(line?: string, limit = 20): Promise<any[]> {
+export async function fetchTrainAlerts(line?: string, limit = 20): Promise<TrainAlert[]> {
   const url = new URL(`${API_BASE}/api/mobility/transit/train-alerts`);
   if (line) url.searchParams.set('line', line);
   url.searchParams.set('limit', limit.toString());
@@ -401,7 +402,7 @@ export interface RoadsMapData {
   bbox: [number, number, number, number];
 }
 
-export async function fetchRoadWorks(limit = 100, offset = 0, status?: string, roadName?: string): Promise<any> {
+export async function fetchRoadWorks(limit = 100, offset = 0, status?: string, roadName?: string): Promise<{ total: number; limit: number; offset: number; works: RoadWork[] }> {
   const url = new URL(`${API_BASE}/api/mobility/roads/works`);
   url.searchParams.set('limit', limit.toString());
   url.searchParams.set('offset', offset.toString());
@@ -414,7 +415,7 @@ export async function fetchRoadWorks(limit = 100, offset = 0, status?: string, r
   return response.json();
 }
 
-export async function fetchRoadOpenings(limit = 100, offset = 0, status?: string): Promise<any> {
+export async function fetchRoadOpenings(limit = 100, offset = 0, status?: string): Promise<{ total: number; limit: number; offset: number; openings: RoadOpening[] }> {
   const url = new URL(`${API_BASE}/api/mobility/roads/openings`);
   url.searchParams.set('limit', limit.toString());
   url.searchParams.set('offset', offset.toString());
@@ -426,7 +427,7 @@ export async function fetchRoadOpenings(limit = 100, offset = 0, status?: string
   return response.json();
 }
 
-export async function fetchTaxiStands(limit = 500, offset = 0, bfaOnly = false, ownership?: string): Promise<any> {
+export async function fetchTaxiStands(limit = 500, offset = 0, bfaOnly = false, ownership?: string): Promise<{ total: number; limit: number; offset: number; stands: TaxiStand[] }> {
   const url = new URL(`${API_BASE}/api/mobility/roads/taxi-stands`);
   url.searchParams.set('limit', limit.toString());
   url.searchParams.set('offset', offset.toString());
@@ -439,7 +440,7 @@ export async function fetchTaxiStands(limit = 500, offset = 0, bfaOnly = false, 
   return response.json();
 }
 
-export async function fetchRoadEvents(limit = 100, offset = 0, eventType?: string, status?: string): Promise<any> {
+export async function fetchRoadEvents(limit = 100, offset = 0, eventType?: string, status?: string): Promise<{ total: number; limit: number; offset: number; events: RoadEvent[] }> {
   const url = new URL(`${API_BASE}/api/mobility/roads/events`);
   url.searchParams.set('limit', limit.toString());
   url.searchParams.set('offset', offset.toString());
@@ -452,7 +453,7 @@ export async function fetchRoadEvents(limit = 100, offset = 0, eventType?: strin
   return response.json();
 }
 
-export async function fetchRoadsAnalytics(): Promise<any> {
+export async function fetchRoadsAnalytics(): Promise<RoadsAnalytics> {
   const response = await fetch(`${API_BASE}/api/mobility/roads/analytics/summary`, { cache: 'no-store' });
   if (!response.ok) {
     throw new Error(`Failed to fetch roads analytics: ${response.statusText}`);
@@ -460,7 +461,7 @@ export async function fetchRoadsAnalytics(): Promise<any> {
   return response.json();
 }
 
-export async function fetchRoadSpeedContext(): Promise<any> {
+export async function fetchRoadSpeedContext(): Promise<RoadSpeedContext> {
   const response = await fetch(`${API_BASE}/api/mobility/roads/speed-context`, { cache: 'no-store' });
   if (!response.ok) {
     throw new Error(`Failed to fetch road speed context: ${response.statusText}`);
@@ -468,7 +469,7 @@ export async function fetchRoadSpeedContext(): Promise<any> {
   return response.json();
 }
 
-export async function fetchRoadsMapData(): Promise<any> {
+export async function fetchRoadsMapData(): Promise<RoadsMapData> {
   const response = await fetch(`${API_BASE}/api/mobility/roads/map-data`, { cache: 'no-store' });
   if (!response.ok) {
     throw new Error(`Failed to fetch roads map data: ${response.statusText}`);
@@ -521,7 +522,7 @@ export interface FireReport {
   is_ml_prediction: boolean;
 }
 
-export async function fetchFireReport(): Promise<any> {
+export async function fetchFireReport(): Promise<FireReport> {
   const response = await fetch(`${API_BASE}/api/fire/report`, { cache: 'no-store' });
   if (!response.ok) {
     throw new Error(`Failed to fetch fire report: ${response.statusText}`);
@@ -564,61 +565,19 @@ export interface TrafficPredictionResponse {
 }
 
 // Types for overview
-export interface ModuleKPI {
-  label: string;
-  value: any;
-  unit: string;
-}
-
-export interface ModuleSummary {
-  id: string;
-  name: string;
-  status: 'normal' | 'elevated' | 'critical' | 'unavailable';
-  kpi: ModuleKPI | null;
-  updated_at: string | null;
-  detail_route: string;
-}
-
-export interface AlertItem {
-  id?: string;
-  domain: string;
-  severity: string;
-  title: string;
-  description: string;
-  timestamp: string;
-  affected_zones: string[];
-}
-
 export interface OverviewCityResponse {
-  generated_at: string;
-  modules: ModuleSummary[];
-  alerts: AlertItem[];
+  city_report: CitySituationReport;
   ai_brief: string | null;
 }
 
-export interface ModuleDetailResponse {
+export interface OverviewModuleResponse {
   module_id: string;
-  module_name: string;
-  status: string;
-  kpi: ModuleKPI | null;
-  updated_at: string | null;
-  summary: string;
-  alerts: AlertItem[];
-  cross_domain: string[];
-  detail_route: string;
-}
-
-export interface ChatRequest {
-  message: string;
-  module_id?: string;
-}
-
-export interface ChatResponse {
-  response: string;
+  module_data: any;
+  ai_brief: string | null;
 }
 
 // Overview API functions
-export async function fetchOverviewCity(): Promise<any> {
+export async function fetchOverviewCity(): Promise<OverviewCityResponse> {
   const response = await fetch(`${API_BASE}/api/overview/city`, { cache: 'no-store' });
   if (!response.ok) {
     throw new Error(`Failed to fetch overview city: ${response.statusText}`);
@@ -626,38 +585,10 @@ export async function fetchOverviewCity(): Promise<any> {
   return response.json();
 }
 
-export async function fetchOverviewModule(moduleId: string): Promise<any> {
+export async function fetchOverviewModule(moduleId: string): Promise<OverviewModuleResponse> {
   const response = await fetch(`${API_BASE}/api/overview/module/${moduleId}`, { cache: 'no-store' });
   if (!response.ok) {
     throw new Error(`Failed to fetch overview module ${moduleId}: ${response.statusText}`);
   }
   return response.json();
-}
-
-export async function fetchChat(message: string, moduleId?: string): Promise<any> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30_000); // 30 seconds
-  const url = new URL(`${API_BASE}/api/overview/chat`);
-  try {
-    const response = await fetch(url.toString(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, module_id: moduleId }),
-      cache: 'no-store',
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      let detail = response.statusText;
-      try { const errJson = await response.json(); if (errJson?.detail) detail = errJson.detail; } catch {}
-      throw new Error(`Failed to fetch chat response: ${detail}`);
-    }
-    return response.json();
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new Error('Chat request timed out');
-    }
-    throw err;
-  } finally {
-    clearTimeout(timeoutId);
-  }
 }

@@ -1,0 +1,117 @@
+﻿using System;
+using System.IO;
+using System.Text;
+
+class Program {
+    static void Main() {
+        string path = @"C:\projects\UrbanOS\frontend\src\services\api\index.ts";
+        string content = File.ReadAllText(path);
+        int idx = content.IndexOf("// Types for overview");
+        if (idx >= 0) {
+            string prefix = content.Substring(0, idx);
+            StringBuilder sb = new StringBuilder();
+            
+            sb.AppendLine("// Types for overview");
+            sb.AppendLine("export interface ModuleKPI {");
+            sb.AppendLine("  label: string;");
+            sb.AppendLine("  value: any;");
+            sb.AppendLine("  unit: string;");
+            sb.AppendLine("}");
+            sb.AppendLine("");
+            sb.AppendLine("export interface ModuleSummary {");
+            sb.AppendLine("  id: string;");
+            sb.AppendLine("  name: string;");
+            sb.AppendLine("  status: 'normal' | 'elevated' | 'critical' | 'unavailable';");
+            sb.AppendLine("  kpi: ModuleKPI | null;");
+            sb.AppendLine("  updated_at: string | null;");
+            sb.AppendLine("  detail_route: string;");
+            sb.AppendLine("}");
+            sb.AppendLine("");
+            sb.AppendLine("export interface AlertItem {");
+            sb.AppendLine("  domain: string;");
+            sb.AppendLine("  severity: string;");
+            sb.AppendLine("  title: string;");
+            sb.AppendLine("  description: string;");
+            sb.AppendLine("  timestamp: string;");
+            sb.AppendLine("  affected_zones: string[];");
+            sb.AppendLine("}");
+            sb.AppendLine("");
+            sb.AppendLine("export interface OverviewCityResponse {");
+            sb.AppendLine("  generated_at: string;");
+            sb.AppendLine("  modules: ModuleSummary[];");
+            sb.AppendLine("  alerts: AlertItem[];");
+            sb.AppendLine("  ai_brief: string | null;");
+            sb.AppendLine("}");
+            sb.AppendLine("");
+            sb.AppendLine("export interface ModuleDetailResponse {");
+            sb.AppendLine("  module_id: string;");
+            sb.AppendLine("  module_name: string;");
+            sb.AppendLine("  status: string;");
+            sb.AppendLine("  kpi: ModuleKPI | null;");
+            sb.AppendLine("  updated_at: string | null;");
+            sb.AppendLine("  summary: string;");
+            sb.AppendLine("  alerts: AlertItem[];");
+            sb.AppendLine("  cross_domain: string[];");
+            sb.AppendLine("  detail_route: string;");
+            sb.AppendLine("}");
+            sb.AppendLine("");
+            sb.AppendLine("export interface ChatRequest {");
+            sb.AppendLine("  message: string;");
+            sb.AppendLine("  module_id?: string;");
+            sb.AppendLine("}");
+            sb.AppendLine("");
+            sb.AppendLine("export interface ChatResponse {");
+            sb.AppendLine("  response: string;");
+            sb.AppendLine("}");
+            sb.AppendLine("");
+            sb.AppendLine("// Overview API functions");
+            sb.AppendLine("export async function fetchOverviewCity(): Promise<any> {");
+            sb.AppendLine("  const response = await fetch(${API_BASE}/api/overview/city, { cache: 'no-store' });");
+            sb.AppendLine("  if (!response.ok) {");
+            sb.AppendLine("    throw new Error(Failed to fetch overview city: );");
+            sb.AppendLine("  }");
+            sb.AppendLine("  return response.json();");
+            sb.AppendLine("}");
+            sb.AppendLine("");
+            sb.AppendLine("export async function fetchOverviewModule(moduleId: string): Promise<any> {");
+            sb.AppendLine("  const response = await fetch(${API_BASE}/api/overview/module/, { cache: 'no-store' });");
+            sb.AppendLine("  if (!response.ok) {");
+            sb.AppendLine("    throw new Error(Failed to fetch overview module : );");
+            sb.AppendLine("  }");
+            sb.AppendLine("  return response.json();");
+            sb.AppendLine("}");
+            sb.AppendLine("");
+            sb.AppendLine("export async function fetchChat(message: string, moduleId?: string): Promise<any> {");
+            sb.AppendLine("  const controller = new AbortController();");
+            sb.AppendLine("  const timeoutId = setTimeout(() => controller.abort(), 30_000); // 30 seconds");
+            sb.AppendLine("  const url = new URL(${API_BASE}/api/overview/chat);");
+            sb.AppendLine("  try {");
+            sb.AppendLine("    const response = await fetch(url.toString(), {");
+            sb.AppendLine("      method: 'POST',");
+            sb.AppendLine("      headers: { 'Content-Type': 'application/json' },");
+            sb.AppendLine("      body: JSON.stringify({ message, module_id: moduleId }),");
+            sb.AppendLine("      cache: 'no-store',");
+            sb.AppendLine("      signal: controller.signal,");
+            sb.AppendLine("    });");
+            sb.AppendLine("    if (!response.ok) {");
+            sb.AppendLine("      let detail = response.statusText;");
+            sb.AppendLine("      try { const errJson = await response.json(); if (errJson?.detail) detail = errJson.detail; } catch {}");
+            sb.AppendLine("      throw new Error(Failed to fetch chat response: );");
+            sb.AppendLine("    }");
+            sb.AppendLine("    return response.json();");
+            sb.AppendLine("  } catch (err) {");
+            sb.AppendLine("    if (err instanceof DOMException && err.name === 'AbortError') {");
+            sb.AppendLine("      throw new Error('Chat request timed out');");
+            sb.AppendLine("    }");
+            sb.AppendLine("    throw err;");
+            sb.AppendLine("  } finally { clearTimeout(timeoutId); }");
+            sb.AppendLine("}");
+            
+            string newContent = content.Substring(0, idx) + sb.ToString();
+            File.WriteAllText(path, newContent, Encoding.UTF8);
+            Console.WriteLine("Updated successfully");
+        } else {
+            Console.WriteLine("Could not find marker");
+        }
+    }
+}
