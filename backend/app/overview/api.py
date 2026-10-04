@@ -103,26 +103,6 @@ async def _generate_ai_brief(ai_service: UrbanOSAIService, context: Dict[str, An
         return None
 
 
-def _generate_deterministic_city_brief(modules: List[Dict[str, Any]], alerts: List[Dict]) -> str:
-    """Generate deterministic city briefing from structured data."""
-    brief_parts = ["UrbanOS City Intelligence Report."]
-    
-    available = [m["name"] for m in modules if m.get("status") != "unavailable"]
-    degraded = [m["name"] for m in modules if m.get("status") == "unavailable"]
-    
-    if available:
-        brief_parts.append(f"Active modules: {', '.join(available)}.")
-    if degraded:
-        brief_parts.append(f"Degraded: {', '.join(degraded)}.")
-    if alerts:
-        brief_parts.append(f"{len(alerts)} priority incidents active.")
-        first = alerts[0]
-        if first.get("description"):
-            brief_parts.append(f"Most recent: {first['description']}.")
-    
-    return " ".join(brief_parts)
-
-
 def _generate_deterministic_module_brief(module_id: str, module_data: Dict[str, Any]) -> str:
     """Generate deterministic module brief from structured data."""
     name_map = {
@@ -441,6 +421,7 @@ async def _fetch_flood_alerts() -> List[Dict]:
 async def get_overview_city(request: Request) -> CityOverviewResponse:
     """
     Get lightweight city overview using direct service calls (NO HTTP LOOPBACK).
+    Part 1: Base city/module data only. No AI, no alerts, no cross-domain intelligence.
     """
     app_state = request.app.state
     
@@ -504,40 +485,12 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
             detail_route=config["detail_route"],
         ))
     
-    # Fetch priority incidents
-    incidents_tasks = [
-        _fetch_traffic_incidents(),
-        _fetch_fire_incidents(),
-        _fetch_flood_alerts(),
-    ]
-    incidents_results = await asyncio.gather(*incidents_tasks, return_exceptions=True)
-    all_incidents = []
-    for result in incidents_results:
-        if isinstance(result, list):
-            all_incidents.extend(result)
-    
-    all_incidents.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-    top_incidents = all_incidents[:5]
-    
-    # Generate AI brief
-    ai_service = get_ai_service()
-    ai_brief = None
-    if ai_service.is_available():
-        try:
-            context = {"modules": module_data, "incidents": all_incidents}
-            ai_brief = await _generate_ai_brief(ai_service, context, "city")
-        except Exception as e:
-            log.warning("AI city brief generation failed: %s", e)
-    
-    if ai_brief is None:
-        module_summaries = [{"name": m.name, "status": m.status, "kpi": m.kpi.dict() if m.kpi else None} for m in modules]
-        ai_brief = _generate_deterministic_city_brief(module_summaries, top_incidents)
-    
+    # Part 1: No alerts, no AI brief
     return CityOverviewResponse(
         generated_at=datetime.now(SG_OFFSET).isoformat(),
         modules=modules,
-        alerts=[AlertItem(**inc) for inc in top_incidents],
-        ai_brief=ai_brief,
+        alerts=[],
+        ai_brief=None,
     )
 
 
