@@ -530,6 +530,7 @@ def _build_app() -> FastAPI:
                 log.exception("PM2.5 prediction failed")
                 raise HTTPException(status_code=500, detail=f"Prediction error: {e}")
     
+    @app.get("/api/traffic/predict")
     @app.get("/api/mobility/traffic/predict")
     async def traffic_predict() -> Dict[str, Any]:
         """Generate real-time per-link traffic speed predictions using production XGBoost.
