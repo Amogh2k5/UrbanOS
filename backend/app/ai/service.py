@@ -5,23 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+
+import httpx
 
 log = logging.getLogger(__name__)
-
-try:
-    import openai
-except ImportError:
-    openai = None
-    log.warning("OpenAI package not installed. OpenAI support disabled.")
-
-try:
-    from google import genai
-    from google.genai import types
-except ImportError:
-    genai = None
-    types = None
-    log.warning("google.genai package not installed. Google AI Studio support disabled.")
 
 
 class UrbanOSAIService:
@@ -35,37 +23,41 @@ class UrbanOSAIService:
             api_key: The API key for the LLM provider. If None, will try to read from
                      environment variable URBANOS_LLM_API_KEY.
             model: The model to use for generation.
-            provider: The LLM provider (e.g. 'openai', 'google').
+            provider: The LLM provider (e.g. 'openrouter').
         """
         self.api_key = api_key or os.getenv("URBANOS_LLM_API_KEY")
-        self.provider = (provider or os.getenv("URBANOS_LLM_PROVIDER", "openai")).lower()
+        self.provider = (provider or os.getenv("URBANOS_LLM_PROVIDER", "openrouter")).lower()
         
-        default_model = "gemma-4-31b" if self.provider == "google" else "gpt-3.5-turbo"
+        default_model = "nvidia/nemotron-3-ultra-550b-a55b" if self.provider == "openrouter" else "gpt-3.5-turbo"
         self.model = model or os.getenv("URBANOS_LLM_MODEL", default_model)
         
         self._client = None
-
+        
         if not self.api_key:
             log.warning("UrbanOS AI Service initialized without API key. AI briefing generation will be disabled.")
             return
-
-        if self.provider == "google":
-            if genai:
-                self._client = genai.Client(api_key=self.api_key)
-                log.info(f"UrbanOS AI Service initialized with Google model: {self.model}")
-            else:
-                log.warning("Provider set to 'google' but google.genai is not installed.")
+        
+        if self.provider == "openrouter":
+            # OpenRouter uses OpenAI-compatible API
+            base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+            self._client = httpx.AsyncClient(
+                base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "HTTP-Referer": "https://urbanos.sg",
+                    "X-Title": "UrbanOS",
+                    "Content-Type": "application/json",
+                },
+                timeout=30.0,
+            )
+            log.info(f"UrbanOS AI Service initialized with OpenRouter model: {self.model}")
         else:
-            if openai:
-                openai.api_key = self.api_key
-                self._client = openai
-                log.info(f"UrbanOS AI Service initialized with OpenAI model: {self.model}")
-            else:
-                log.warning("Provider set to 'openai' but openai package is not installed.")
+            log.warning(f"Provider '{self.provider}' not supported. Only 'openrouter' is supported.")
+            self._client = None
 
-    def _generate_with_openai(self, prompt: str, max_tokens: int = 150) -> Optional[str]:
+    async def _generate(self, prompt: str, max_tokens: int = 150) -> Optional[str]:
         """
-        Generate text using the configured LLM API (OpenAI or Google).
+        Generate text using the configured LLM API.
 
         Args:
             prompt: The prompt to send to the model.
@@ -78,37 +70,33 @@ class UrbanOSAIService:
             return None
 
         try:
-            if self.provider == "google":
-                response = self._client.models.generate_content(
-                    model=self.model,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        max_output_tokens=max_tokens,
-                        temperature=0.3,
-                    )
-                )
-                return response.text.strip()
-            else:
-                response = self._client.Completion.create(
-                    engine=self.model,
-                    prompt=prompt,
-                    max_tokens=max_tokens,
-                    temperature=0.3,  # Low temperature for more focused, deterministic output
-                    top_p=1.0,
-                    frequency_penalty=0.0,
-                    presence_penalty=0.0,
-                )
-                return response.choices[0].text.strip()
+            response = await self._client.post(
+                "/chat/completions",
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": "You are UrbanOS, a city intelligence system for Singapore. Provide concise, data-grounded responses. Do not invent data."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "max_tokens": max_tokens,
+                    "temperature": 0.3,
+                    "top_p": 1.0,
+                },
+                timeout=30.0
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"].strip()
         except Exception as e:
             log.exception(f"Error generating text with {self.provider}: {e}")
             return None
 
-    def generate_city_brief(self, city_context: Dict[str, Any]) -> Optional[str]:
+    async def generate_city_brief(self, city_context: Dict[str, Any]) -> Optional[str]:
         """
         Generate a city-level briefing from the city context.
 
         Args:
-            city_context: A dictionary containing the city context (from CitySituationReport).
+            city_context: A dictionary containing the city context.
 
         Returns:
             A briefing string, or None if generation is not available or failed.
@@ -116,11 +104,10 @@ class UrbanOSAIService:
         if not self._client:
             return None
 
-        # Construct a prompt that instructs the LLM to summarize the city context.
         prompt = self._build_city_brief_prompt(city_context)
-        return self._generate_with_openai(prompt)
+        return await self._generate(prompt)
 
-    def generate_module_brief(self, module_context: Dict[str, Any]) -> Optional[str]:
+    async def generate_module_brief(self, module_context: Dict[str, Any]) -> Optional[str]:
         """
         Generate a module-level briefing from the module context.
 
@@ -134,47 +121,61 @@ class UrbanOSAIService:
             return None
 
         prompt = self._build_module_brief_prompt(module_context)
-        return self._generate_with_openai(prompt)
+        return await self._generate(prompt)
 
     def _build_city_brief_prompt(self, context: Dict[str, Any]) -> str:
         """
         Build a prompt for the city briefing from the city context.
-
-        We expect the context to be derived from the CitySituationReport.
-
-        We will extract the most relevant information: module statuses, alerts, etc.
         """
-        # We'll keep the prompt concise and instruct the LLM to be concise.
+        modules = context.get("modules", [])
+        alerts = context.get("alerts", [])
+        
+        # Build a concise summary of the city state
+        modules_summary = []
+        for m in modules:
+            status = m.get("status", "unknown")
+            kpi = m.get("kpi")
+            kpi_str = f"{kpi['label']}: {kpi['value']} {kpi['unit']}" if kpi else "N/A"
+            modules_summary.append(f"- {m.get('name', m.get('id', 'unknown'))}: {status}, {kpi_str}")
+        
+        alerts_summary = []
+        for a in alerts[:5]:  # Limit to top 5 alerts
+            alerts_summary.append(f"- {a.get('domain', 'unknown')}: {a.get('title', 'Unknown')} ({a.get('severity', 'unknown')})")
+
         prompt = (
-            "You are an AI assistant for UrbanOS, a city intelligence system for Singapore. "
-            "Your task is to generate a brief, 2-4 sentence summary of the current city situation "
-            "based on the provided data. Do not invent data. Only summarize what is provided. "
+            "You are UrbanOS, a city intelligence system for Singapore. "
+            "Generate a concise 3-5 sentence executive briefing for city operations. "
+            "Use ONLY the data provided below. Do not invent data. "
             "Focus on what is happening, what needs attention, and what the system understands. "
             "Be concise and avoid unnecessary technical details.\n\n"
-            "City Context:\n"
+            "Module Status:\n"
+            + "\n".join(modules_summary) + "\n\n"
+            "Active Alerts:\n"
+            + ("\n".join(alerts_summary) if alerts_summary else "None") + "\n\n"
+            "Provide a concise executive briefing (3-5 sentences) summarizing the current city state. "
+            "Focus on what is happening, what needs attention, and what the system understands. "
+            "Be concise and avoid unnecessary technical details.\n\n"
+            "Briefing:"
         )
-
-        # We'll format the context as a readable string.
-        # We expect context to have keys like 'domain_status', 'priority_incidents', etc.
-        # We'll try to extract a summary.
-
-        # For now, we'll just convert the context to a string and hope it's not too large.
-        # In a real implementation, we would extract the most relevant fields.
-        prompt += json.dumps(context, indent=2, default=str)[:2000]  # Limit to avoid too long prompts
-        prompt += "\n\nBriefing:"
-
         return prompt
 
     def _build_module_brief_prompt(self, context: Dict[str, Any]) -> str:
         """
         Build a prompt for the module briefing from the module context.
         """
+        module_id = context.get("module_id", "unknown")
+        module_name = context.get("module_name", context.get("module_id", "unknown"))
+        status = context.get("status", "unknown")
+        kpi = context.get("kpi")
+        kpi_str = f"{kpi['label']}: {kpi['value']} {kpi['unit']}" if kpi else "N/A"
+        data = context.get("data", {})
+        
         prompt = (
-            "You are an AI assistant for UrbanOS, a city intelligence system for Singapore. "
-            "Your task is to generate a brief, 1-2 sentence summary of the current situation "
-            "for a specific module based on the provided data. Do not invent data. "
-            "Only summarize what is provided. Focus on the current status and any important details. "
-            "Be concise.\n\n"
+            f"You are UrbanOS, a city intelligence system for Singapore. "
+            f"Generate a brief, 1-2 sentence summary of the current situation "
+            f"for a specific module based on the provided data. Do not invent data. "
+            f"Only summarize what is provided. Focus on the current status and any important details. "
+            f"Be concise.\n\n"
             "Module Context:\n"
         )
         prompt += json.dumps(context, indent=2, default=str)[:2000]

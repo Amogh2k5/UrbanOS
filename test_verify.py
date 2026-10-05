@@ -5,13 +5,18 @@ from backend.app.main import app
 
 client = TestClient(app)
 response = client.get('/api/overview/city')
-data = response.json()
-print(f'Alerts count: {len(data.get("alerts", []))}')
-for a in data.get('alerts', []):
-    print(f'  Domain: {a["domain"]}')
-    print(f'  Severity: {a["severity"]}')
-    print(f'  Title: {a["title"]}')
-    print(f'  Description: {a["description"][:80]}...')
-    print(f'  Timestamp: {a["timestamp"]}')
-    print(f'  Affected zones: {a["affected_zones"]}')
-    print('---')
+print(f'Status: {response.status_code}')
+if response.status_code == 200:
+    data = response.json()
+    print(f'Modules: {len(data.get("modules", []))}')
+    print(f'Alerts: {len(data.get("alerts", []))}')
+    print(f'AI Brief: {data.get("ai_brief")}')
+    for m in data.get('modules', []):
+        kpi = m.get('kpi')
+        kpi_str = f'{kpi["label"]}: {kpi["value"]} {kpi["unit"]}' if kpi else 'None'
+        print(f'  - {m["id"]}: {m["status"]} KPI={kpi_str}')
+    if data.get('alerts'):
+        for a in data['alerts'][:3]:
+            print(f'  - {a.get("domain")}: {a.get("title")[:50]}')
+else:
+    print(f'Error: {response.text[:500]}')

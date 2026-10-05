@@ -87,12 +87,12 @@ async def _generate_ai_brief(ai_service: UrbanOSAIService, context: Dict[str, An
     try:
         if brief_type == "city":
             return await asyncio.wait_for(
-                asyncio.to_thread(ai_service.generate_city_brief, context),
+                ai_service.generate_city_brief(context),
                 timeout=10.0
             )
         else:
             return await asyncio.wait_for(
-                asyncio.to_thread(ai_service.generate_module_brief, context),
+                ai_service.generate_module_brief(context),
                 timeout=10.0
             )
     except asyncio.TimeoutError:
@@ -521,11 +521,59 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
     all_alerts.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     top_alerts = all_alerts[:20]
 
+    # Build compact AI context from existing modules and alerts
+    ai_context = {
+        "modules": [
+            {
+                "id": m.id,
+                "name": m.name,
+                "status": m.status,
+                "kpi": {"label": m.kpi.label, "value": m.kpi.value, "unit": m.kpi.unit} if m.kpi else None,
+            }
+            for m in modules
+        ],
+        "alerts": [
+            {
+                "domain": a["domain"],
+                "severity": a["severity"],
+                "title": a["title"],
+                "description": a["description"],
+                "timestamp": a["timestamp"],
+                "affected_zones": a.get("affected_zones", []),
+            }
+            for a in top_alerts
+        ],
+    }
+
+    # Generate AI city brief
+    ai_service = get_ai_service()
+    ai_brief = None
+    if ai_service.is_available():
+        try:
+            ai_brief = await asyncio.wait_for(
+                _generate_ai_brief(ai_service, ai_context, "city"),
+                timeout=30.0
+            )
+        except asyncio.TimeoutError:
+            log.warning("AI city brief generation timed out after 30 seconds")
+        except Exception as e:
+            log.warning("AI city brief generation failed: %s", e)
+
     return CityOverviewResponse(
         generated_at=datetime.now(SG_OFFSET).isoformat(),
         modules=modules,
-        alerts=[AlertItem(**a) for a in top_alerts],
-        ai_brief=None,
+        alerts=[
+            AlertItem(
+                domain=a["domain"],
+                severity=a["severity"],
+                title=a["title"],
+                description=a["description"],
+                timestamp=a["timestamp"],
+                affected_zones=a.get("affected_zones", []),
+            )
+            for a in top_alerts
+        ],
+        ai_brief=ai_brief,
     )
 
 
