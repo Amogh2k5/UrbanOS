@@ -18,6 +18,8 @@ export const metadata: Metadata = {
   description: "Government Smart-City Command Center for Singapore",
 };
 
+export const dynamic = 'force-dynamic';
+
 export default function RootLayout({
   children,
 }: Readonly<{

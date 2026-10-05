@@ -16,7 +16,7 @@ if response.status_code == 200:
         kpi_str = f'{kpi["label"]}: {kpi["value"]} {kpi["unit"]}' if kpi else 'None'
         print(f'  - {m["id"]}: {m["status"]} KPI={kpi_str}')
     if data.get('alerts'):
-        for a in data['alerts'][:3]:
+        for a in data['alerts']:
             print(f'  - {a.get("domain")}: {a.get("title")[:50]}')
 else:
     print(f'Error: {response.text[:500]}')

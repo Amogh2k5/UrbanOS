@@ -1,27 +1,22 @@
-import subprocess
-import time
 import sys
-import requests
+sys.path.insert(0, r'C:\projects\UrbanOS')
+from fastapi.testclient import TestClient
+from backend.app.main import app
 
-proc = subprocess.Popen([sys.executable, '-m', 'uvicorn', 'backend.app.main:app', '--host', '0.0.0.0', '--port', '8000'], cwd=r'C:\projects\UrbanOS', stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-time.sleep(15)
-
-try:
-    # Just test the main overview endpoint
-    response = requests.get('http://localhost:8000/api/overview/city', timeout=30)
-    print(f'Overview: {response.status_code}')
-    if response.status_code == 200:
-        data = response.json()
-        print(f'  Modules: {len(data.get("modules", []))}')
-        print(f'  Alerts: {len(data.get("alerts", []))}')
-        print(f'  AI Brief: {data.get("ai_brief")}')
-        for m in data.get('modules', []):
-            kpi = m.get('kpi')
-            kpi_str = f'{kpi["label"]}: {kpi["value"]} {kpi["unit"]}' if kpi else 'None'
-            print(f'  - {m["id"]}: {m["status"]} KPI={kpi_str}')
-    else:
-        print(f'Error: {response.text[:200]}')
-except Exception as e:
-    print(f'Error: {e}')
-finally:
-    proc.terminate()
+client = TestClient(app)
+response = client.get('/api/overview/city')
+print(f'Status: {response.status_code}')
+if response.status_code == 200:
+    data = response.json()
+    print(f'Modules: {len(data.get("modules", []))}')
+    print(f'Alerts: {len(data.get("alerts", []))}')
+    print(f'AI Brief: {data.get("ai_brief")}')
+    for m in data.get('modules', []):
+        kpi = m.get('kpi')
+        kpi_str = f'{kpi["label"]}: {kpi["value"]} {kpi["unit"]}' if kpi else 'None'
+        print(f'  - {m["id"]}: {m["status"]} KPI={kpi_str}')
+    if data.get('alerts'):
+        for a in data['alerts'][:3]:
+            print(f'  - {a.get("domain")}: {a.get("title")[:50]}')
+else:
+    print(f'Error: {response.text[:500]}')

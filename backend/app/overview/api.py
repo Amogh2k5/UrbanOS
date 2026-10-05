@@ -485,11 +485,46 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
             detail_route=config["detail_route"],
         ))
     
-    # Part 1: No alerts, no AI brief
+    # Part 2: Fetch real alerts from all sources with error isolation
+    all_alerts = []
+    for name, fetch_fn in [
+        ("traffic", _fetch_traffic_incidents),
+        ("fire", _fetch_fire_incidents),
+        ("flood", _fetch_flood_alerts),
+    ]:
+        try:
+            result = await asyncio.wait_for(fetch_fn(), timeout=8.0)
+            if isinstance(result, list):
+                log.info(f"Alert source {name} returned {len(result)} alerts")
+                all_alerts.extend(result)
+        except asyncio.TimeoutError:
+            log.warning(f"{name} fetch timed out after 8 seconds")
+        except Exception as e:
+            log.warning(f"{name} fetch failed: {e}")
+    
+    # Add status briefs for non-normal modules (status != "normal")
+    for module in modules:
+        if module.status != "normal":
+            # Generate status brief using existing module data
+            module_brief = _generate_deterministic_module_brief(module.id, module_data.get(module.id, {}))
+            status_brief = {
+                "domain": module.id,
+                "severity": module.status,  # "elevated" or "critical"
+                "title": f"{module.name} Status: {module.status.capitalize()}",
+                "description": f"{module.name} status is {module.status}. {module_data.get(module.id, {}).get('error', '') or _generate_deterministic_module_brief(module.id, module_data.get(module.id, {}))}",
+                "timestamp": datetime.now(SG_OFFSET).isoformat(),
+                "affected_zones": [],
+            }
+            all_alerts.append(status_brief)
+    
+    # Sort by timestamp descending, take top 20
+    all_alerts.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    top_alerts = all_alerts[:20]
+
     return CityOverviewResponse(
         generated_at=datetime.now(SG_OFFSET).isoformat(),
         modules=modules,
-        alerts=[],
+        alerts=[AlertItem(**a) for a in top_alerts],
         ai_brief=None,
     )
 
