@@ -93,3 +93,6 @@ ml/datasets/
 # ACAR reports
 ACAR_*.pdf
 ACAR_*.txt
+.env
+*.env
+
