@@ -53,6 +53,7 @@ from backend.app.mobility.traffic.api import router as traffic_router
 from backend.app.mobility.transit.api import router as transit_router
 from backend.app.mobility.roads.api import router as roads_router
 from backend.app.safety.fire.api import router as fire_router
+from backend.app.safety.crime.api import router as crime_router
 from backend.app.overview.api import router as overview_router
 from backend.app.mobility.transit.scheduler import TransitAlertsScheduler, SchedulerConfig
 
@@ -1012,6 +1013,7 @@ def _build_app() -> FastAPI:
     app.include_router(roads_router)
     # Register safety fire router
     app.include_router(fire_router)
+    app.include_router(crime_router)
     app.include_router(overview_router)
 
     # Start transit alerts scheduler in background thread

@@ -413,6 +413,29 @@ async def _fetch_flood_alerts() -> List[Dict]:
         return []
 
 
+async def _fetch_crime_incidents() -> List[Dict]:
+    """Fetch crime incidents from Singapore Police Force data."""
+    try:
+        from backend.app.safety.crime.data import DataGovCrimeClient
+        client = DataGovCrimeClient()
+        snap = await asyncio.to_thread(client.fetch_all)
+        incidents = []
+        # Use crime_cases dataset for recent incidents
+        crime_cases = snap.datasets.get("crime_cases", [])[:3]
+        for inc in crime_cases:
+            incidents.append({
+                "domain": "crime",
+                "severity": "elevated",
+                "title": inc.get("offence", "Crime Case"),
+                "description": f"{inc.get('offence', 'Incident')} - {inc.get('year', 'N/A')}",
+                "timestamp": inc.get("year", ""),
+                "affected_zones": [inc.get("area", "")] if inc.get("area") else [],
+            })
+        return incidents
+    except Exception:
+        return []
+
+
 # ============================================================
 # Main Endpoints
 # ============================================================
@@ -457,6 +480,7 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
         "weather": {"name": "Weather", "detail_route": "/weather"},
         "flood": {"name": "Flood & Rain", "detail_route": "/flood"},
         "fire": {"name": "Fire", "detail_route": "/safety/fire"},
+        "crime": {"name": "Crime", "detail_route": "/safety/crime"},
     }
     
     modules = []
@@ -486,11 +510,13 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
         ))
     
     # Part 2: Fetch real alerts from all sources with error isolation
+    # Part 2: Fetch real alerts from all sources with error isolation
     all_alerts = []
     for name, fetch_fn in [
         ("traffic", _fetch_traffic_incidents),
         ("fire", _fetch_fire_incidents),
         ("flood", _fetch_flood_alerts),
+        ("crime", _fetch_crime_incidents),
     ]:
         try:
             result = await asyncio.wait_for(fetch_fn(), timeout=8.0)

@@ -36,9 +36,9 @@ const divisions = [
   {
     key: "safety",
     label: "Safety",
-    href: "/safety/incidents",
+    href: "/safety/crime",
     modules: [
-      { key: "incidents", label: "Incidents", href: "/safety/incidents" },
+      { key: "crime", label: "Crime", href: "/safety/crime" },
       { key: "fire", label: "Fire", href: "/safety/fire" },
     ],
   },
