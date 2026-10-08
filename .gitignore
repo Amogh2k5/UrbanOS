@@ -87,6 +87,18 @@ traffic/data/
 flood/data/
 ml/datasets/
 
+# The Traffic zone boundary GeoJSON is a required source artefact, not generated
+# data: backend/app/mobility/traffic/geo_zones.py loads it at runtime via a
+# module-relative path, so a fresh clone fails without it.
+# git cannot re-include a file whose parent directory is excluded, so the
+# directory chain is un-ignored first and then narrowed back to this one file,
+# leaving the broad data/ rule intact for everything else.
+!backend/app/mobility/traffic/data/
+backend/app/mobility/traffic/data/*
+!backend/app/mobility/traffic/data/processed/
+backend/app/mobility/traffic/data/processed/*
+!backend/app/mobility/traffic/data/processed/singapore_planning_regions.geojson
+
 # Large data files (raw/processed CSV, PDFs)
 *.pdf
 

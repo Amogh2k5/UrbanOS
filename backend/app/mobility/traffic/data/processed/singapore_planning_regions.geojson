@@ -1,0 +1,289 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "SG_NORTH",
+        "zone_name": "North",
+        "description": "North Region (Admiralty, Lim Chu Kang, Mandai, Sembawang, Simpang, Sungei Kadut, Woodlands, Yishun)"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              103.6,
+              1.47
+            ],
+            [
+              103.83,
+              1.47
+            ],
+            [
+              103.83,
+              1.38
+            ],
+            [
+              103.6,
+              1.38
+            ],
+            [
+              103.6,
+              1.47
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "SG_NORTH_EAST",
+        "zone_name": "North-East",
+        "description": "North-East Region (Hougang, Punggol, Sengkang, Seletar, Serangoon, Seletar Hills, parts of Ang Mo Kio)"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              103.83,
+              1.47
+            ],
+            [
+              104.05,
+              1.47
+            ],
+            [
+              104.05,
+              1.38
+            ],
+            [
+              103.83,
+              1.38
+            ],
+            [
+              103.83,
+              1.47
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "SG_CENTRAL_NORTH",
+        "zone_name": "Central North",
+        "description": "Central Region northern planning areas (Bishan, Toa Payoh, Ang Mo Kio, Serangoon, Kallang, Geylang)"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              103.83,
+              1.38
+            ],
+            [
+              103.9,
+              1.38
+            ],
+            [
+              103.9,
+              1.32
+            ],
+            [
+              103.83,
+              1.32
+            ],
+            [
+              103.83,
+              1.38
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "SG_CENTRAL_SOUTH",
+        "zone_name": "Central South",
+        "description": "Central Region southern planning areas (Downtown Core, Marina Bay, Orchard, Bukit Merah, Queenstown, Outram, Museum, Newton, River Valley, Rochor, Tanglin, Bukit Timah, Holland)"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              103.75,
+              1.32
+            ],
+            [
+              103.9,
+              1.32
+            ],
+            [
+              103.9,
+              1.24
+            ],
+            [
+              103.75,
+              1.24
+            ],
+            [
+              103.75,
+              1.32
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "SG_EAST",
+        "zone_name": "East",
+        "description": "East Region (Bedok, Changi, Changi Bay, Katong, Pasir Ris, Paya Lebar, Tampines, Ubi)"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              103.9,
+              1.38
+            ],
+            [
+              104.05,
+              1.38
+            ],
+            [
+              104.05,
+              1.24
+            ],
+            [
+              103.9,
+              1.24
+            ],
+            [
+              103.9,
+              1.38
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "SG_WEST_NORTH",
+        "zone_name": "West North",
+        "description": "West Region northern planning areas (Choa Chu Kang, Bukit Panjang, Sungei Kadut, Tengah, Bukit Batok, Bukit Gombak)"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              103.6,
+              1.42
+            ],
+            [
+              103.83,
+              1.42
+            ],
+            [
+              103.83,
+              1.32
+            ],
+            [
+              103.6,
+              1.32
+            ],
+            [
+              103.6,
+              1.42
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "SG_WEST_SOUTH",
+        "zone_name": "West South",
+        "description": "West Region southern planning areas (Jurong East, Jurong West, Boon Lay, Pioneer, Tuas, Clementi, Western Water Catchment, Western Islands)"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              103.6,
+              1.32
+            ],
+            [
+              103.75,
+              1.32
+            ],
+            [
+              103.75,
+              1.24
+            ],
+            [
+              103.6,
+              1.24
+            ],
+            [
+              103.6,
+              1.32
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "SG_SENTOSA",
+        "zone_name": "Sentosa & Southern Islands",
+        "description": "Sentosa Island and Southern Islands planning area"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              103.8,
+              1.26
+            ],
+            [
+              103.85,
+              1.26
+            ],
+            [
+              103.85,
+              1.22
+            ],
+            [
+              103.75,
+              1.22
+            ],
+            [
+              103.75,
+              1.26
+            ],
+            [
+              103.8,
+              1.26
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}
