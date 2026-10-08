@@ -12,7 +12,11 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_GEOJSON_PATH = Path("traffic/data/processed/singapore_planning_regions.geojson")
+# geo_zones.py -> backend/app/mobility/traffic/ -> data/processed/ alongside this module.
+# Derived from __file__ so it resolves identically regardless of the process CWD
+# (mirrors the REPO_ROOT convention in ml/pm25/config.py).
+_MODULE_DIR = Path(__file__).resolve().parent
+_DEFAULT_GEOJSON_PATH = _MODULE_DIR / "data" / "processed" / "singapore_planning_regions.geojson"
 
 
 class ZoneLookup:

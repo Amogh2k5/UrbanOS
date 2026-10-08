@@ -347,6 +347,17 @@ async def _fetch_fire_overview(app_state) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
+async def _fetch_water_overview(app_state) -> Dict[str, Any]:
+    """Fetch lightweight water overview using water agent."""
+    try:
+        from backend.app.infrastructure.water.agent import run_water_agent
+        report = await asyncio.to_thread(run_water_agent)
+        return report.model_dump()
+    except Exception as e:
+        log.warning("Water overview fetch failed: %s", e)
+        return {"error": str(e)}
+
+
 # ============================================================
 # Alert Fetching (direct service calls, NO HTTP LOOPBACK)
 # ============================================================
@@ -436,6 +447,26 @@ async def _fetch_crime_incidents() -> List[Dict]:
         return []
 
 
+async def _fetch_water_incidents() -> List[Dict]:
+    """Fetch water alerts from water agent (drain conditions, quality exceedances, usage changes)."""
+    try:
+        from backend.app.infrastructure.water.agent import run_water_agent
+        report = await asyncio.to_thread(run_water_agent)
+        incidents = []
+        for alert in (report.alerts or [])[:5]:
+            incidents.append({
+                "domain": "water",
+                "severity": alert.severity.lower(),
+                "title": f"Water: {alert.category}",
+                "description": alert.message,
+                "timestamp": alert.evidence[0] if alert.evidence else report.generated_at.isoformat(),
+                "affected_zones": [],
+            })
+        return incidents
+    except Exception:
+        return []
+
+
 # ============================================================
 # Main Endpoints
 # ============================================================
@@ -457,12 +488,13 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
         _fetch_weather_overview(request.app.state),
         _fetch_flood_overview(request.app.state),
         _fetch_fire_overview(request.app.state),
+        _fetch_water_overview(request.app.state),
     ]
     
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
     module_data = {}
-    module_ids = ["traffic", "roads", "transit", "pm25", "weather", "flood", "fire"]
+    module_ids = ["traffic", "roads", "transit", "pm25", "weather", "flood", "fire", "water"]
     
     for module_id, result in zip(module_ids, results):
         if isinstance(result, Exception):
@@ -481,6 +513,7 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
         "flood": {"name": "Flood & Rain", "detail_route": "/flood"},
         "fire": {"name": "Fire", "detail_route": "/safety/fire"},
         "crime": {"name": "Crime", "detail_route": "/safety/crime"},
+        "water": {"name": "Water", "detail_route": "/infrastructure/water"},
     }
     
     modules = []
@@ -517,6 +550,7 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
         ("fire", _fetch_fire_incidents),
         ("flood", _fetch_flood_alerts),
         ("crime", _fetch_crime_incidents),
+        ("water", _fetch_water_incidents),
     ]:
         try:
             result = await asyncio.wait_for(fetch_fn(), timeout=8.0)

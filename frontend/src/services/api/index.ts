@@ -661,3 +661,164 @@ export async function fetchChat(message: string, moduleId?: string): Promise<any
     clearTimeout(timeoutId);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Water (Infrastructure) domain — mirrors backend/app/infrastructure/water/models.py
+// ---------------------------------------------------------------------------
+export type WaterDataKind = 'live' | 'latest_available' | 'historical' | 'forecast' | 'unavailable';
+export type DrainCondition = 'NORMAL' | 'ELEVATED' | 'HIGH' | 'CRITICAL' | 'UNAVAILABLE';
+
+export interface WaterSource {
+  key: string;
+  organization: string;
+  name: string;
+  identifier: string;
+  url: string;
+  purpose: string;
+  update_frequency: string;
+  coverage: string;
+  authentication: string;
+  data_kind: WaterDataKind;
+  component: string;
+  status: 'ok' | 'stale_cache' | 'unavailable';
+  last_fetched_at?: string | null;
+  latest_data_period?: string | null;
+  record_count?: number | null;
+  error?: string | null;
+}
+
+export interface WaterIndicator {
+  key: string;
+  label: string;
+  value?: number | null;
+  unit: string;
+  period?: string | null;
+  previous_value?: number | null;
+  previous_period?: string | null;
+  change_abs?: number | null;
+  change_pct?: number | null;
+  data_kind: WaterDataKind;
+  source_key?: string | null;
+}
+
+export interface WaterSeries {
+  key: string;
+  label: string;
+  unit: string;
+  points: { year: number; value?: number | null }[];
+  data_kind: WaterDataKind;
+  source_key?: string | null;
+}
+
+export interface WaterDrainSensorStatus {
+  sensor: { id: string; name?: string | null; latitude: number; longitude: number };
+  condition: DrainCondition;
+  water_level_m?: number | null;
+  reference_depth_m?: number | null;
+  percentage?: number | null;
+  observed_at?: string | null;
+  trend: 'rising' | 'falling' | 'stable' | 'unknown';
+}
+
+export interface WaterQualityParameter {
+  key: string;
+  parameter: string;
+  unit: string;
+  average?: string | null;
+  range?: string | null;
+  regulatory_limit?: string | null;
+  compliance: 'WITHIN_LIMIT' | 'EXCEEDS_LIMIT' | 'NO_LIMIT_PUBLISHED' | 'UNKNOWN';
+}
+
+export interface WaterReport {
+  generated_at: string;
+  domain: string;
+  subdomain: string;
+  overall_status: 'NORMAL' | 'ELEVATED' | 'CRITICAL' | 'UNKNOWN';
+  overall_risk: 'LOW' | 'MODERATE' | 'HIGH' | 'CRITICAL' | 'UNKNOWN';
+  supply: {
+    data_kind: WaterDataKind;
+    status: 'SALES_DATA_ONLY' | 'UNAVAILABLE';
+    period?: string | null;
+    reservoir_storage_available: boolean;
+    reservoir_storage_note: string;
+    indicators: WaterIndicator[];
+    newater_share_of_water_sales_pct?: number | null;
+    series: WaterSeries[];
+    limitations: string[];
+  };
+  drain: {
+    data_kind: WaterDataKind;
+    readings_available: boolean;
+    sensor_locations_available: boolean;
+    sensor_count: number;
+    sensors_with_readings: number;
+    condition_counts: Record<string, number>;
+    thresholds: Record<string, string>;
+    threshold_source: string;
+    sensors: WaterDrainSensorStatus[];
+    latest_reading_at?: string | null;
+    invalid_sensor_records: number;
+    limitations: string[];
+  };
+  usage: {
+    data_kind: WaterDataKind;
+    resolution: string;
+    latest_year?: number | null;
+    potable_total?: WaterIndicator | null;
+    domestic?: WaterIndicator | null;
+    non_domestic?: WaterIndicator | null;
+    domestic_share_pct?: number | null;
+    non_domestic_share_pct?: number | null;
+    cagr_pct_since_2015?: number | null;
+    series: WaterSeries[];
+    consistency_warnings: string[];
+    limitations: string[];
+  };
+  forecast: {
+    available: boolean;
+    data_kind: WaterDataKind;
+    reason: string;
+    target: string;
+    observations: number;
+    frequency: string;
+    minimum_observations_required: number;
+    mae?: number | null;
+    rmse?: number | null;
+  };
+  newater: {
+    data_kind: WaterDataKind;
+    latest?: WaterIndicator | null;
+    share_of_water_sales_pct?: number | null;
+    cagr_pct_since_2015?: number | null;
+    series: WaterSeries[];
+    long_run_source_note: string;
+    limitations: string[];
+  };
+  quality: {
+    data_kind: WaterDataKind;
+    reporting_period?: string | null;
+    frequency: string;
+    parameters: WaterQualityParameter[];
+    other_parameter_count: number;
+    limit_source: string;
+    limitations: string[];
+  };
+  alerts: { id: string; severity: 'LOW' | 'MODERATE' | 'HIGH'; category: string; message: string; evidence: string[]; data_kind: WaterDataKind }[];
+  insights: { question: string; answer: string; data_kind: WaterDataKind }[];
+  sources: WaterSource[];
+  data_timestamps: Record<string, unknown>;
+  confidence: 'high' | 'medium' | 'low';
+  limitations: string[];
+  warnings: string[];
+  errors: string[];
+  is_ml_prediction: boolean;
+}
+
+export async function fetchWaterReport(refresh = false): Promise<WaterReport> {
+  const response = await fetch(`${API_BASE}/api/water/report${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch water report: ${response.statusText}`);
+  }
+  return response.json();
+}

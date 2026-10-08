@@ -54,6 +54,8 @@ from backend.app.mobility.transit.api import router as transit_router
 from backend.app.mobility.roads.api import router as roads_router
 from backend.app.safety.fire.api import router as fire_router
 from backend.app.safety.crime.api import router as crime_router
+from backend.app.infrastructure.water.api import router as water_router
+from backend.app.infrastructure.water.api import start_water_warmup
 from backend.app.overview.api import router as overview_router
 from backend.app.mobility.transit.scheduler import TransitAlertsScheduler, SchedulerConfig
 
@@ -1014,6 +1016,7 @@ def _build_app() -> FastAPI:
     # Register safety fire router
     app.include_router(fire_router)
     app.include_router(crime_router)
+    app.include_router(water_router)
     app.include_router(overview_router)
 
     # Start transit alerts scheduler in background thread
@@ -1029,6 +1032,10 @@ def _build_app() -> FastAPI:
     def _run_weather_scheduler():
         app.state.weather_scheduler.run()
     threading.Thread(target=_run_weather_scheduler, daemon=True, name="weather-forecast-scheduler").start()
+
+    # Start water warm-up in background thread (datasets are annual/periodic;
+    # warm-up avoids first-request latency and fails silently if sources are down)
+    start_water_warmup()
 
     return app
 
