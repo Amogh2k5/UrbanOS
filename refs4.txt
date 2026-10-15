@@ -1,0 +1,8 @@
+Malaysia references: 7
+1. Pos 109: THER OBSERVATIONS (Singapore, Malaysia/Johor, Sumatra) → CURRENT FLO
+2. Pos 118: RVATIONS (Singapore, Malaysia/Johor, Sumatra) → CURRENT FLOOD RIS
+3. Pos 356: (NEA 5-min API) 2. Fetch live Malaysia/Johor rainfall (MetMalaysia A
+4. Pos 365: n API) 2. Fetch live Malaysia/Johor rainfall (MetMalaysia API) 3.
+5. Pos 384: e Malaysia/Johor rainfall (MetMalaysia API) 3. Fetch live Sumatra ra
+6. Pos 9652: ARY signal (weight 1.0)     - Malaysia/Johor rainfall = SUPPORTING (
+7. Pos 9661: l (weight 1.0)     - Malaysia/Johor rainfall = SUPPORTING (weight

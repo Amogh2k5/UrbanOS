@@ -1,4 +1,4 @@
-﻿"""UrbanOS Overview API endpoints - direct service aggregation (no HTTP loopback)."""
+"""UrbanOS Overview API endpoints - direct service aggregation (no HTTP loopback)."""
 
 from __future__ import annotations
 
@@ -8,9 +8,22 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Path, Query, status, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from backend.app.ai.copilot import (
+    MAX_HISTORY_CHARS, MAX_HISTORY_TURNS, MAX_QUESTION_CHARS,
+    build_copilot_context, grounded_fallback,
+)
+from backend.app.ai.narrative import (
+    build_narrative_input, deterministic_summary,
+    deterministic_summary_from_domains,
+)
 from backend.app.ai.service import get_ai_service, UrbanOSAIService
+from backend.app.coordinator.access import city_report_cached
+from backend.app.intelligence.contracts import DomainStatus
+from backend.app.intelligence.normalize import (
+    DOMAIN_NAMES, DOMAIN_ROUTES, build_kpi, determine_status, normalize_domain_report,
+)
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +66,9 @@ class CityOverviewResponse(BaseModel):
     modules: List[ModuleSummary]
     alerts: List[AlertItem]
     ai_brief: Optional[str] = None
+    #: Normalised per-domain intelligence. The single source consumed by the
+    #: coordinator, the KPI insight panels and the Copilot.
+    domain_status: Dict[str, DomainStatus] = {}
 
 
 class ModuleDetailResponse(BaseModel):
@@ -67,9 +83,16 @@ class ModuleDetailResponse(BaseModel):
     detail_route: str
 
 
+class ChatTurn(BaseModel):
+    role: str = "user"
+    text: str = ""
+
+
 class ChatRequest(BaseModel):
     message: str
     module_id: Optional[str] = None
+    #: Optional prior turns. Bounded server-side; never used as evidence.
+    history: List[ChatTurn] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
@@ -103,71 +126,140 @@ async def _generate_ai_brief(ai_service: UrbanOSAIService, context: Dict[str, An
         return None
 
 
+async def _copilot_answer(ai_service, ctx) -> tuple:
+    """Generate and validate a Copilot answer. Never raises."""
+    try:
+        return await asyncio.wait_for(
+            ai_service.generate_copilot_answer(ctx), timeout=25.0
+        )
+    except asyncio.TimeoutError:
+        log.warning("Copilot answer timed out; using grounded fallback.")
+    except Exception as e:
+        log.warning("Copilot answer failed: %s", e)
+    from backend.app.ai.narrative import NarrativeValidation
+    return None, NarrativeValidation(ok=False, reasons=["generation failed"])
+
+
+# ============================================================
+# City Situation narrative
+# ============================================================
+
+#: Seconds the Overview request will wait for an LLM narrative before serving
+#: the deterministic summary instead. This is a UI responsiveness budget, not a
+#: guess at provider latency: the deterministic summary is always available and
+#: correct, so the narrative is only worth waiting briefly for.
+_NARRATIVE_BUDGET_S = 6.0
+
+async def _narrative_or_fallback(ai_service, city_report) -> Optional[str]:
+    """Grounded narrative when the LLM can produce a verifiable one.
+
+    Any failure - unavailable provider, rejected output, timeout - falls back to
+    the deterministic summary built from the same coordinator report. The
+    dashboard therefore always shows something true.
+
+    The LLM is given a short budget because the deterministic summary is
+    *always* available: a narrative that has not arrived within
+    ``_NARRATIVE_BUDGET_S`` is worth less than an instant, correct one. The
+    provider call itself is still bounded by the httpx client timeout.
+    """
+    fallback = deterministic_summary(city_report)
+    if not ai_service.is_available():
+        return fallback
+    try:
+        narrative, _validation = await asyncio.wait_for(
+            ai_service.generate_city_narrative(city_report),
+            timeout=_NARRATIVE_BUDGET_S,
+        )
+    except asyncio.TimeoutError:
+        log.warning("City narrative generation timed out; using deterministic summary.")
+        return fallback
+    except Exception as e:
+        log.warning("City narrative generation failed: %s", e)
+        return fallback
+    return narrative or fallback
+
+
+# ============================================================
+# Module summary helpers (single source of truth)
+# ============================================================
+# The status / KPI / brief logic used to be duplicated between this module and
+# overview/context.py, and the two copies had already drifted (the Roads
+# "critical" branch was unreachable here). All three now live in
+# backend.app.intelligence.normalize so the overview cards, the coordinator and
+# the KPI insight panels can never disagree.
+
+def _determine_module_status(module_id: str, data: Dict[str, Any]) -> str:
+    """normal | elevated | critical | unavailable."""
+    return determine_status(module_id, data)
+
+
+def _extract_module_kpi(module_id: str, data: Dict[str, Any]) -> Optional[ModuleKPI]:
+    """Single headline metric for a module card, or None when unsupported."""
+    kpi = build_kpi(module_id, data)
+    return ModuleKPI(**kpi) if kpi else None
+
+
 def _generate_deterministic_module_brief(module_id: str, module_data: Dict[str, Any]) -> str:
-    """Generate deterministic module brief from structured data."""
-    name_map = {
-        "traffic": "Traffic",
-        "roads": "Roads",
-        "transit": "Transit",
-        "pm25": "Air Quality",
-        "weather": "Weather",
-        "flood": "Flood & Rain",
-        "fire": "Fire",
-        "crime": "Crime",
-    }
-    name = name_map.get(module_id, module_id.capitalize())
-    
+    """Plain-language module summary built from real values only.
+
+    Falls back to the module's own evidence-backed findings, so Water, Land and
+    Crime no longer produce an empty "<Name> module update." string.
+    """
+    name = DOMAIN_NAMES.get(module_id, module_id.capitalize())
     if module_data.get("error"):
         return f"{name} module: data currently unavailable."
-    
-    brief = f"{name} module update. "
-    
+
+    parts: List[str] = []
     if module_id == "traffic":
         congestion = module_data.get("overall_congestion_level")
         speed = module_data.get("overall_average_speed")
         if congestion and speed is not None:
-            brief += f"Congestion: {congestion}, avg speed {speed:.1f} km/h."
+            parts.append(f"Congestion: {congestion}, avg speed {speed:.1f} km/h.")
         elif congestion:
-            brief += f"Congestion: {congestion}."
+            parts.append(f"Congestion: {congestion}.")
         elif speed is not None:
-            brief += f"Avg speed: {speed:.1f} km/h."
-    
+            parts.append(f"Avg speed: {speed:.1f} km/h.")
     elif module_id == "roads":
-        if isinstance(module_data, dict) and "road_works" in module_data:
-            rw = module_data["road_works"]
-            brief += f"{rw.get('active', 0)} active road works, {rw.get('upcoming', 0)} upcoming."
-    
+        rw = module_data.get("road_works")
+        if isinstance(rw, dict):
+            parts.append(
+                f"{rw.get('active', 0)} active road works, {rw.get('upcoming', 0)} upcoming.")
     elif module_id == "transit":
-        alerts = module_data.get("active_train_alerts", 0)
+        alerts = module_data.get("active_train_alerts") or 0
         if alerts:
-            brief += f"{alerts} active train alerts."
-    
+            parts.append(f"{alerts} active train alerts.")
     elif module_id == "pm25":
-        # Live snapshot has regions with current readings (value), not predictions
-        regions = module_data.get("regions", {})
-        if regions:
-            values = [v.get("value", 0) for v in regions.values() if isinstance(v, dict) and v.get("value") is not None]
-            if values:
-                avg = sum(values) / len(values)
-                brief += f"Current avg PM2.5: {avg:.1f} µg/m³."
-    
+        regions = module_data.get("regions") or {}
+        values = [
+            v.get("value") for v in regions.values()
+            if isinstance(v, dict) and v.get("value") is not None
+        ]
+        if values:
+            parts.append(f"Current avg PM2.5: {sum(values) / len(values):.1f} µg/m³.")
     elif module_id == "weather":
-        general = module_data.get("general", {})
-        temp = general.get("temperature_c")
+        temp = (module_data.get("general") or {}).get("temperature_c")
         if temp is not None:
-            brief += f"Current temp: {temp}°C."
-    
+            parts.append(f"Current temp: {temp}°C.")
     elif module_id == "flood":
         risk = module_data.get("risk_level")
         if risk:
-            brief += f"Flood risk: {risk}."
-    
+            parts.append(f"Flood risk: {risk}.")
     elif module_id == "fire":
         active = module_data.get("active_incident_count")
         if active is not None:
-            brief += f"{active} active fire incidents."
-    
-    return brief
+            parts.append(f"{active} active fire incidents.")
+
+    if parts:
+        return f"{name} module update. " + " ".join(parts)
+
+    # No dedicated phrasing: use the domain's own evidence-backed findings.
+    status = normalize_domain_report(module_id, module_data)
+    usable = [f for f in status.findings if f.data_kind != "unavailable"]
+    if usable:
+        return f"{name} module update. " + " ".join(f.answer for f in usable[:2])
+    if status.findings:
+        return f"{name} module: {status.findings[0].answer}"
+    return f"{name} module update."
 
 
 # ============================================================
@@ -358,6 +450,28 @@ async def _fetch_water_overview(app_state) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
+async def _fetch_crime_overview(app_state) -> Dict[str, Any]:
+    """Fetch lightweight crime overview using the crime agent."""
+    try:
+        from backend.app.safety.crime.agent import run_crime_agent
+        report = await asyncio.to_thread(run_crime_agent)
+        return report.model_dump()
+    except Exception as e:
+        log.warning("Crime overview fetch failed: %s", e)
+        return {"error": str(e)}
+
+
+async def _fetch_land_overview(app_state) -> Dict[str, Any]:
+    """Fetch lightweight land overview using land agent."""
+    try:
+        from backend.app.planning.land.agent import run_land_agent
+        report = await asyncio.to_thread(run_land_agent)
+        return report.model_dump()
+    except Exception as e:
+        log.warning("Land overview fetch failed: %s", e)
+        return {"error": str(e)}
+
+
 # ============================================================
 # Alert Fetching (direct service calls, NO HTTP LOOPBACK)
 # ============================================================
@@ -480,22 +594,26 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
     app_state = request.app.state
     
     # Fetch all modules concurrently with error isolation
-    tasks = [
-        _fetch_traffic_overview(request.app.state),
-        _fetch_roads_overview(request.app.state),
-        _fetch_transit_overview(request.app.state),
-        _fetch_pm25_overview(request.app.state),
-        _fetch_weather_overview(request.app.state),
-        _fetch_flood_overview(request.app.state),
-        _fetch_fire_overview(request.app.state),
-        _fetch_water_overview(request.app.state),
-    ]
-    
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
+    module_ids = ["traffic", "roads", "transit", "pm25", "weather", "flood",
+                  "fire", "crime", "water", "land"]
+    fetchers = {
+        "traffic": _fetch_traffic_overview,
+        "roads": _fetch_roads_overview,
+        "transit": _fetch_transit_overview,
+        "pm25": _fetch_pm25_overview,
+        "weather": _fetch_weather_overview,
+        "flood": _fetch_flood_overview,
+        "fire": _fetch_fire_overview,
+        "crime": _fetch_crime_overview,
+        "water": _fetch_water_overview,
+        "land": _fetch_land_overview,
+    }
+    results = await asyncio.gather(
+        *(fetchers[m](request.app.state) for m in module_ids),
+        return_exceptions=True,
+    )
+
     module_data = {}
-    module_ids = ["traffic", "roads", "transit", "pm25", "weather", "flood", "fire", "water"]
-    
     for module_id, result in zip(module_ids, results):
         if isinstance(result, Exception):
             log.exception("Module %s failed with exception: %s", module_id, result)
@@ -503,43 +621,29 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
         else:
             module_data[module_id] = result
     
-    # Build module summaries
-    module_configs = {
-        "traffic": {"name": "Traffic", "detail_route": "/traffic"},
-        "roads": {"name": "Roads", "detail_route": "/roads"},
-        "transit": {"name": "Transit", "detail_route": "/transit"},
-        "pm25": {"name": "Air Quality", "detail_route": "/pollution"},
-        "weather": {"name": "Weather", "detail_route": "/weather"},
-        "flood": {"name": "Flood & Rain", "detail_route": "/flood"},
-        "fire": {"name": "Fire", "detail_route": "/safety/fire"},
-        "crime": {"name": "Crime", "detail_route": "/safety/crime"},
-        "water": {"name": "Water", "detail_route": "/infrastructure/water"},
-    }
-    
+    # Build module summaries through the shared normaliser, so the overview
+    # cards, the coordinator and the KPI insight panels read one source.
     modules = []
-    for module_id, config in module_configs.items():
+    domain_status: Dict[str, DomainStatus] = {}
+    for module_id in module_ids:
         data = module_data.get(module_id, {"error": "No data"})
-        
-        if data.get("error"):
-            status = "unavailable"
-            kpi = None
-        else:
-            status = _determine_module_status(module_id, data)
-            kpi = _extract_module_kpi(module_id, data)
-        
+        status = normalize_domain_report(module_id, data)
+        domain_status[module_id] = status
+
         updated_at = None
         if isinstance(data, dict):
             updated_at = data.get("timestamp") or data.get("snapshot_at") or data.get("generated_at")
             if updated_at is not None and hasattr(updated_at, "isoformat"):
                 updated_at = updated_at.isoformat()
-        
+
         modules.append(ModuleSummary(
             id=module_id,
-            name=config["name"],
-            status=status,
-            kpi=kpi,
+            name=DOMAIN_NAMES.get(module_id, module_id.title()),
+            status=("unavailable" if not status.available else
+                    _determine_module_status(module_id, data)),
+            kpi=_extract_module_kpi(module_id, data),
             updated_at=updated_at,
-            detail_route=config["detail_route"],
+            detail_route=DOMAIN_ROUTES.get(module_id, "/"),
         ))
     
     # Part 2: Fetch real alerts from all sources with error isolation
@@ -562,66 +666,58 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
         except Exception as e:
             log.warning(f"{name} fetch failed: {e}")
     
-    # Add status briefs for non-normal modules (status != "normal")
+    # Surface status for non-normal modules.
+    # An unavailable module is NOT turned into an alert: a missing feed is a
+    # data-quality fact already carried by its finding, not a city risk signal.
     for module in modules:
-        if module.status != "normal":
-            # Generate status brief using existing module data
-            module_brief = _generate_deterministic_module_brief(module.id, module_data.get(module.id, {}))
-            status_brief = {
+        if module.status in ("elevated", "critical"):
+            data = module_data.get(module.id, {})
+            all_alerts.append({
                 "domain": module.id,
-                "severity": module.status,  # "elevated" or "critical"
+                "severity": module.status,
                 "title": f"{module.name} Status: {module.status.capitalize()}",
-                "description": f"{module.name} status is {module.status}. {module_data.get(module.id, {}).get('error', '') or _generate_deterministic_module_brief(module.id, module_data.get(module.id, {}))}",
+                "description": _generate_deterministic_module_brief(module.id, data),
                 "timestamp": datetime.now(SG_OFFSET).isoformat(),
-                "affected_zones": [],
-            }
-            all_alerts.append(status_brief)
+                "affected_zones": domain_status[module.id].affected_zones,
+            })
     
     # Sort by timestamp descending, take top 20
     all_alerts.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     top_alerts = all_alerts[:20]
 
-    # Build compact AI context from existing modules and alerts
-    ai_context = {
-        "modules": [
-            {
-                "id": m.id,
-                "name": m.name,
-                "status": m.status,
-                "kpi": {"label": m.kpi.label, "value": m.kpi.value, "unit": m.kpi.unit} if m.kpi else None,
-            }
-            for m in modules
-        ],
-        "alerts": [
-            {
-                "domain": a["domain"],
-                "severity": a["severity"],
-                "title": a["title"],
-                "description": a["description"],
-                "timestamp": a["timestamp"],
-                "affected_zones": a.get("affected_zones", []),
-            }
-            for a in top_alerts
-        ],
-    }
+    # ---- City Situation narrative (Phase 3) ---------------------------------
+    # The deterministic coordinator report is the only permitted source for the
+    # city-level narrative. It is obtained through the same cached accessor the
+    # /api/city/report route uses, so the two share one coordinator run and one
+    # narrative cache instead of issuing duplicate work per refresh.
+    #
+    # Non-blocking on purpose: a measured coordinator run takes ~74s, which is
+    # far longer than a dashboard refresh may wait, so waiting for it only
+    # produced a null brief on every cold request. We take a cached report when
+    # one exists and otherwise let the accessor start a single background run.
+    city_report = None
+    try:
+        city_report = city_report_cached(block=False)
+    except Exception as e:
+        log.warning("Coordinator report unavailable: %s", e)
 
-    # Generate AI city brief
     ai_service = get_ai_service()
-    ai_brief = None
-    if ai_service.is_available():
-        try:
-            ai_brief = await asyncio.wait_for(
-                _generate_ai_brief(ai_service, ai_context, "city"),
-                timeout=30.0
-            )
-        except asyncio.TimeoutError:
-            log.warning("AI city brief generation timed out after 30 seconds")
-        except Exception as e:
-            log.warning("AI city brief generation failed: %s", e)
+    # Only use the coordinator report when it can actually support a narrative.
+    # A report with no available domain and no validated finding yields only a
+    # placeholder, which is strictly worse than the per-domain evidence this
+    # endpoint already validated.
+    if city_report is not None and build_narrative_input(city_report) is not None:
+        ai_brief = await _narrative_or_fallback(ai_service, city_report)
+    else:
+        # Cold start, or a coordinator report carrying no usable evidence: fall
+        # back to the per-domain readings rather than showing nothing. This
+        # never claims a city status or risk level.
+        ai_brief = deterministic_summary_from_domains(domain_status)
 
     return CityOverviewResponse(
         generated_at=datetime.now(SG_OFFSET).isoformat(),
         modules=modules,
+        domain_status=domain_status,
         alerts=[
             AlertItem(
                 domain=a["domain"],
@@ -635,122 +731,6 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
         ],
         ai_brief=ai_brief,
     )
-
-
-def _determine_module_status(module_id: str, data: Dict[str, Any]) -> str:
-    """Determine module status from data."""
-    if data.get("error"):
-        return "unavailable"
-    
-    if module_id == "traffic":
-        congestion = data.get("overall_congestion_level", "")
-        if congestion in ("severe", "heavy"):
-            return "critical"
-        elif congestion in ("moderate",):
-            return "elevated"
-        elif congestion in ("free_flow",):
-            return "normal"
-        return "normal"
-    
-    elif module_id == "roads":
-        active = data.get("road_works", {}).get("active", 0)
-        if active > 100:
-            return "elevated"
-        elif active > 500:
-            return "critical"
-        return "normal"
-    
-    elif module_id == "transit":
-        alerts = data.get("active_train_alerts", 0)
-        if alerts > 10:
-            return "elevated"
-        return "normal"
-    
-    elif module_id == "pm25":
-        regions = data.get("regions", {})
-        if not regions:
-            return "normal"
-        high = any(isinstance(v, dict) and v.get("value", 0) > 100 for v in regions.values())
-        if high:
-            return "elevated"
-        return "normal"
-    
-    elif module_id == "weather":
-        if data.get("error") == "rate_limited":
-            return "unavailable"
-        general = data.get("general", {})
-        forecast = general.get("forecast_code", "")
-        if forecast in ("TS", "HR"):  # Thunderstorm, Heavy Rain
-            return "elevated"
-        return "normal"
-    
-    elif module_id == "flood":
-        risk = data.get("risk_level", "").lower()
-        if risk == "high":
-            return "critical"
-        elif risk == "moderate":
-            return "elevated"
-        return "normal"
-    
-    elif module_id == "fire":
-        active = data.get("active_incident_count", 0)
-        if active and active > 5:
-            return "critical"
-        elif active and active > 0:
-            return "elevated"
-        return "normal"
-    
-    return "normal"
-
-
-def _extract_module_kpi(module_id: str, data: Dict[str, Any]) -> Optional[ModuleKPI]:
-    """Extract a single meaningful KPI from module data."""
-    if data.get("error"):
-        return None
-    
-    if module_id == "traffic":
-        speed = data.get("overall_average_speed")
-        if speed is not None:
-            return ModuleKPI(label="Average Speed", value=round(speed, 1), unit="km/h")
-        congestion = data.get("overall_congestion_level")
-        if congestion:
-            return ModuleKPI(label="Congestion", value=congestion.replace("_", " ").title(), unit="")
-    
-    elif module_id == "roads":
-        active = data.get("road_works", {}).get("active")
-        if active is not None:
-            return ModuleKPI(label="Active Road Works", value=active, unit="")
-    
-    elif module_id == "transit":
-        alerts = data.get("active_train_alerts")
-        if alerts is not None:
-            return ModuleKPI(label="Train Alerts", value=alerts, unit="")
-    
-    elif module_id == "pm25":
-        regions = data.get("regions", {})
-        if regions:
-            values = [v.get("value") for v in regions.values() if isinstance(v, dict) and v.get("value") is not None]
-            if values:
-                avg = sum(values) / len(values)
-                return ModuleKPI(label="Current PM2.5", value=round(avg, 1), unit="µg/m³")
-    
-    elif module_id == "weather":
-        general = data.get("general", {})
-        temp = general.get("temperature_c")
-        if temp is not None:
-            return ModuleKPI(label="Temperature", value=temp, unit="°C")
-    
-    elif module_id == "flood":
-        risk = data.get("risk_level")
-        if risk:
-            return ModuleKPI(label="Flood Risk", value=risk, unit="")
-    
-    elif module_id == "fire":
-        active = data.get("active_incident_count")
-        if active is not None:
-            return ModuleKPI(label="Active Incidents", value=active, unit="")
-    
-    return None
 
 
 @router.get("/module/{module_id}", response_model=ModuleDetailResponse)
@@ -769,50 +749,34 @@ async def get_overview_module(
         "weather": _fetch_weather_overview,
         "flood": _fetch_flood_overview,
         "fire": _fetch_fire_overview,
+        "crime": _fetch_crime_overview,
+        "water": _fetch_water_overview,
+        "land": _fetch_land_overview,
     }
-    
-    module_configs = {
-        "traffic": {"name": "Traffic", "detail_route": "/traffic"},
-        "roads": {"name": "Roads", "detail_route": "/roads"},
-        "transit": {"name": "Transit", "detail_route": "/transit"},
-        "pm25": {"name": "Air Quality", "detail_route": "/pollution"},
-        "weather": {"name": "Weather", "detail_route": "/weather"},
-        "flood": {"name": "Flood & Rain", "detail_route": "/flood"},
-        "fire": {"name": "Fire", "detail_route": "/safety/fire"},
-    }
-    
+
     if module_id not in fetch_functions:
         raise HTTPException(status_code=404, detail=f"Module '{module_id}' not found")
-    
-    config = module_configs[module_id]
+
     fetch_fn = fetch_functions[module_id]
-    
+
     try:
         data = await fetch_fn(request.app.state)
     except Exception as e:
         log.warning("Failed to fetch module %s: %s", module_id, e)
         data = {"error": str(e)}
-    
+
     if data.get("error"):
         status = "unavailable"
         kpi = None
     else:
         status = _determine_module_status(module_id, data)
         kpi = _extract_module_kpi(module_id, data)
-    
-    updated_at = data.get("timestamp") or data.get("snapshot_at") or data.get("generated_at")
-    
-    ai_service = get_ai_service()
-    ai_brief = None
-    if ai_service.is_available():
-        try:
-            ai_brief = await _generate_ai_brief(ai_service, {"module_id": module_id, "data": data}, "module")
-        except Exception as e:
-            log.warning("AI module brief generation failed: %s", e)
-    
-    if ai_brief is None:
-        ai_brief = _generate_deterministic_module_brief(module_id, data)
-    
+
+    # The module detail summary is the deterministic, evidence-backed brief.
+    # Phase 3 layers optional LLM phrasing on top of the same findings; it is
+    # never the only source of truth for this panel.
+    summary = _generate_deterministic_module_brief(module_id, data)
+
     alerts = []
     if module_id == "traffic":
         alerts = await _fetch_traffic_incidents()
@@ -820,84 +784,67 @@ async def get_overview_module(
         alerts = await _fetch_fire_incidents()
     elif module_id == "flood":
         alerts = await _fetch_flood_alerts()
-    
-    config = {
-        "traffic": {"name": "Traffic", "detail_route": "/traffic"},
-        "roads": {"name": "Roads", "detail_route": "/roads"},
-        "transit": {"name": "Transit", "detail_route": "/transit"},
-        "pm25": {"name": "Air Quality", "detail_route": "/pollution"},
-        "weather": {"name": "Weather", "detail_route": "/weather"},
-        "flood": {"name": "Flood & Rain", "detail_route": "/flood"},
-        "fire": {"name": "Fire", "detail_route": "/safety/fire"},
-    }[module_id]
-    
+    elif module_id == "crime":
+        alerts = await _fetch_crime_incidents()
+
+    # Some agents emit datetimes, others ISO strings; normalise once here.
+    status_obj = normalize_domain_report(module_id, data)
+
     return ModuleDetailResponse(
         module_id=module_id,
-        module_name=config["name"],
+        module_name=DOMAIN_NAMES.get(module_id, module_id.title()),
         status=status,
         kpi=kpi,
-        updated_at=data.get("timestamp") or data.get("snapshot_at") or data.get("generated_at"),
-        summary=ai_brief,
+        updated_at=status_obj.generated_at,
+        summary=summary,
         alerts=[AlertItem(**a) for a in alerts[:3]],
         cross_domain=[],
-        detail_route=config["detail_route"],
+        detail_route=DOMAIN_ROUTES.get(module_id, "/"),
     )
 
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
+    """Grounded Copilot.
+
+    Answers only from the validated City Coordinator report. The user's text
+    and the retrieved evidence are both treated as untrusted data and are never
+    interpolated into system instructions. Every answer is validated before it
+    is returned, and a grounded deterministic fallback is used whenever the
+    model cannot produce something verifiable.
     """
-    Chat endpoint with bounded timeout and graceful fallback.
-    """
+    from backend.app.ai.copilot import (
+        build_copilot_context, grounded_fallback,
+    )
+
+    user_message = (chat_request.message or "").strip()[:MAX_QUESTION_CHARS]
+    if not user_message:
+        return ChatResponse(response="Please enter a question.")
+
+    history = [
+        {"role": h.role, "text": (h.text or "")[:MAX_HISTORY_CHARS]}
+        for h in (chat_request.history or [])[-MAX_HISTORY_TURNS:]
+    ]
+
+    # Single shared, cached coordinator run - no duplicate agent execution.
+    report = None
     try:
-        user_message = chat_request.message.strip()
-        module_id = chat_request.module_id
-        
-        context = {}
-        if module_id:
-            fetch_functions = {
-                "traffic": _fetch_traffic_overview,
-                "roads": _fetch_roads_overview,
-                "transit": _fetch_transit_overview,
-                "pm25": _fetch_pm25_overview,
-                "weather": _fetch_weather_overview,
-                "flood": _fetch_flood_overview,
-                "fire": _fetch_fire_overview,
-            }
-            if module_id in fetch_functions:
-                try:
-                    data = await fetch_functions[module_id](request.app.state)
-                    context["module_data"] = data
-                    context["module_id"] = module_id
-                except Exception:
-                    pass
-        
-        ai_service = get_ai_service()
-        if ai_service.is_available():
-            prompt = (
-                f"You are UrbanOS, a city intelligence system for Singapore. "
-                f"User: \"{chat_request.message}\". "
-                f"Context: {context if context else 'None'}. "
-                f"Provide a concise, data-grounded response. Do not invent data. Response:"
-            )
-            ai_brief = await asyncio.wait_for(
-                asyncio.to_thread(ai_service._generate_with_openai, prompt, 200),
-                timeout=15.0
-            )
-            response = ai_brief or "Failed to generate response."
-        else:
-            if context.get("module_data"):
-                response = f"UrbanOS Intelligence not configured. {module_id.capitalize()} data is available. Ask about status, alerts, or KPIs."
-            else:
-                response = "UrbanOS Intelligence is not configured yet."
-        
-        return ChatResponse(response=response)
+        report, _payload = await asyncio.wait_for(
+            asyncio.to_thread(city_report_cached), timeout=20.0
+        )
     except asyncio.TimeoutError:
-        log.warning("Chat request timed out")
-        return ChatResponse(response="Request timed out. Please try again.")
+        log.warning("Copilot: coordinator report unavailable within 20s.")
     except Exception as e:
-        log.exception("Error in chat endpoint: %s", e)
-        return ChatResponse(response="Internal error. Please try again.")
+        log.warning("Copilot: coordinator report unavailable: %s", e)
+
+    ctx = build_copilot_context(
+        report, user_message, chat_request.module_id, history
+    )
+    fallback = grounded_fallback(ctx)
+
+    ai_service = get_ai_service()
+    answer, _validation = await _copilot_answer(ai_service, ctx)
+    return ChatResponse(response=answer or fallback)
 
 
 log.info("UrbanOS Overview API router initialized (direct service mode, no HTTP loopback).")

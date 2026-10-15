@@ -91,11 +91,6 @@ SINGAPORE_STATIONS_EXTENSIVE = 40    # >=40 stations = extensive coverage
 # Regional evidence is SUPPORTING ONLY — never automatically creates flood risk
 # Weight: 0.0 (ignore) to 1.0 (strong confirmation)
 
-# Malaysia/Johor rainfall evidence
-MALAYSIA_WEIGHT = 0.3
-MALAYSIA_1H_HEAVY = 50   # mm/1h in Johor
-MALAYSIA_24H_HEAVY = 150 # mm/24h in Johor
-
 # Sumatra/Strait of Malacca rainfall evidence
 SUMATRA_WEIGHT = 0.3
 SUMATRA_1H_HEAVY = 50
@@ -258,7 +253,6 @@ SINGAPORE_RAINFALL_RULES = [
 ]
 
 REGIONAL_RULES = [
-    RegionalRule("Johor Rainfall", "met.gov.my", MALAYSIA_WEIGHT, MALAYSIA_1H_HEAVY),
     RegionalRule("Sumatra Rainfall", "data.bmkg.go.id", SUMATRA_WEIGHT, SUMATRA_1H_HEAVY),
     RegionalRule("Sumatra Squall", "NEA 24h forecast", SUMATRA_SQUALL_WEIGHT, 1.0, "boolean"),
     RegionalRule("Monsoon Surge", "NEA 24h forecast", MONSOON_SURGE_WEIGHT, 1.0, "boolean"),

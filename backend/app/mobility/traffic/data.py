@@ -24,6 +24,15 @@ log = logging.getLogger(__name__)
 SG_OFFSET = timezone(timedelta(hours=8))
 _DEFAULT_DB_PATH = Path("data/traffic_observations.db")
 
+# Below this row count, exact DISTINCT scans used by get_stats() are cheap
+# enough to run synchronously on every call.
+# Restored: these three were dropped while get_stats() and
+# _start_stats_refresh() still referenced them, raising NameError for any
+# non-empty table.
+_EXACT_SCAN_ROW_LIMIT = 200_000
+_stats_refresh_lock = threading.Lock()
+_stats_refresh_thread: Optional[threading.Thread] = None
+
 # ============================================================
 # MODELS (from models.py)
 # ============================================================

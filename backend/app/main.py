@@ -56,6 +56,8 @@ from backend.app.safety.fire.api import router as fire_router
 from backend.app.safety.crime.api import router as crime_router
 from backend.app.infrastructure.water.api import router as water_router
 from backend.app.infrastructure.water.api import start_water_warmup
+from backend.app.planning.land.api import router as land_router
+from backend.app.planning.land.api import start_land_warmup
 from backend.app.overview.api import router as overview_router
 from backend.app.mobility.transit.scheduler import TransitAlertsScheduler, SchedulerConfig
 
@@ -66,9 +68,10 @@ SG_OFFSET = timezone(timedelta(hours=8))
 # City report: single-flight lock + short TTL cache. A coordinator run costs
 # ~60s of CPU; without this, every timed-out client leaves a full run grinding
 # in the threadpool and requests stack on top of each other.
-_city_report_lock = threading.Lock()
-_city_report_cache: Dict[str, Any] = {"payload": None, "expires_at": 0.0}
-_CITY_REPORT_CACHE_TTL_S = 120.0
+# The coordinator run is expensive (~60s of CPU), so it is coalesced behind a
+# single-flight lock and a short TTL cache shared by /api/city/report and the
+# Overview city endpoint. See backend/app/coordinator/access.py.
+from backend.app.coordinator.access import city_report_cached  # noqa: E402
 
 
 def _build_app() -> FastAPI:
@@ -500,38 +503,38 @@ def _build_app() -> FastAPI:
             max_pm25_obs = max_obs
             max_weather_issue = latest_forecast
 
-            try:
-                predictor = _get_pm25_predictor()
-                pm25_store = app.state.pm25_store
+        try:
+            predictor = _get_pm25_predictor()
+            pm25_store = app.state.pm25_store
 
-                # Run prediction (uses weather_store and pm25_store if provided for current predictions)
-                features_df, per_region, diagnostics = predictor.predict_all_regions(
-                    prediction_timestamp=prediction_timestamp,
-                    pm25_csv=RAW_PM25_CSV,
-                    weather_dir=RAW_WEATHER_DIR,
-                    weather_store=weather_store,
-                    pm25_store=pm25_store,
-                )
+            # Run prediction (uses weather_store and pm25_store if provided for current predictions)
+            features_df, per_region, diagnostics = predictor.predict_all_regions(
+                prediction_timestamp=prediction_timestamp,
+                pm25_csv=RAW_PM25_CSV,
+                weather_dir=RAW_WEATHER_DIR,
+                weather_store=weather_store,
+                pm25_store=pm25_store,
+            )
 
-                response = _build_pm25_prediction_response(predictor, per_region, diagnostics, prediction_timestamp)
-                # Add data source info
-                response["data_source"] = {
-                    "pm25": "historical_csv" if explicit_t0 else "collected_live_observations",
-                    "weather": "historical_csv" if explicit_t0 else "collected_live_forecast",
-                    "weather_forecast_timestamp": max_weather_issue.isoformat() if max_weather_issue is not None else None,
-                    "pm25_observation_timestamp": pm25_store.get_latest_observation_timestamp() if hasattr(pm25_store, 'get_latest_observation_timestamp') else None,
-                }
-                return response
+            response = _build_pm25_prediction_response(predictor, per_region, diagnostics, prediction_timestamp)
+            # Add data source info
+            response["data_source"] = {
+                "pm25": "historical_csv" if explicit_t0 else "collected_live_observations",
+                "weather": "historical_csv" if explicit_t0 else "collected_live_forecast",
+                "weather_forecast_timestamp": max_weather_issue.isoformat() if max_weather_issue is not None else None,
+                "pm25_observation_timestamp": pm25_store.get_latest_observation_timestamp() if hasattr(pm25_store, 'get_latest_observation_timestamp') else None,
+            }
+            return response
 
-            except FileNotFoundError as e:
-                log.error("PM2.5 model artifact missing: %s", e)
-                raise HTTPException(status_code=503, detail=f"Model artifact unavailable: {e}")
-            except ValueError as e:
-                log.error("PM2.5 prediction failed: %s", e)
-                raise HTTPException(status_code=503, detail=f"Insufficient data for prediction: {e}")
-            except Exception as e:
-                log.exception("PM2.5 prediction failed")
-                raise HTTPException(status_code=500, detail=f"Prediction error: {e}")
+        except FileNotFoundError as e:
+            log.error("PM2.5 model artifact missing: %s", e)
+            raise HTTPException(status_code=503, detail=f"Model artifact unavailable: {e}")
+        except ValueError as e:
+            log.error("PM2.5 prediction failed: %s", e)
+            raise HTTPException(status_code=503, detail=f"Insufficient data for prediction: {e}")
+        except Exception as e:
+            log.exception("PM2.5 prediction failed")
+            raise HTTPException(status_code=500, detail=f"Prediction error: {e}")
     
     @app.get("/api/traffic/predict")
     @app.get("/api/mobility/traffic/predict")
@@ -746,37 +749,13 @@ def _build_app() -> FastAPI:
         - is_ml_prediction = false
         """
         try:
-            import sys
-            from pathlib import Path
-            sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-            from coordinator.city_agent import run_city_coordinator
-
-            # The coordinator run costs ~60s of CPU. Without protection, every
-            # client request (and every timed-out retry) spawns another full
-            # run; the aborted ones keep grinding in the threadpool and stack
-            # up until nothing completes within a useful time. Coalesce
-            # concurrent requests onto a single run, and serve a short-lived
-            # cache so bursts/refreshes don't each re-run the whole graph.
-            now = time.time()
-            cached = _city_report_cache["payload"]
-            if cached is not None and now < _city_report_cache["expires_at"]:
-                return cached
-
-            with _city_report_lock:
-                # Re-check after acquiring the lock: the request that held it
-                # may already have produced a fresh report we can share.
-                now = time.time()
-                cached = _city_report_cache["payload"]
-                if cached is not None and now < _city_report_cache["expires_at"]:
-                    return cached
-
-                started = time.time()
-                report = run_city_coordinator()
-                payload = report.model_dump()
-                _city_report_cache["payload"] = payload
-                _city_report_cache["expires_at"] = time.time() + _CITY_REPORT_CACHE_TTL_S
-                log.info("City coordinator run completed in %.1fs", time.time() - started)
-                return payload
+            # Resolves through the root `coordinator` alias package to the real
+            # implementation in backend/app/coordinator/city_agent.py. The
+            # single-flight lock and TTL cache live in
+            # backend/app/coordinator/access.py, shared with the Overview city
+            # endpoint so one coordinator run serves both.
+            _report, payload = city_report_cached()
+            return payload
         except Exception as e:
             log.exception("City report generation failed")
             raise HTTPException(status_code=500, detail=f"city coordinator error: {e}")
@@ -1017,6 +996,7 @@ def _build_app() -> FastAPI:
     app.include_router(fire_router)
     app.include_router(crime_router)
     app.include_router(water_router)
+    app.include_router(land_router)
     app.include_router(overview_router)
 
     # Start transit alerts scheduler in background thread

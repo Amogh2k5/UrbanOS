@@ -65,15 +65,6 @@ class SingaporeRainfallEvidence(BaseModel):
     stations_with_rain: int = 0
 
 
-class MalaysiaRainfallEvidence(BaseModel):
-    """Current Malaysia/Johor rainfall evidence from MetMalaysia API."""
-    available: bool = False
-    source: str = ""
-    max_1h_mm: float = 0.0
-    stations_reporting: int = 0
-    weather_systems: List[str] = Field(default_factory=list)
-
-
 class SumatraRainfallEvidence(BaseModel):
     """Current Sumatra rainfall evidence from BMKG API."""
     available: bool = False
@@ -91,7 +82,6 @@ class RegionalWeatherStatus(BaseModel):
     singapore_wind_direction: Optional[str] = None
     singapore_temperature_high: Optional[float] = None
     singapore_temperature_low: Optional[float] = None
-    malaysia_available: bool = False
     sumatra_available: bool = False
     regional_systems: List[str] = Field(default_factory=list)
 
@@ -112,7 +102,6 @@ class FloodReport(BaseModel):
     
     # Live evidence (current conditions only)
     singapore_rainfall: Optional[SingaporeRainfallEvidence] = None
-    malaysia_rainfall: Optional[MalaysiaRainfallEvidence] = None
     sumatra_rainfall: Optional[SumatraRainfallEvidence] = None
     regional_weather: Optional[RegionalWeatherStatus] = None
     

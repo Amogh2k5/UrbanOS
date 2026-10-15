@@ -47,7 +47,6 @@ interface RegionalWeather {
   singapore_wind_direction?: string;
   singapore_temperature_high?: number;
   singapore_temperature_low?: number;
-  malaysia_available?: boolean;
   sumatra_available?: boolean;
   regional_systems?: unknown[];
 }
@@ -58,7 +57,6 @@ interface FloodReport {
   primary_risk_factors?: string[];
   active_alerts?: FloodAlert[];
   singapore_rainfall?: RegionRainfall;
-  malaysia_rainfall?: RegionRainfall;
   sumatra_rainfall?: RegionRainfall;
   regional_weather?: RegionalWeather;
   past_flood_events?: HistoricalEvent[];
@@ -282,29 +280,6 @@ export default function FloodPage() {
               </div>
             </div>
           )}
-
-          {/* MALAYSIA / JOHOR (SUPPORTING) */}
-          <div className="glass-panel p-6 rounded-lg border-l-4 border-blue-800">
-            <h3 className="font-bold text-lg mb-4 text-blue-400 flex items-center justify-between uppercase tracking-widest text-xs">
-              <span className="flex items-center gap-2"><CloudRain size={16} /> Malaysia / Johor</span>
-              <span className="px-2 py-1 bg-blue-900/50 text-blue-300 border border-blue-700 rounded text-[10px] tracking-wider font-bold">SUPPORTING</span>
-            </h3>
-            {data.malaysia_rainfall?.available ? (
-              <div className="space-y-4">
-                <div className="p-3 bg-gray-900/40 rounded border border-gray-800">
-                  <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Max 1h</div>
-                  <div className="font-mono text-2xl text-white">{data.malaysia_rainfall.max_1h_mm?.toFixed(1) ?? '0.0'} <span className="text-xs text-gray-500">mm</span></div>
-                </div>
-                <div className="text-xs text-gray-400 font-mono">
-                  Stations reporting: {data.malaysia_rainfall.stations_reporting ?? 0}
-                </div>
-              </div>
-) : (
-              <div className="text-gray-500 font-mono italic p-6 bg-gray-900/20 rounded border border-dashed border-gray-800 text-sm text-center">
-                Rainfall data unavailable
-              </div>
-            )}
-          </div>
 
           {/* SUMATRA (SUPPORTING) */}
           <div className="glass-panel p-6 rounded-lg border-l-4 border-blue-800">

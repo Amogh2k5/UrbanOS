@@ -8,9 +8,8 @@ Live inference uses ONLY current API observations.
 
 Architecture:
 1. Fetch live Singapore rainfall (NEA 5-min API)
-2. Fetch live Malaysia/Johor rainfall (MetMalaysia API)
-3. Fetch live Sumatra rainfall (BMKG API)
-4. Fetch PUB flood alerts
+2. Fetch live Sumatra rainfall (BMKG API)
+3. Fetch PUB flood alerts
 5. Fetch NEA 24h forecast for regional weather systems
 6. Apply manual risk rules (flood/config/risk_rules.py)
 7. Produce FloodReport with clear provenance
@@ -30,14 +29,13 @@ from langgraph.graph import END, StateGraph
 
 from backend.app.environment.flood.models import (
     FloodReport, PastFloodEvent, ActiveFloodAlert,
-    SingaporeRainfallEvidence, MalaysiaRainfallEvidence, SumatraRainfallEvidence,
+    SingaporeRainfallEvidence, SumatraRainfallEvidence,
     RegionalWeatherStatus, FloodRiskLevel
 )
 from backend.app.environment.flood.api import FloodAlertsApiClient, FloodAlertsSnapshot
 from backend.app.mobility.traffic.geo_zones import get_all_zones
 from backend.app.environment.flood.rainfall_clients import (
     RainfallApiClient, RainfallSnapshot,
-    MalaysiaRainfallApiClient, MalaysiaRainfallSnapshot, get_malaysia_rainfall_evidence,
     SumatraForecastApiClient, SumatraForecastSnapshot, get_sumatra_forecast_evidence,
 )
 from backend.app.environment.weather.api import WeatherApiClient, WeatherLiveSnapshot
@@ -48,7 +46,7 @@ from backend.app.environment.flood.config.risk_rules import (
     SINGAPORE_15M_MODERATE, SINGAPORE_15M_HEAVY, SINGAPORE_15M_EXTREME,
     SINGAPORE_5M_MODERATE, SINGAPORE_5M_HEAVY, SINGAPORE_5M_EXTREME,
     SINGAPORE_STATIONS_WIDESPREAD, SINGAPORE_STATIONS_EXTENSIVE,
-    MALAYSIA_WEIGHT, SUMATRA_WEIGHT, SUMATRA_SQUALL_WEIGHT, MONSOON_SURGE_WEIGHT,
+    SUMATRA_WEIGHT, SUMATRA_SQUALL_WEIGHT, MONSOON_SURGE_WEIGHT,
     PUB_ALERT_HIGH_WEIGHT, PUB_ALERT_MODERATE_WEIGHT, PUB_MULTIPLE_ALERTS_BONUS,
 )
 
@@ -67,8 +65,6 @@ class FloodAgentState:
     singapore_rainfall: Optional[RainfallSnapshot] = None
     singapore_rainfall_error: Optional[str] = None
     
-    malaysia_rainfall: Optional[MalaysiaRainfallSnapshot] = None
-    malaysia_rainfall_error: Optional[str] = None
     
     sumatra_rainfall: Optional[SumatraForecastSnapshot] = None
     sumatra_rainfall_error: Optional[str] = None
@@ -90,7 +86,6 @@ class FloodAgentState:
     
     # Evidence breakdown
     singapore_evidence: Optional[Dict[str, Any]] = None
-    malaysia_evidence: Optional[Dict[str, Any]] = None
     sumatra_evidence: Optional[Dict[str, Any]] = None
     regional_weather_status: Optional[Dict[str, Any]] = None
     
@@ -160,34 +155,6 @@ def fetch_singapore_rainfall(state: FloodAgentState) -> FloodAgentState:
         state.singapore_rainfall_error = f"Singapore rainfall fetch failed: {e}"
         state.errors.append(state.singapore_rainfall_error)
         log.exception("Error fetching Singapore rainfall")
-    
-    return state
-
-
-# ============================================================
-# NODE 3: FETCH_MALAYSIA_RAINFALL
-# ============================================================
-def fetch_malaysia_rainfall(state: FloodAgentState) -> FloodAgentState:
-    """Fetch live Malaysia/Johor rainfall from MetMalaysia API."""
-    log.info("Fetching live Malaysia/Johor rainfall...")
-    
-    try:
-        offline = os.getenv("URBANOS_API_OFFLINE", "0") == "1"
-        client = MalaysiaRainfallApiClient(offline=offline)
-        evidence = get_malaysia_rainfall_evidence(client)
-        
-        state.malaysia_evidence = evidence
-        state.data_sources.append(f"malaysia_rainfall:{evidence.get('source', 'unknown')}")
-        
-        if evidence.get("available"):
-            log.info(f"Live Malaysia rainfall: {len(evidence['stations'])} stations, max_1h={evidence['max_1h_mm']:.1f}mm")
-        else:
-            log.info(f"Malaysia rainfall unavailable: {evidence.get('error')}")
-        
-    except Exception as e:
-        state.malaysia_rainfall_error = f"Malaysia rainfall fetch failed: {e}"
-        state.errors.append(state.malaysia_rainfall_error)
-        log.exception("Error fetching Malaysia rainfall")
     
     return state
 
@@ -280,8 +247,7 @@ def assess_risk(state: FloodAgentState) -> FloodAgentState:
 
     Risk scoring:
     - Singapore rainfall = PRIMARY signal (weight 1.0)
-    - Malaysia/Johor rainfall = SUPPORTING (weight 0.3)
-    - Sumatra rainfall = SUPPORTING (weight 0.3)
+        - Sumatra rainfall = SUPPORTING (weight 0.3)
     - Regional weather systems = SUPPORTING (weight 0.3-0.4)
     - PUB alerts = CONFIRMATION (weight 0.5-1.0)
     """
@@ -294,7 +260,6 @@ def assess_risk(state: FloodAgentState) -> FloodAgentState:
         
         # Track evidence availability
         sg_available = state.singapore_rainfall is not None and state.singapore_rainfall.is_live
-        my_available = state.malaysia_evidence and state.malaysia_evidence.get("available")
         su_available = state.sumatra_rainfall is not None and state.sumatra_rainfall.is_live
         pub_available = len(state.pub_alerts) > 0
         nea_available = state.nea_weather is not None and state.nea_weather.is_live
@@ -332,23 +297,10 @@ def assess_risk(state: FloodAgentState) -> FloodAgentState:
         else:
             risk_factors.append("Singapore rainfall: UNAVAILABLE (offline or API error)")
         
-        # --- MALAYSIA/JOHOR RAINFALL (SUPPORTING) ---
-        my_evidence = state.malaysia_evidence or {}
-        if my_available:
-            max_1h = my_evidence.get("max_1h_mm", 0)
-            if max_1h >= 50:
-                risk_score += MALAYSIA_WEIGHT * 0.5
-                risk_factors.append(f"Johor heavy rainfall: {max_1h:.1f}mm (weight: {MALAYSIA_WEIGHT})")
-            elif max_1h >= 30:
-                risk_score += MALAYSIA_WEIGHT * 0.2
-                risk_factors.append(f"Johor moderate rainfall: {max_1h:.1f}mm")
-        else:
-            risk_factors.append(f"Malaysia/Johor rainfall: UNAVAILABLE ({my_evidence.get('error', 'no data')})")
-        
         # --- SUMATRA FORECAST (SUPPORTING) ---
         su_snapshot = state.sumatra_rainfall
         if su_available:
-            # Aggregate across all groups
+            # Aggregate speed_midpoint per group
             max_rain = 0.0
             has_rain_any = False
             for group in su_snapshot.groups.values():
@@ -366,7 +318,7 @@ def assess_risk(state: FloodAgentState) -> FloodAgentState:
             
             # Check for squall signature
             squall_groups = 0
-            for group_key, group in su_snapshot.groups.items():
+            for group in su_snapshot.groups.values():
                 if group.has_rain and group.max_rainfall_mm > 10:
                     squall_groups += 1
             
@@ -380,7 +332,7 @@ def assess_risk(state: FloodAgentState) -> FloodAgentState:
             err_msg = getattr(su_snapshot, 'error', 'no data') if su_snapshot else 'no data'
             risk_factors.append(f"Sumatra forecast: UNAVAILABLE ({err_msg})")
         
-        # --- REGIONAL WEATHER SYSTEMS (NEA 24h FORECAST) ---
+        # REGIONAL WEATHER SYSTEMS (NEA 24h FORECAST)
         nea_evidence = _analyze_nea_weather(state.nea_weather)
         state.regional_weather_status = nea_evidence
         
@@ -406,7 +358,7 @@ def assess_risk(state: FloodAgentState) -> FloodAgentState:
         else:
             risk_factors.append("Regional weather systems: UNAVAILABLE")
         
-        # --- PUB ALERTS (CONFIRMATION) ---
+        # PUB ALERTS (CONFIRMATION)
         high_alerts = sum(1 for a in state.pub_alerts if a.get("severity", "").lower() == "high")
         moderate_alerts = sum(1 for a in state.pub_alerts if a.get("severity", "").lower() == "moderate")
         total_alerts = len(state.pub_alerts)
@@ -430,10 +382,8 @@ def assess_risk(state: FloodAgentState) -> FloodAgentState:
             if total_alerts >= 2:
                 risk_score += PUB_MULTIPLE_ALERTS_BONUS * (total_alerts - 1)
                 risk_factors.append(f"Multiple PUB alerts: +{PUB_MULTIPLE_ALERTS_BONUS * (total_alerts - 1):.2f} bonus")
-        else:
-            risk_factors.append("PUB alerts: None active")
         
-        # --- MAP SCORE TO RISK LEVEL ---
+        # MAP SCORE TO RISK LEVEL
         if risk_score >= RISK_THRESHOLDS["CRITICAL"]:
             risk_level = FloodRiskLevel.CRITICAL
         elif risk_score >= RISK_THRESHOLDS["HIGH"]:
@@ -446,13 +396,13 @@ def assess_risk(state: FloodAgentState) -> FloodAgentState:
             risk_level = FloodRiskLevel.LOW
         
         # API unavailable handling
-        if not sg_available and not my_available and not su_available and not pub_available:
+        if not sg_available and not su_available and not pub_available:
             risk_level = FloodRiskLevel.UNKNOWN
             risk_factors.append("All primary data sources unavailable")
         
         state.risk_level = risk_level
-        state.risk_score = min(risk_score, 2.0)  # Cap at 2.0
-        state.primary_risk_factors = list(dict.fromkeys(risk_factors))  # Dedupe
+        state.risk_score = min(risk_score, 2.0)
+        state.primary_risk_factors = list(dict.fromkeys(risk_factors))
         state.affected_zones = list(dict.fromkeys(affected_zones))
         
         log.info(f"Risk assessment: {risk_level.value} (score={risk_score:.2f})")
@@ -604,25 +554,8 @@ def build_report(state: FloodAgentState) -> FloodAgentState:
                 stations_with_rain=se.get("stations_with_rain", 0),
             )
         
-        # Build Malaysia evidence
+        # Malaysia excluded from flood risk assessment
         my_evidence = None
-        if state.malaysia_evidence and state.malaysia_evidence.get("available"):
-            me = state.malaysia_evidence
-            my_evidence = MalaysiaRainfallEvidence(
-                available=True,
-                source=me.get("source", ""),
-                max_1h_mm=me.get("max_1h_mm", 0),
-                stations_reporting=len(me.get("stations", {})),
-                weather_systems=me.get("weather_systems", []),
-            )
-        else:
-            my_evidence = MalaysiaRainfallEvidence(
-                available=False,
-                source=state.malaysia_evidence.get("source", "") if state.malaysia_evidence else "unavailable",
-                max_1h_mm=0.0,
-                stations_reporting=0,
-                weather_systems=[],
-            )
         
         # Build Sumatra evidence
         su_evidence = None
@@ -672,9 +605,9 @@ def build_report(state: FloodAgentState) -> FloodAgentState:
                 singapore_wind_direction=rws_data.get("wind_direction"),
                 singapore_temperature_high=rws_data.get("temperature_high"),
                 singapore_temperature_low=rws_data.get("temperature_low"),
-                malaysia_available=state.malaysia_evidence.get("available") if state.malaysia_evidence else False,
+                malaysia_available=False,
                 sumatra_available=state.sumatra_rainfall.is_live if state.sumatra_rainfall else False,
-                regional_systems=state.malaysia_evidence.get("weather_systems", []) if state.malaysia_evidence else [],
+                regional_systems=[],
             )
         
         # Generate recommendations
@@ -685,7 +618,6 @@ def build_report(state: FloodAgentState) -> FloodAgentState:
         limitations.extend([
             "Past flood events are REFERENCE ONLY — never increase current risk",
             "Singapore rainfall extrapolation: live API provides 5-min readings; rolling windows are approximated",
-            "Malaysia/Johor and Sumatra APIs may be unavailable (require credentials)",
             "Sumatra forecast from official BMKG API (27 locations, 5 regional groups)",
             "Regional weather systems from NEA 24h forecast (not live radar)",
             "PUB alerts from offline fixture in MVP (live API needs DATA_GOV_SG_API_KEY)",
@@ -714,7 +646,7 @@ def build_report(state: FloodAgentState) -> FloodAgentState:
             affected_zones=state.affected_zones,
             primary_risk_factors=state.primary_risk_factors,
             singapore_rainfall=sg_evidence,
-            malaysia_rainfall=my_evidence,
+            
             sumatra_rainfall=su_evidence,
             regional_weather=rws,
             past_flood_events=past_events,
@@ -799,7 +731,6 @@ def create_flood_agent_v3() -> StateGraph:
     # Add nodes
     workflow.add_node("LOAD_PAST_EVENTS", load_past_flood_events)
     workflow.add_node("FETCH_SG_RAINFALL", fetch_singapore_rainfall)
-    workflow.add_node("FETCH_MY_RAINFALL", fetch_malaysia_rainfall)
     workflow.add_node("FETCH_SU_FORECAST", fetch_sumatra_forecast)
     workflow.add_node("FETCH_PUB_ALERTS", fetch_pub_alerts)
     workflow.add_node("FETCH_NEA_WEATHER", fetch_nea_weather)
@@ -809,8 +740,7 @@ def create_flood_agent_v3() -> StateGraph:
     # Add edges - parallel fetch then assess
     workflow.set_entry_point("LOAD_PAST_EVENTS")
     workflow.add_edge("LOAD_PAST_EVENTS", "FETCH_SG_RAINFALL")
-    workflow.add_edge("FETCH_SG_RAINFALL", "FETCH_MY_RAINFALL")
-    workflow.add_edge("FETCH_MY_RAINFALL", "FETCH_SU_FORECAST")
+    workflow.add_edge("FETCH_SG_RAINFALL", "FETCH_SU_FORECAST")
     workflow.add_edge("FETCH_SU_FORECAST", "FETCH_PUB_ALERTS")
     workflow.add_edge("FETCH_PUB_ALERTS", "FETCH_NEA_WEATHER")
     workflow.add_edge("FETCH_NEA_WEATHER", "ASSESS_RISK")

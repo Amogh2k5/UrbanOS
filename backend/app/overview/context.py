@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
+from backend.app.intelligence.normalize import build_kpi, determine_status
 from backend.app.overview.schemas import ModuleKPI, AlertItem
 
 SG_OFFSET = timezone(timedelta(hours=8))
@@ -199,182 +200,22 @@ def build_city_context(
 
 
 # Reuse existing logic from overview/api.py (imported to avoid duplication)
-def _determine_module_status(module_id: str, data: Dict[str, Any]) -> str:
-    """Determine module status from data."""
-    if data.get("error"):
-        return "unavailable"
 
-    if module_id == "traffic":
-        congestion = data.get("overall_congestion_level", "")
-        if congestion in ("severe", "heavy"):
-            return "critical"
-        elif congestion in ("moderate",):
-            return "elevated"
-        elif congestion in ("free_flow",):
-            return "normal"
-        return "normal"
 
-    elif module_id == "roads":
-        active = data.get("road_works", {}).get("active", 0)
-        if active > 500:
-            return "critical"
-        elif active > 100:
-            return "elevated"
-        return "normal"
-
-    elif module_id == "transit":
-        alerts = data.get("active_train_alerts", 0)
-        if alerts > 10:
-            return "elevated"
-        return "normal"
-
-    elif module_id == "pm25":
-        regions = data.get("regions", {})
-        if not regions:
-            return "normal"
-        high = any(isinstance(v, dict) and v.get("value", 0) > 100 for v in regions.values())
-        if high:
-            return "elevated"
-        return "normal"
-
-    elif module_id == "weather":
-        if data.get("error") == "rate_limited":
-            return "unavailable"
-        general = data.get("general", {})
-        forecast = general.get("forecast_code", "")
-        if forecast in ("TS", "HR"):
-            return "elevated"
-        return "normal"
-
-    elif module_id == "flood":
-        risk = data.get("risk_level", "").lower()
-        if risk == "high":
-            return "critical"
-        elif risk == "moderate":
-            return "elevated"
-        return "normal"
-
-    elif module_id == "fire":
-        active = data.get("active_incident_count", 0)
-        if active and active > 5:
-            return "critical"
-        elif active and active > 0:
-            return "elevated"
-        return "normal"
-
-    return "normal"
+# Re-exported from the single shared implementation so that the overview cards,
+# the coordinator and the KPI insight panels can never diverge.
+_determine_module_status = determine_status
 
 
 def _extract_module_kpi(module_id: str, data: Dict[str, Any]) -> Optional[ModuleKPI]:
-    """Extract a single meaningful KPI from module data."""
-    if data.get("error"):
-        return None
-
-    if module_id == "traffic":
-        speed = data.get("overall_average_speed")
-        if speed is not None:
-            return ModuleKPI(label="Average Speed", value=round(speed, 1), unit="km/h")
-        congestion = data.get("overall_congestion_level")
-        if congestion:
-            return ModuleKPI(label="Congestion", value=congestion.replace("_", " ").title(), unit="")
-
-    elif module_id == "roads":
-        active = data.get("road_works", {}).get("active")
-        if active is not None:
-            return ModuleKPI(label="Active Road Works", value=active, unit="")
-
-    elif module_id == "transit":
-        alerts = data.get("active_train_alerts")
-        if alerts is not None:
-            return ModuleKPI(label="Train Alerts", value=alerts, unit="")
-
-    elif module_id == "pm25":
-        regions = data.get("regions", {})
-        if regions:
-            values = [v.get("value") for v in regions.values() if isinstance(v, dict) and v.get("value") is not None]
-            if values:
-                avg = sum(values) / len(values)
-                return ModuleKPI(label="Current PM2.5", value=round(avg, 1), unit="µg/m³")
-
-    elif module_id == "weather":
-        general = data.get("general", {})
-        temp = general.get("temperature_c")
-        if temp is not None:
-            return ModuleKPI(label="Temperature", value=temp, unit="°C")
-
-    elif module_id == "flood":
-        risk = data.get("risk_level")
-        if risk:
-            return ModuleKPI(label="Flood Risk", value=risk, unit="")
-
-    elif module_id == "fire":
-        active = data.get("active_incident_count")
-        if active is not None:
-            return ModuleKPI(label="Active Incidents", value=active, unit="")
-
-    return None
+    """Shared headline KPI extraction (see intelligence.normalize.build_kpi)."""
+    kpi = build_kpi(module_id, data)
+    return ModuleKPI(**kpi) if kpi else None
 
 
 def _generate_deterministic_module_brief(module_id: str, module_data: Dict[str, Any]) -> str:
-    """Generate deterministic module brief from structured data."""
-    name_map = {
-        "traffic": "Traffic",
-        "roads": "Roads",
-        "transit": "Transit",
-        "pm25": "Air Quality",
-        "weather": "Weather",
-        "flood": "Flood & Rain",
-        "fire": "Fire",
-    }
-    name = name_map.get(module_id, module_id.capitalize())
-
-    if module_data.get("error"):
-        return f"{name} module: data currently unavailable."
-
-    brief = f"{name} module update. "
-
-    if module_id == "traffic":
-        congestion = module_data.get("overall_congestion_level")
-        speed = module_data.get("overall_average_speed")
-        if congestion and speed is not None:
-            brief += f"Congestion: {congestion}, avg speed {speed:.1f} km/h."
-        elif congestion:
-            brief += f"Congestion: {congestion}."
-        elif speed is not None:
-            brief += f"Avg speed: {speed:.1f} km/h."
-
-    elif module_id == "roads":
-        if isinstance(module_data, dict) and "road_works" in module_data:
-            rw = module_data["road_works"]
-            brief += f"{rw.get('active', 0)} active road works, {rw.get('upcoming', 0)} upcoming."
-
-    elif module_id == "transit":
-        alerts = module_data.get("active_train_alerts", 0)
-        if alerts:
-            brief += f"{alerts} active train alerts."
-
-    elif module_id == "pm25":
-        regions = module_data.get("regions", {})
-        if regions:
-            values = [v.get("value", 0) for v in regions.values() if isinstance(v, dict) and v.get("value") is not None]
-            if values:
-                avg = sum(values) / len(values)
-                brief += f"Current avg PM2.5: {avg:.1f} µg/m³."
-
-    elif module_id == "weather":
-        general = module_data.get("general", {})
-        temp = general.get("temperature_c")
-        if temp is not None:
-            brief += f"Current temp: {temp}°C."
-
-    elif module_id == "flood":
-        risk = module_data.get("risk_level")
-        if risk:
-            brief += f"Flood risk: {risk}."
-
-    elif module_id == "fire":
-        active = module_data.get("active_incident_count")
-        if active is not None:
-            brief += f"{active} active fire incidents."
-
-    return brief
+    """Shared deterministic brief (see overview.api._generate_deterministic_module_brief)."""
+    from backend.app.overview.api import (
+        _generate_deterministic_module_brief as _shared_brief,
+    )
+    return _shared_brief(module_id, module_data)

@@ -1,0 +1,41 @@
+109: Malaysia in context: Agent V3 — Live Regional API + Manual Rules.
+
+Core Principle:
+LIVE WEATHER OBSERVATIONS (Singapore, Malaysia/Johor, Sumatra) → CURRENT FLOOD RISK
+
+Historical 
+118: Johor in context: — Live Regional API + Manual Rules.
+
+Core Principle:
+LIVE WEATHER OBSERVATIONS (Singapore, Malaysia/Johor, Sumatra) → CURRENT FLOOD RISK
+
+Historical data i
+356: Malaysia in context: ent API observations.
+
+Architecture:
+1. Fetch live Singapore rainfall (NEA 5-min API)
+2. Fetch live Malaysia/Johor rainfall (MetMalaysia API)
+3. Fetch live Su
+365: Johor in context: bservations.
+
+Architecture:
+1. Fetch live Singapore rainfall (NEA 5-min API)
+2. Fetch live Malaysia/Johor rainfall (MetMalaysia API)
+3. Fetch live Sumatra 
+384: Malaysia in context: tecture:
+1. Fetch live Singapore rainfall (NEA 5-min API)
+2. Fetch live Malaysia/Johor rainfall (MetMalaysia API)
+3. Fetch live Sumatra rainfall (BMKG API)
+4.
+9652: Malaysia in context: nce + manual rules.
+
+    Risk scoring:
+    - Singapore rainfall = PRIMARY signal (weight 1.0)
+    - Malaysia/Johor rainfall = SUPPORTING (weight 0.3)
+    - Su
+9661: Johor in context: ual rules.
+
+    Risk scoring:
+    - Singapore rainfall = PRIMARY signal (weight 1.0)
+    - Malaysia/Johor rainfall = SUPPORTING (weight 0.3)
+    - Sumatra 

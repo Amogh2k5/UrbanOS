@@ -15,7 +15,6 @@ from backend.app.environment.flood.agent import (
     create_flood_agent_v3,
     load_past_flood_events,
     fetch_singapore_rainfall,
-    fetch_malaysia_rainfall,
     fetch_sumatra_forecast,
     fetch_pub_alerts,
     fetch_nea_weather,
@@ -28,13 +27,12 @@ from backend.app.environment.flood.agent import (
 )
 from backend.app.environment.flood.models import (
     FloodReport, PastFloodEvent, ActiveFloodAlert,
-    SingaporeRainfallEvidence, MalaysiaRainfallEvidence, SumatraRainfallEvidence,
+    SingaporeRainfallEvidence, SumatraRainfallEvidence,
     RegionalWeatherStatus, FloodRiskLevel
 )
 from backend.app.environment.flood.api import FloodAlertsApiClient, FloodAlertsSnapshot
 from backend.app.environment.flood.rainfall_clients import (
     RainfallApiClient, RainfallSnapshot,
-    MalaysiaRainfallApiClient, MalaysiaRainfallSnapshot,
     SumatraForecastApiClient, SumatraForecastSnapshot,
 )
 from backend.app.environment.weather.api import WeatherApiClient, WeatherLiveSnapshot
@@ -86,31 +84,7 @@ class TestFloodAgentV3Nodes:
         assert result.singapore_rainfall.is_live is False
         assert "singapore_rainfall:offline_fixture:NEA_rainfall_5min" in result.data_sources
     
-    def test_fetch_malaysia_rainfall_offline(self):
-        """Test fetching Malaysia rainfall in offline mode."""
-        with patch("backend.app.environment.flood.agent.MalaysiaRainfallApiClient") as mock_client_class:
-            mock_client = MagicMock()
-            mock_evidence = {
-                "available": False,
-                "source": "offline_fixture:MetMalaysia_rainfall",
-                "error": "No live data",
-                "stations": {},
-                "max_1h_mm": 0.0,
-                "max_24h_mm": 0.0,
-                "weather_systems": [],
-            }
-            mock_client.fetch.return_value = MagicMock()  # Not used directly
-            mock_client_class.return_value = mock_client
-            
-            with patch("backend.app.environment.flood.agent.get_malaysia_rainfall_evidence", return_value=mock_evidence):
-                state = FloodAgentState()
-                os.environ["FLOOD_AGENT_OFFLINE"] = "true"
-                result = fetch_malaysia_rainfall(state)
-        
-        assert result.malaysia_evidence is not None
-        assert result.malaysia_evidence["available"] is False
-        assert "malaysia_rainfall:offline_fixture:MetMalaysia_rainfall" in result.data_sources
-
+    
     def test_fetch_sumatra_forecast_offline(self):
         """Test fetching Sumatra rainfall in offline mode."""
         with patch("backend.app.environment.flood.agent.SumatraForecastApiClient") as mock_client_class:
@@ -225,8 +199,6 @@ class TestFloodAgentV3Nodes:
         """Test risk assessment with no evidence -> LOW or UNKNOWN."""
         state = FloodAgentState(
             singapore_rainfall=None,
-            malaysia_evidence={"available": False},
-            sumatra_evidence={"available": False},
             pub_alerts=[],
             nea_weather=None,
             errors=[],
@@ -244,8 +216,6 @@ class TestFloodAgentV3Nodes:
             singapore_rainfall=MagicMock(is_live=True, source="live_api:NEA_rainfall_5min", readings={
                 "S90": MagicMock(value_mm=6.0),  # 6mm/5min = heavy (>5mm)
             }),
-            malaysia_evidence={"available": False},
-            sumatra_evidence={"available": False},
             pub_alerts=[],
             nea_weather=None,
             errors=[],
@@ -263,8 +233,6 @@ class TestFloodAgentV3Nodes:
             singapore_rainfall=MagicMock(is_live=True, source="live_api:NEA_rainfall_5min", readings={
                 "S90": MagicMock(value_mm=9.0),  # 9mm/5min = extreme (>8mm)
             }),
-            malaysia_evidence={"available": False},
-            sumatra_evidence={"available": False},
             pub_alerts=[],
             nea_weather=None,
             errors=[],
@@ -280,8 +248,6 @@ class TestFloodAgentV3Nodes:
         """Test risk assessment with PUB HIGH alert -> HIGH."""
         state = FloodAgentState(
             singapore_rainfall=MagicMock(is_live=True, source="live_api:NEA_rainfall_5min", readings={}),
-            malaysia_evidence={"available": False},
-            sumatra_evidence={"available": False},
             pub_alerts=[{"severity": "High", "zone_name": "Central South"}],
             nea_weather=None,
             errors=[],
@@ -298,8 +264,6 @@ class TestFloodAgentV3Nodes:
             singapore_rainfall=MagicMock(is_live=True, source="live_api:NEA_rainfall_5min", readings={
                 "S90": MagicMock(value_mm=5.0),  # 60mm/1h
             }),
-            malaysia_evidence={"available": False},
-            sumatra_evidence={"available": False},
             pub_alerts=[{"severity": "Moderate", "zone_name": "Central South"}],
             nea_weather=None,
             errors=[],
@@ -310,31 +274,11 @@ class TestFloodAgentV3Nodes:
         # Heavy rain (0.4) + MODERATE alert (0.7) = 1.1 -> HIGH
         assert result.risk_level in [FloodRiskLevel.HIGH, FloodRiskLevel.CRITICAL]
     
-    def test_assess_risk_malaysia_heavy_rainfall(self):
-        """Test Malaysia heavy rainfall supporting evidence."""
-        state = FloodAgentState(
-            singapore_rainfall=MagicMock(is_live=True, source="live_api:NEA_rainfall_5min", readings={
-                "S90": MagicMock(value_mm=2.0),  # 24mm/1h = moderate
-            }),
-            malaysia_evidence={"available": True, "max_1h_mm": 60.0, "weather_systems": []},
-            sumatra_evidence={"available": False},
-            pub_alerts=[],
-            nea_weather=None,
-            errors=[],
-        )
-        
-        result = assess_risk(state)
-        
-        # Singapore moderate (0.2) + Malaysia heavy (0.3*0.5=0.15) = 0.35 -> LOW/MODERATE
-        assert result.risk_level in [FloodRiskLevel.LOW, FloodRiskLevel.MODERATE]
-        assert any("Johor heavy rainfall" in f for f in result.primary_risk_factors)
     
     def test_assess_risk_sumatra_squall(self):
         """Test Sumatra squall detection."""
         state = FloodAgentState(
             singapore_rainfall=MagicMock(is_live=True, source="live_api:NEA_rainfall_5min", readings={}),
-            malaysia_evidence={"available": False},
-            sumatra_evidence={"available": True, "max_1h_mm": 40.0, "weather_systems": ["possible_sumatra_squall"]},
             pub_alerts=[],
             nea_weather=MagicMock(general=MagicMock(forecast_code="SQ", wind_direction="SW")),
             errors=[],
@@ -344,16 +288,14 @@ class TestFloodAgentV3Nodes:
         
         # Sumatra squall adds SUMATRA_SQUALL_WEIGHT (0.4) + NEA SQ (0.4) + SW wind (0.15)
         assert result.risk_level in [FloodRiskLevel.MODERATE, FloodRiskLevel.HIGH]
-        assert any("Sumatra squall" in f or "possible_sumatra_squall" in f for f in result.primary_risk_factors)
+        assert any("Sumatra squall" in f or "Sumatra Squall" in f for f in result.primary_risk_factors)
     
     def test_assess_risk_case_a_singapore_dry_regional_heavy(self):
-        """CASE A: Singapore dry + Malaysia heavy + Sumatra heavy -> LOW or WATCH."""
+        """CASE A: Singapore dry + regional heavy -> LOW or WATCH."""
         state = FloodAgentState(
             singapore_rainfall=MagicMock(is_live=True, source="live_api:NEA_rainfall_5min", readings={
                 "S90": MagicMock(value_mm=0.0),
             }),
-            malaysia_evidence={"available": True, "max_1h_mm": 80.0, "weather_systems": []},
-            sumatra_evidence={"available": True, "max_1h_mm": 70.0, "weather_systems": ["possible_sumatra_squall"]},
             pub_alerts=[],
             nea_weather=MagicMock(general=MagicMock(forecast_code="FW", wind_direction="NE")),
             errors=[],
@@ -362,19 +304,16 @@ class TestFloodAgentV3Nodes:
         result = assess_risk(state)
         
         # Singapore dry (0) + regional only -> should NOT be HIGH
-        # Malaysia (0.3*0.5=0.15) + Sumatra (0.3*0.5=0.15) + Sumatra squall (0.4*0.3=0.12) = ~0.42 -> MODERATE at most
         assert result.risk_level in [FloodRiskLevel.LOW, FloodRiskLevel.MODERATE]
         assert result.risk_level != FloodRiskLevel.HIGH
         assert result.risk_level != FloodRiskLevel.CRITICAL
     
     def test_assess_risk_case_b_singapore_heavy_regional_active(self):
-        """CASE B: Singapore heavy + Johor heavy + regional activity -> higher risk."""
+        """CASE B: Singapore heavy + regional activity -> higher risk."""
         state = FloodAgentState(
             singapore_rainfall=MagicMock(is_live=True, source="live_api:NEA_rainfall_5min", readings={
                 "S90": MagicMock(value_mm=5.0),  # 60mm/1h
             }),
-            malaysia_evidence={"available": True, "max_1h_mm": 60.0, "weather_systems": []},
-            sumatra_evidence={"available": True, "max_1h_mm": 50.0, "weather_systems": []},
             pub_alerts=[],
             nea_weather=MagicMock(general=MagicMock(forecast_code="SQ", wind_direction="SW")),
             errors=[],
@@ -382,7 +321,7 @@ class TestFloodAgentV3Nodes:
         
         result = assess_risk(state)
         
-        # Singapore heavy (0.4) + Malaysia (0.15) + Sumatra (0.15) + SQ (0.4) + SW (0.15) = 1.25 -> CRITICAL or HIGH
+        # Singapore heavy (0.4) + SQ (0.4) + SW (0.15) = 0.95 -> HIGH
         assert result.risk_level in [FloodRiskLevel.HIGH, FloodRiskLevel.CRITICAL]
     
     def test_build_report(self):
@@ -419,13 +358,6 @@ class TestFloodAgentV3Nodes:
                 "peak_5m_mm": 8.0,
                 "stations_reporting": 60,
                 "stations_with_rain": 30,
-            },
-            malaysia_evidence={
-                "available": True,
-                "source": "live_api:MetMalaysia_rainfall",
-                "max_1h_mm": 40.0,
-                "stations_reporting": 5,
-                "weather_systems": ["heavy_rainfall_johor"],
             },
             sumatra_evidence={
                 "available": True,
@@ -464,7 +396,7 @@ class TestFloodAgentV3Nodes:
             ],
             primary_risk_factors=["Extreme 1h rainfall: 60.0mm", "PUB HIGH alert(s): 1"],
             affected_zones=["Central South"],
-            data_sources=["singapore_rainfall:live_api:NEA_rainfall_5min", "malaysia_rainfall:live_api:MetMalaysia_rainfall"],
+            data_sources=["singapore_rainfall:live_api:NEA_rainfall_5min", "sumatra_rainfall:live_api:BMKG_rainfall_community"],
             errors=[],
             warnings=[],
         )
@@ -479,8 +411,6 @@ class TestFloodAgentV3Nodes:
         assert len(result.report.active_alerts) == 1
         assert result.report.singapore_rainfall is not None
         assert result.report.singapore_rainfall.max_1h_mm == 60.0
-        assert result.report.malaysia_rainfall is not None
-        assert result.report.malaysia_rainfall.max_1h_mm == 40.0
         assert result.report.sumatra_rainfall is not None
         assert result.report.regional_weather is not None
         assert result.report.regional_weather.singapore_forecast_code == "SQ"
@@ -505,7 +435,6 @@ class TestFloodAgentV3Nodes:
                 "stations_reporting": 60,
                 "stations_with_rain": 5,
             },
-            malaysia_evidence={"available": False, "source": "unavailable"},
             sumatra_evidence={"available": False, "source": "unavailable"},
             regional_weather_status={"available": True, "forecast_code": "FW", "wind_direction": "NE"},
             past_flood_events=[],
@@ -550,15 +479,13 @@ class TestFloodAgentV3Integration:
         
         with patch("backend.app.environment.flood.agent.pd.read_csv", return_value=mock_df), \
              patch("backend.app.environment.flood.agent.RainfallApiClient") as mock_sg, \
-             patch("backend.app.environment.flood.agent.MalaysiaRainfallApiClient") as mock_my, \
              patch("backend.app.environment.flood.agent.SumatraForecastApiClient") as mock_su, \
              patch("backend.app.environment.flood.agent.FloodAlertsApiClient") as mock_pub, \
              patch("backend.app.environment.flood.agent.WeatherApiClient") as mock_nea:
-            
+             
             # Setup mocks
             for mock_class, is_live, source in [
                 (mock_sg, False, "offline_fixture:NEA_rainfall_5min"),
-                (mock_my, False, "offline_fixture:MetMalaysia_rainfall"),
                 (mock_su, False, "offline_fixture:BMKG_rainfall"),
                 (mock_pub, False, "offline_fixture:PUB_flood_alerts"),
                 (mock_nea, False, "offline_fixture:NEA_24h_weather"),
@@ -589,14 +516,12 @@ class TestFloodAgentV3Integration:
         
         with patch("backend.app.environment.flood.agent.pd.read_csv", return_value=mock_df), \
              patch("backend.app.environment.flood.agent.RainfallApiClient") as mock_sg, \
-             patch("backend.app.environment.flood.agent.MalaysiaRainfallApiClient") as mock_my, \
              patch("backend.app.environment.flood.agent.SumatraForecastApiClient") as mock_su, \
              patch("backend.app.environment.flood.agent.FloodAlertsApiClient") as mock_pub, \
              patch("backend.app.environment.flood.agent.WeatherApiClient") as mock_nea:
-            
+             
             for mock_class, is_live, source in [
                 (mock_sg, False, "offline_fixture:NEA_rainfall_5min"),
-                (mock_my, False, "offline_fixture:MetMalaysia_rainfall"),
                 (mock_su, False, "offline_fixture:BMKG_rainfall"),
                 (mock_pub, False, "offline_fixture:PUB_flood_alerts"),
                 (mock_nea, False, "offline_fixture:NEA_24h_weather"),
@@ -627,7 +552,6 @@ class TestFloodAgentV3Integration:
         assert hasattr(report, "affected_zones")
         assert hasattr(report, "primary_risk_factors")
         assert hasattr(report, "singapore_rainfall")
-        assert hasattr(report, "malaysia_rainfall")
         assert hasattr(report, "sumatra_rainfall")
         assert hasattr(report, "regional_weather")
         assert hasattr(report, "past_flood_events")
@@ -642,7 +566,6 @@ class TestFloodAgentV3Integration:
         assert isinstance(report.risk_level, FloodRiskLevel)
         assert isinstance(report.risk_score, float)
         assert isinstance(report.singapore_rainfall, (SingaporeRainfallEvidence, type(None)))
-        assert isinstance(report.malaysia_rainfall, (MalaysiaRainfallEvidence, type(None)))
         assert isinstance(report.sumatra_rainfall, (SumatraRainfallEvidence, type(None)))
         assert isinstance(report.regional_weather, (RegionalWeatherStatus, type(None)))
     
@@ -652,14 +575,12 @@ class TestFloodAgentV3Integration:
         
         with patch("backend.app.environment.flood.agent.pd.read_csv", return_value=mock_df), \
              patch("backend.app.environment.flood.agent.RainfallApiClient") as mock_sg, \
-             patch("backend.app.environment.flood.agent.MalaysiaRainfallApiClient") as mock_my, \
              patch("backend.app.environment.flood.agent.SumatraForecastApiClient") as mock_su, \
              patch("backend.app.environment.flood.agent.FloodAlertsApiClient") as mock_pub, \
              patch("backend.app.environment.flood.agent.WeatherApiClient") as mock_nea:
-            
+             
             for mock_class, is_live, source in [
                 (mock_sg, True, "live_api:NEA_rainfall_5min"),
-                (mock_my, False, "offline_fixture:MetMalaysia_rainfall"),
                 (mock_su, False, "offline_fixture:BMKG_rainfall"),
                 (mock_pub, False, "offline_fixture:PUB_flood_alerts"),
                 (mock_nea, True, "live_api:NEA_24h_weather"),
@@ -686,10 +607,6 @@ class TestFloodAgentV3Integration:
         assert report.singapore_rainfall.available is True
         assert report.singapore_rainfall.source == "live_api:NEA_rainfall_5min"
         
-        # Unavailable evidence should be marked
-        assert report.malaysia_rainfall is not None
-        assert report.malaysia_rainfall.available is False
-        
         # Past events are reference
         assert len(report.past_flood_events) >= 0
         assert report.is_ml_prediction is False
@@ -702,14 +619,12 @@ class TestFloodAgentV3Integration:
         
         with patch("backend.app.environment.flood.agent.pd.read_csv", return_value=mock_df), \
              patch("backend.app.environment.flood.agent.RainfallApiClient") as mock_sg, \
-             patch("backend.app.environment.flood.agent.MalaysiaRainfallApiClient") as mock_my, \
              patch("backend.app.environment.flood.agent.SumatraForecastApiClient") as mock_su, \
              patch("backend.app.environment.flood.agent.FloodAlertsApiClient") as mock_pub, \
              patch("backend.app.environment.flood.agent.WeatherApiClient") as mock_nea:
-            
+             
             for mock_class, is_live, source in [
                 (mock_sg, True, "live_api:NEA_rainfall_5min"),
-                (mock_my, False, "offline_fixture:MetMalaysia_rainfall"),
                 (mock_su, False, "offline_fixture:BMKG_rainfall"),
                 (mock_pub, False, "offline_fixture:PUB_flood_alerts"),
                 (mock_nea, True, "live_api:NEA_24h_weather"),
@@ -747,7 +662,7 @@ class TestRiskRulesConfig:
             SINGAPORE_1H_MODERATE, SINGAPORE_1H_HEAVY, SINGAPORE_1H_EXTREME,
             SINGAPORE_3H_HEAVY, SINGAPORE_6H_HEAVY, SINGAPORE_24H_HEAVY,
             SINGAPORE_STATIONS_WIDESPREAD, SINGAPORE_STATIONS_EXTENSIVE,
-            MALAYSIA_WEIGHT, SUMATRA_WEIGHT, SUMATRA_SQUALL_WEIGHT,
+             SUMATRA_WEIGHT, SUMATRA_SQUALL_WEIGHT,
             PUB_ALERT_HIGH_WEIGHT, RISK_THRESHOLDS,
             CALIBRATION_METADATA, RULE_DOCUMENTATION,
         )
@@ -758,7 +673,6 @@ class TestRiskRulesConfig:
         assert SINGAPORE_24H_HEAVY > SINGAPORE_6H_HEAVY
         
         # Check weights
-        assert 0 < MALAYSIA_WEIGHT < 1
         assert 0 < SUMATRA_WEIGHT < 1
         assert 0 < SUMATRA_SQUALL_WEIGHT < 1
         assert 0 < PUB_ALERT_HIGH_WEIGHT <= 1
@@ -791,15 +705,6 @@ class TestAPIAdapters:
         assert snapshot.source == "offline_fixture:NEA_rainfall_5min"
         assert snapshot.unit == "mm"
         assert len(snapshot.readings) == 5
-    
-    def test_malaysia_rainfall_adapter_offline(self):
-        """Test Malaysia rainfall adapter offline."""
-        client = MalaysiaRainfallApiClient(offline=True)
-        snapshot = client.fetch()
-        
-        assert snapshot.is_live is False
-        assert snapshot.source == "offline_fixture:MetMalaysia_rainfall"
-        assert snapshot.credentials_configured is False
     
     def test_sumatra_rainfall_adapter_offline(self):
         """Test Sumatra forecast adapter offline."""

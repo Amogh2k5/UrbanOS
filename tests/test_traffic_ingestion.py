@@ -1035,7 +1035,8 @@ class TestCollector:
 
                 # Mock _now_iso to return fixed timestamp for both runs
                 fixed_timestamp = "2026-08-20T10:00:00+08:00"
-                with patch("backend.app.mobility.traffic.speed_bands_v2._now_iso", return_value=fixed_timestamp):
+                with patch("backend.app.mobility.traffic.api._now_iso",
+                       return_value=fixed_timestamp):
                     collector = TrafficCollector(store=temp_db)
 
                     # First run
@@ -1357,7 +1358,8 @@ class TestScheduler:
 
     def test_existing_collector_behavior_unchanged(self, temp_db):
         """Existing TrafficCollector.collect_once() behavior should be unchanged."""
-        from backend.app.mobility.traffic.collector import TrafficCollector
+        # TrafficCollector now lives in traffic.data (collector.py was removed
+        # in 99f1d7b); it is already imported at module scope.
 
         with patch.dict("os.environ", {"LTA_API_KEY": "dummy"}, clear=True):
             with patch("httpx.Client") as mock_client_class:

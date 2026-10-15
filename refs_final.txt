@@ -1,0 +1,8 @@
+Malaysia references: 7
+1. Pos 109:  Principle: LIVE WEATHER OBSERVATIONS (Singapore, Malaysia/Johor, Sumatra) → CURRENT FLOOD RISK  Historical 
+2. Pos 118: e: LIVE WEATHER OBSERVATIONS (Singapore, Malaysia/Johor, Sumatra) → CURRENT FLOOD RISK  Historical data i
+3. Pos 356:  Singapore rainfall (NEA 5-min API) 2. Fetch live Malaysia/Johor rainfall (MetMalaysia API) 3. Fetch live Su
+4. Pos 365: e rainfall (NEA 5-min API) 2. Fetch live Malaysia/Johor rainfall (MetMalaysia API) 3. Fetch live Sumatra 
+5. Pos 384: in API) 2. Fetch live Malaysia/Johor rainfall (MetMalaysia API) 3. Fetch live Sumatra rainfall (BMKG API) 4.
+6. Pos 9652: pore rainfall = PRIMARY signal (weight 1.0)     - Malaysia/Johor rainfall = SUPPORTING (weight 0.3)     - Su
+7. Pos 9661: fall = PRIMARY signal (weight 1.0)     - Malaysia/Johor rainfall = SUPPORTING (weight 0.3)     - Sumatra 

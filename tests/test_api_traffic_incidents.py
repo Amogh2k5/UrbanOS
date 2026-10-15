@@ -8,7 +8,9 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from backend.app.mobility.traffic.incidents import (
+# incidents.py was folded into api.py in commit 99f1d7b; the adapter,
+# snapshot dataclass and fallback fixture all live in api.py now.
+from backend.app.mobility.traffic.api import (
     TrafficIncidentsApiClient,
     TrafficIncidentsSnapshot,
     _FALLBACK_FIXTURE,
@@ -31,9 +33,9 @@ class TestTrafficIncidentsApiClient:
         assert snap.source == "offline_fixture:LTA_traffic_incidents"
         assert snap.provider == "LTA DataMall"
         assert snap.endpoint == "https://datamall2.mytransport.sg/ltaodataservice/TrafficIncidents"
-        assert len(snap.incidents) == 2
-        assert snap.incidents[0].incident_type == "Accident"
-        assert snap.incidents[0].message == _FALLBACK_FIXTURE["value"][0]["Message"]
+        # The fixture ships empty by design: offline mode must not fabricate
+        # traffic incidents that were never observed.
+        assert len(snap.incidents) == len(_FALLBACK_FIXTURE["value"]) == 0
 
     def test_to_dict_structure(self):
         """Snapshot.to_dict() must have the expected keys for frontend consumption."""
@@ -50,11 +52,35 @@ class TestTrafficIncidentsApiClient:
             "count",
             "incidents",
         }
-        assert d["count"] == 2
         assert isinstance(d["incidents"], list)
-        assert "type" in d["incidents"][0]
-        assert "message" in d["incidents"][0]
-        assert "coordinates" in d["incidents"][0]
+        assert d["count"] == len(d["incidents"])
+
+        # The offline fixture is empty, so validate the per-incident shape
+        # against an explicitly constructed incident rather than fixture data.
+        from backend.app.mobility.traffic.api import TrafficIncident, TrafficIncidentsSnapshot
+
+        sample = TrafficIncidentsSnapshot(
+            snapshot_at=snap.snapshot_at,
+            source=snap.source,
+            provider=snap.provider,
+            endpoint=snap.endpoint,
+            incidents=[
+                TrafficIncident(
+                    incident_type="Accident",
+                    latitude=1.29,
+                    longitude=103.78,
+                    message="Accident",
+                    source="test",
+                    zone_id="SG_WEST_SOUTH",
+                    zone_name="West South",
+                )
+            ],
+        ).to_dict()["incidents"][0]
+
+        assert sample["type"] == "Accident"
+        assert sample["message"] == "Accident"
+        assert sample["coordinates"] == {"lat": 1.29, "lon": 103.78}
+        assert sample["zone_id"] == "SG_WEST_SOUTH"
 
     def test_mock_live_success(self):
         """Mocked httpx success returns is_live=True and parsed incidents."""

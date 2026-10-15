@@ -1,0 +1,6 @@
+Malaysia references in agent.py: 12
+1. Pos 109: THER OBSERVATIONS (Singapore, Malaysia/Johor, Sumatra) → CURRENT FLO
+2. Pos 118: RVATIONS (Singapore, Malaysia/Johor, Sumatra) → CURRENT FLOOD RIS
+3. Pos 356: (NEA 5-min API) 2. Fetch live Malaysia/Johor rainfall (MetMalaysia A
+4. Pos 365: n API) 2. Fetch live Malaysia/Johor rainfall (MetMalaysia API) 3.
+5. Pos 384: e Malaysia/Johor rainfall (MetMalaysia API) 3. Fetch live Sumatra ra

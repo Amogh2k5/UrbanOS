@@ -1,12 +1,31 @@
 ﻿/* eslint-disable @typescript-eslint/no-explicit-any */
-import { CitySituationReport } from '@/types';
+import { CitySituationReport, DomainStatus } from '@/types/intelligence';
+
+export type { CitySituationReport, DomainStatus, Finding } from '@/types/intelligence';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+/** Thrown when the API is reachable but returned a non-2xx response. */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+/**
+ * Deterministic city situation from the City Coordinator.
+ *
+ * This is the authority for status, risk, cross-domain impacts,
+ * recommendations and evidence. It is cached server-side, so repeated calls
+ * are cheap.
+ */
 export async function fetchCityReport(): Promise<CitySituationReport> {
   const response = await fetch(`${API_BASE}/api/city/report`, { cache: 'no-store' });
   if (!response.ok) {
-    throw new Error(`Failed to fetch city report: ${response.statusText}`);
+    throw new ApiError(`Failed to fetch city report: ${response.statusText}`, response.status);
   }
   return response.json();
 }
@@ -589,13 +608,6 @@ export interface AlertItem {
   affected_zones: string[];
 }
 
-export interface OverviewCityResponse {
-  generated_at: string;
-  modules: ModuleSummary[];
-  alerts: AlertItem[];
-  ai_brief: string | null;
-}
-
 export interface ModuleDetailResponse {
   module_id: string;
   module_name: string;
@@ -618,10 +630,20 @@ export interface ChatResponse {
 }
 
 // Overview API functions
-export async function fetchOverviewCity(): Promise<any> {
+/** Overview payload: module cards, the city narrative, and per-domain findings. */
+export interface OverviewCityResponse {
+  generated_at: string;
+  modules: ModuleSummary[];
+  alerts: AlertItem[];
+  ai_brief: string | null;
+  /** Per-domain intelligence. Present since the Phase 1 normalisation work. */
+  domain_status?: Record<string, DomainStatus>;
+}
+
+export async function fetchOverviewCity(): Promise<OverviewCityResponse> {
   const response = await fetch(`${API_BASE}/api/overview/city`, { cache: 'no-store' });
   if (!response.ok) {
-    throw new Error(`Failed to fetch overview city: ${response.statusText}`);
+    throw new ApiError(`Failed to fetch overview city: ${response.statusText}`, response.status);
   }
   return response.json();
 }
@@ -634,7 +656,27 @@ export async function fetchOverviewModule(moduleId: string): Promise<any> {
   return response.json();
 }
 
-export async function fetchChat(message: string, moduleId?: string): Promise<any> {
+/** One turn of conversation history, forwarded to the grounded Copilot. */
+export interface ChatTurn {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
+export interface ChatResult {
+  response: string;
+}
+
+/**
+ * Ask the grounded Copilot.
+ *
+ * `history` is bounded server-side and is used only as conversational context;
+ * it can never introduce a fact the coordinator report does not contain.
+ */
+export async function fetchChat(
+  message: string,
+  moduleId?: string,
+  history: ChatTurn[] = [],
+): Promise<ChatResult> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 30_000); // 30 seconds
   const url = new URL(`${API_BASE}/api/overview/chat`);
@@ -642,7 +684,7 @@ export async function fetchChat(message: string, moduleId?: string): Promise<any
     const response = await fetch(url.toString(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, module_id: moduleId }),
+      body: JSON.stringify({ message, module_id: moduleId, history }),
       cache: 'no-store',
       signal: controller.signal,
     });
@@ -822,3 +864,276 @@ export async function fetchWaterReport(refresh = false): Promise<WaterReport> {
   }
   return response.json();
 }
+
+// ---------------------------------------------------------------------------
+// Land (Planning) domain — mirrors backend/app/planning/land/models.py
+//
+// A null value here means "the source did not report it" and must be rendered as
+// unavailable, never as 0. See docs/PLANNING_LAND_MODULE.md.
+// ---------------------------------------------------------------------------
+export type LandDataKind = 'live' | 'latest_available' | 'historical' | 'forecast' | 'unavailable';
+export type LandSourceStatus = 'available' | 'partial' | 'unavailable';
+export type LandGroup =
+  | 'residential' | 'commercial' | 'industrial' | 'institutional'
+  | 'transport' | 'recreation' | 'water' | 'other';
+
+export interface LandMeta {
+  generated_at: string;
+  source_status: LandSourceStatus;
+  data_timestamps: Record<string, unknown>;
+  warnings: string[];
+  errors: string[];
+}
+
+export interface LandOverview extends LandMeta {
+  confidence: 'high' | 'medium' | 'low';
+  headline: {
+    source_status: LandSourceStatus;
+    total_area_km2: number | null;
+    zone_count: number | null;
+    planning_area_count: number | null;
+    region_count: number | null;
+    dominant_category: string | null;
+    dominant_category_pct: number | null;
+    cadastral_parcel_count: number | null;
+    gls_site_count: number | null;
+    industrial_land_km2: number | null;
+  };
+  alerts: LandAlertItem[];
+  insights: LandInsightItem[];
+  limitations: string[];
+}
+
+export interface LandAlertItem {
+  id: string;
+  severity: 'LOW' | 'MODERATE' | 'HIGH';
+  category: string;
+  message: string;
+  evidence: string[];
+  data_kind: LandDataKind;
+}
+
+export interface LandInsightItem {
+  question: string;
+  answer: string;
+  data_kind: LandDataKind;
+}
+
+export interface LandSource {
+  key: string;
+  organization: string;
+  name: string;
+  identifier: string;
+  layer_name: string;
+  url: string;
+  purpose: string;
+  update_frequency: string;
+  coverage: string;
+  authentication: string;
+  data_kind: LandDataKind;
+  crs: string;
+  component: string;
+  status: 'ok' | 'stale_cache' | 'unavailable';
+  last_fetched_at?: string | null;
+  record_count?: number | null;
+  source_data_date?: string | null;
+  error?: string | null;
+}
+
+export interface LandUseCategory {
+  code: string;
+  label: string;
+  group: LandGroup;
+  area_sqm: number | null;
+  area_pct: number | null;
+  zone_count: number | null;
+  data_kind: LandDataKind;
+}
+
+export interface LandGrossPlotRatio {
+  data_kind: LandDataKind;
+  reported_numeric: { value: number | null; zone_count: number | null } | null;
+  special_codes: Record<string, number | null>;
+  median: number | null;
+  p25: number | null;
+  p75: number | null;
+  max: number | null;
+  limitations: string[];
+}
+
+export interface LandUseSection {
+  data_kind: LandDataKind;
+  source_layer: string;
+  total_zones: number | null;
+  total_area_sqm: number | null;
+  total_area_km2: number | null;
+  distinct_categories: number | null;
+  categories: LandUseCategory[];
+  by_group: Record<string, number | null>;
+  invalid_zones: number;
+  zones_inspected: number;
+  gpr: LandGrossPlotRatio;
+  limitations: string[];
+}
+
+export interface LandUseResponse extends LandMeta {
+  land_use: LandUseSection;
+}
+
+export interface LandPlanningArea {
+  name: string;
+  code: string | null;
+  region: string | null;
+  region_code: string | null;
+  area_sqm: number | null;
+  land_use_area_sqm: number | null;
+  land_use_coverage_pct: number | null;
+  dominant_category: string | null;
+  dominant_category_pct: number | null;
+  zone_count: number;
+  group_area_sqm: Record<string, number | null>;
+  unassigned_zone_count: number;
+  outer_ring?: [number, number][] | null;
+}
+
+export interface LandPlanningSection {
+  data_kind: LandDataKind;
+  planning_area_count: number | null;
+  region_count: number | null;
+  regions: { name: string; code: string | null; area_sqm: number | null }[];
+  planning_areas: LandPlanningArea[];
+  invalid_features: number;
+  method: string;
+  limitations: string[];
+}
+
+export interface LandPlanningResponse extends LandMeta {
+  planning: LandPlanningSection;
+}
+
+export interface LandGlsSite {
+  location: string | null;
+  development_code: string | null;
+  development_allowed: string | null;
+  planning_area: string | null;
+  site_area_sqm: number | null;
+  gross_plot_ratio: number | null;
+  gross_floor_area_sqm: number | null;
+  housing_units: number | null;
+  award_year: number | null;
+  award_date: string | null;
+  successful_tenderer: string | null;
+  successful_price: number | null;
+  no_of_bids: number | null;
+  longitude: number | null;
+  latitude: number | null;
+}
+
+export interface LandGlsSection {
+  data_kind: LandDataKind;
+  source_layer: string;
+  scope: string;
+  current_program_available: boolean;
+  current_program_note: string;
+  site_count: number | null;
+  total_site_area_sqm: number | null;
+  by_development_code: Record<string, number | null>;
+  by_year: Record<string, number | null>;
+  award_year_min: number | null;
+  award_year_max: number | null;
+  total_housing_units: number | null;
+  latest_sites: LandGlsSite[];
+  invalid_features: number;
+  limitations: string[];
+}
+
+export interface LandCadastralSection {
+  data_kind: LandDataKind;
+  source_layer: string;
+  parcel_count: number | null;
+  total_area_sqm: number | null;
+  median_area_sqm: number | null;
+  invalid_features: number;
+  features_inspected: number;
+  duplicate_lot_keys: number;
+  ownership_available: boolean;
+  ownership_note: string;
+  limitations: string[];
+}
+
+export interface LandGlsResponse extends LandMeta {
+  gls: LandGlsSection;
+  cadastral: LandCadastralSection;
+}
+
+export interface LandIndustrialSection {
+  data_kind: LandDataKind;
+  source_layer: string;
+  estate_count: number | null;
+  total_estate_area_sqm: number | null;
+  total_estate_area_km2: number | null;
+  largest_estates: { estate_name: string; area_sqm: number; area_km2: number; updated: string | null }[];
+  industrial_land_use_area_sqm: number | null;
+  industrial_land_use_note: string;
+  source_data_date: string | null;
+  limitations: string[];
+}
+
+export interface LandIndustrialResponse extends LandMeta {
+  industrial: LandIndustrialSection;
+}
+
+export interface LandSourcesResponse extends LandMeta {
+  sources: LandSource[];
+}
+
+export interface LandMapFeature {
+  type: 'Feature';
+  geometry:
+    | { type: 'Polygon'; coordinates: number[][][] }
+    | { type: 'Point'; coordinates: [number, number] };
+  properties: Record<string, unknown>;
+}
+
+export interface LandMapLayer {
+  id: string;
+  label: string;
+  data_kind: LandDataKind;
+  data: { type: 'FeatureCollection'; features: LandMapFeature[] };
+}
+
+export interface LandMapResponse extends LandMeta {
+  layers: LandMapLayer[];
+  layers_unavailable: Record<string, string>;
+}
+
+async function fetchLand<T>(path: string, refresh = false): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}${refresh ? `${path.includes('?') ? '&' : '?'}refresh=true` : ''}`, {
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch ${path}: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export const fetchLandOverview = (refresh = false) =>
+  fetchLand<LandOverview>('/api/planning/land/overview', refresh);
+
+export const fetchLandUse = (refresh = false) =>
+  fetchLand<LandUseResponse>('/api/planning/land/use', refresh);
+
+export const fetchLandPlanningAreas = (refresh = false) =>
+  fetchLand<LandPlanningResponse>('/api/planning/land/planning-areas', refresh);
+
+export const fetchLandGls = (refresh = false) =>
+  fetchLand<LandGlsResponse>('/api/planning/land/gls', refresh);
+
+export const fetchLandIndustrial = (refresh = false) =>
+  fetchLand<LandIndustrialResponse>('/api/planning/land/industrial', refresh);
+
+export const fetchLandSources = (refresh = false) =>
+  fetchLand<LandSourcesResponse>('/api/planning/land/sources', refresh);
+
+export const fetchLandMap = (refresh = false) =>
+  fetchLand<LandMapResponse>('/api/planning/land/map', refresh);

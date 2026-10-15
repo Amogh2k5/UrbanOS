@@ -31,10 +31,47 @@ def _patched_collector_init(self, api_client=None, store=None):
 WeatherForecastCollector.__init__ = _patched_collector_init
 
 # Now import main (which will use our patched database path)
+import backend.app.main
 from backend.app.main import _build_app
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+# ---------------------------------------------------------------------------
+# Model-selection ground truth
+# ---------------------------------------------------------------------------
+# These expectations used to hardcode the Phase 1 experiment selection
+# (north/west -> persistence, south mean -> persistence). Production was
+# upgraded in commit d5f524f so that every region/target selects catboost.
+# Rather than re-hardcode the new values - which would go stale at the next
+# retrain - the tests below are derived from the production registry that the
+# endpoint is supposed to serve. If the endpoint ever stops reflecting
+# selections.csv, these tests fail again.
+
+_SELECTIONS_CSV = (
+    Path(backend.app.main.__file__).resolve().parents[2]
+    / "ml" / "pm25" / "models" / "production" / "selections.csv"
+)
+
+
+def _expected_selection():
+    """{(region, target): selected_model} from the production registry."""
+    import csv
+    out = {}
+    with open(_SELECTIONS_CSV, newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            out[(row["region"], row["target"])] = row["selected_model"]
+    return out
+
+
+SELECTION = _expected_selection()
+
+
+def test_production_selection_registry_is_readable():
+    """Guard: 5 regions x 2 targets, and every entry must be a known model."""
+    assert len(SELECTION) == 10, sorted(SELECTION)
+    assert set(SELECTION.values()) <= {"catboost", "bl_persist"}
 
 
 @pytest.fixture
@@ -154,33 +191,22 @@ def test_pm25_prediction_ml_regions(client):
     data = response.json()
     
     regions = {r["region"]: r for r in data["regions"]}
-    
-    # Based on selections.csv: east and central use catboost for BOTH targets
-    assert regions["east"]["is_ml_model"] is True
-    assert regions["east"]["model"] == "catboost"
-    assert regions["east"]["target_models"]["pm25_next_day_mean"] == "catboost"
-    assert regions["east"]["target_models"]["pm25_next_day_max"] == "catboost"
-    
-    assert regions["central"]["is_ml_model"] is True
-    assert regions["central"]["model"] == "catboost"
-    assert regions["central"]["target_models"]["pm25_next_day_mean"] == "catboost"
-    assert regions["central"]["target_models"]["pm25_next_day_max"] == "catboost"
-    
-    # South: mean uses persistence, max uses catboost (per selections.csv)
-    # is_ml_model is determined by primary target (mean) -> False
-    assert regions["south"]["is_ml_model"] is False
-    assert regions["south"]["model"] == "bl_persist"
-    assert regions["south"]["target_models"]["pm25_next_day_mean"] == "bl_persist"
-    assert regions["south"]["target_models"]["pm25_next_day_max"] == "catboost"
-    assert regions["south"]["persistence_value_pm25_t0"] is not None
-    
-    # North, west use persistence for both targets
-    for region_name in ["north", "west"]:
-        assert regions[region_name]["is_ml_model"] is False
-        assert regions[region_name]["model"] == "bl_persist"
-        assert regions[region_name]["target_models"]["pm25_next_day_mean"] == "bl_persist"
-        assert regions[region_name]["target_models"]["pm25_next_day_max"] == "bl_persist"
-        assert regions[region_name]["persistence_value_pm25_t0"] is not None
+
+    # Every region must reflect the production selections.csv exactly.
+    assert set(regions) == {region for region, _ in SELECTION}
+    for region_name, r in regions.items():
+        for target in ("pm25_next_day_mean", "pm25_next_day_max"):
+            assert r["target_models"][target] == SELECTION[(region_name, target)], \
+                f"{region_name}/{target}"
+
+        # is_ml_model / model are driven by the primary target (mean).
+        primary = SELECTION[(region_name, "pm25_next_day_mean")]
+        assert r["model"] == primary, region_name
+        assert r["is_ml_model"] is (primary != "bl_persist"), region_name
+
+        # A persistence fallback must carry its persistence input.
+        if primary == "bl_persist":
+            assert r["persistence_value_pm25_t0"] is not None, region_name
 
 
 def test_pm25_prediction_with_explicit_t0(client):
@@ -212,16 +238,11 @@ def test_pm25_prediction_diagnostics(client):
     assert "regions_missing_features" in diag
     assert "feature_report_rows" in diag
     
-    # Should have 10 total predictions (5 regions × 2 targets)
-    assert diag["predictions_total"] == 10
-    # 5 ML predictions (east + central, 2 targets each) + 0 for south (1 target ML)
-    # Actually: south mean=persist, south max=catboost -> 1 ML
-    # east mean=catboost, east max=catboost -> 2 ML
-    # central mean=catboost, central max=catboost -> 2 ML
-    # north=0, west=0
-    # Total ML = 5
-    assert diag["predictions_ml"] == 5
-    assert diag["predictions_persist"] == 5
+    # Counts must match the production registry rather than a hardcoded split.
+    assert diag["predictions_total"] == len(SELECTION)
+    expected_ml = sum(1 for m in SELECTION.values() if m != "bl_persist")
+    assert diag["predictions_ml"] == expected_ml
+    assert diag["predictions_persist"] == len(SELECTION) - expected_ml
 
 
 def test_pm25_prediction_no_internal_paths(client):
