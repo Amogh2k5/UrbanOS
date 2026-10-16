@@ -171,8 +171,47 @@ def test_small_ordinals_are_allowed():
 
 
 def test_overlong_narrative_is_rejected():
+    """The City Situation is a structured report, so the bound is generous -
+    but it is still a briefing, not a dump."""
+    from backend.app.ai.narrative import _MAX_NARRATIVE_WORDS
+
     ni = build_narrative_input(_report())
-    assert not validate_narrative("word " * 200, ni).ok
+    assert not validate_narrative("word " * (_MAX_NARRATIVE_WORDS + 50), ni).ok
+
+
+def test_a_full_structured_report_is_within_the_length_bound():
+    """The bound must actually fit the report we ask the model to write."""
+    from backend.app.ai.narrative import (
+        SECTION_ORDER, _MAX_NARRATIVE_WORDS, build_report_sections,
+        deterministic_summary, render_sections,
+    )
+
+    rep = _report()
+    rep.cross_domain_impacts = [
+        {
+            "type": "air_quality_traffic",
+            "description": "Unhealthy air quality coincides with disrupted traffic.",
+            "severity": "HIGH",
+            "affected_zones": ["Central South"],
+            "domains_involved": ["air_quality", "traffic"],
+            "evidence": [
+                "NEA observed PM2.5 peak of 116 µg/m³.",
+                "Traffic independently reported as 'disrupted'.",
+            ],
+        }
+    ]
+    sections = build_report_sections(rep)
+    text = render_sections(sections)
+
+    # Every populated section is present, cross-domain among them.
+    assert "CROSS-DOMAIN SIGNALS" in sections
+    assert "SITUATION" in sections
+    assert all(name in text for name in SECTION_ORDER if name in sections)
+    assert "116" in text
+    # And the validator accepts it as a deliverable narrative.
+    ni = build_narrative_input(rep)
+    assert len(text.split()) <= _MAX_NARRATIVE_WORDS
+    assert validate_narrative(text, ni).ok, validate_narrative(text, ni).reasons
 
 
 def test_rounding_within_two_percent_is_tolerated():

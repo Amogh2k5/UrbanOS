@@ -37,6 +37,10 @@ _UNIT_TOKENS = (
 #: conditions") rather than measurements, so they do not require evidence.
 _ORDINAL_MAX = 12
 
+#: Upper bound on a City Situation narrative. Generous enough for the full
+#: structured report, tight enough that it stays an operational briefing.
+_MAX_NARRATIVE_WORDS = 420
+
 _NUMBER_RE = re.compile(
     r"(?<![\w.])(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s*(%|[a-zA-Zµ°][a-zA-Zµ°/³²0-9]*)?"
 )
@@ -243,29 +247,145 @@ def build_narrative_input(report: Any) -> Optional[NarrativeInput]:
     )
 
 
-def deterministic_summary(report: Any) -> Optional[str]:
-    """Always-available city summary. Never invents; never fails."""
+#: Section headings used by both the LLM narrative and the deterministic
+#: fallback, so the dashboard renders one shape whichever produced it.
+SECTION_SITUATION = "SITUATION"
+SECTION_SIGNALS = "CROSS-DOMAIN SIGNALS"
+SECTION_DOMAINS = "DOMAIN ASSESSMENT"
+SECTION_AREAS = "AFFECTED AREAS"
+SECTION_ACTIONS = "RECOMMENDED ACTIONS"
+SECTION_GAPS = "DATA GAPS"
+
+SECTION_ORDER = (
+    SECTION_SITUATION, SECTION_SIGNALS, SECTION_DOMAINS,
+    SECTION_AREAS, SECTION_ACTIONS, SECTION_GAPS,
+)
+
+
+def _domain_answer(ds: Any) -> str:
+    """The most substantive sentence a domain has to offer, if any."""
+    findings = []
+    dumped = ds.model_dump(mode="json") if hasattr(ds, "model_dump") else dict(ds)
+    findings = dumped.get("findings") or []
+    for f in findings:
+        if isinstance(f, dict) and f.get("data_kind") != "unavailable":
+            answer = str(f.get("answer") or "").strip()
+            if answer:
+                return answer
+    return ""
+
+
+def build_report_sections(report: Any) -> Dict[str, List[str]]:
+    """Project a coordinator report into the structured City Situation.
+
+    Everything here comes from the deterministic coordinator output - domain
+    statuses, validated cross-domain impacts, affected zones, recommendations
+    and data gaps - so the structure can never claim anything the coordinator
+    did not conclude.
+    """
     if report is None:
-        return None
+        return {}
     ni = build_narrative_input(report)
     if ni is None:
-        return ("City situation unavailable: no domain reported a usable status, "
-                "and no validated findings are available.")
+        return {}
 
-    parts = [
+    sections: Dict[str, List[str]] = {name: [] for name in SECTION_ORDER}
+
+    headline = (
         f"City status {ni.overall_city_status} (risk {ni.overall_risk_level}, "
         f"confidence {ni.confidence})."
-    ]
-    if ni.findings:
-        parts.append("Validated findings: " + "; ".join(ni.findings[:3]) + ".")
+    )
+    if ni.cross_domain_impacts:
+        # Phrased so the count is not glued to a word: the grounding validator
+        # reads "1 cross-domain" as a measured quantity and would reject it.
+        headline += (
+            f" Validated cross-domain signals: {len(ni.cross_domain_impacts)}."
+        )
+    sections[SECTION_SITUATION].append(headline)
+
+    # --- Cross-domain signals: the whole point of the coordinator. ---
+    for impact in ni.cross_domain_impacts:
+        domains = ", ".join(impact.get("domains_involved") or []) or "city"
+        line = f"[{str(impact.get('severity', '')).upper()}] {domains}: " \
+               f"{impact.get('description', '')}"
+        evidence = impact.get("evidence") or []
+        if evidence:
+            line += " Evidence: " + "; ".join(str(e) for e in evidence[:3]) + "."
+        sections[SECTION_SIGNALS].append(line)
+
+    if ni.priority_incidents:
+        for inc in ni.priority_incidents:
+            sections[SECTION_SIGNALS].append(
+                f"Priority incident [{str(inc.get('severity', '')).upper()}] "
+                f"{inc.get('type', '')}: {inc.get('description', '')}"
+            )
+
+    # --- Per-domain assessment, most severe first. ---
+    ranked = sorted(
+        ni.domains,
+        key=lambda d: (d.available, str(d.risk or d.status or "")),
+    )
+    for dom in ranked:
+        status = str(dom.risk or dom.status or "UNASSESSED")
+        label = dom.domain.replace("_", " ").title()
+        answer = ""
+        dumped = getattr(report, "domain_status", {}) or {}
+        raw = dumped.get(dom.domain) if hasattr(dumped, "get") else None
+        if raw is not None:
+            answer = _domain_answer(raw)
+        line = f"{label}: {status}."
+        if answer:
+            line += f" {answer}"
+        sections[SECTION_DOMAINS].append(line)
+
     if ni.affected_zones:
-        parts.append(f"Affected zones: {', '.join(ni.affected_zones[:5])}.")
+        sections[SECTION_AREAS].append(", ".join(ni.affected_zones[:10]))
+
+    for rec in ni.recommendations:
+        sections[SECTION_ACTIONS].append(rec)
+
     if ni.unavailable_domains:
-        parts.append(
+        sections[SECTION_GAPS].append(
             "Could not be assessed: " + ", ".join(ni.unavailable_domains)
             + ". Absence of data is not evidence of normal conditions."
         )
-    return " ".join(parts)
+    # Only genuine gaps belong here. The coordinator's methodology notes (it is a
+    # rule engine, confidence derives from three core domains, and so on) are
+    # provenance, not gaps - listing them under "data gaps" told the operator
+    # the system had more missing data than it actually did.
+    gaps = [
+        str(x) for x in (getattr(report, "data_gaps", None) or [])
+        if str(x).strip()
+    ]
+    sections[SECTION_GAPS].extend(gaps)
+
+    return {k: v for k, v in sections.items() if v}
+
+
+def render_sections(sections: Dict[str, List[str]]) -> str:
+    """Render structured sections as plain text with stable headings."""
+    if not sections:
+        return ""
+    lines: List[str] = []
+    for name in SECTION_ORDER:
+        body = sections.get(name) or []
+        if not body:
+            continue
+        lines.append(name)
+        lines.extend(body)
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def deterministic_summary(report: Any) -> Optional[str]:
+    """Always-available structured City Situation. Never invents; never fails."""
+    if report is None:
+        return None
+    sections = build_report_sections(report)
+    if not sections:
+        return ("City situation unavailable: no domain reported a usable status, "
+                "and no validated findings are available.")
+    return render_sections(sections)
 
 
 def deterministic_summary_from_domains(domain_status: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -332,9 +452,12 @@ def validate_narrative(text: Optional[str], narrative_input: NarrativeInput) -> 
 
     narrative = text.strip()
 
-    # 1. Length bound: the City Situation is a concise paragraph.
+    # 1. Length bound. The City Situation is a structured operational report -
+    # situation, cross-domain signals, per-domain assessment, areas, actions and
+    # data gaps - not a single paragraph. The bound keeps it a briefing rather
+    # than a dump; grounding (below) is what protects accuracy, not brevity.
     words = narrative.split()
-    if len(words) > 140:
+    if len(words) > _MAX_NARRATIVE_WORDS:
         reasons.append(f"narrative too long ({len(words)} words)")
 
     # 2. No leaked instructions or secrets.

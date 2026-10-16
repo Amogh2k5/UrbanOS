@@ -34,8 +34,23 @@ const DOMAIN_ICON: Record<string, string> = {
   drain_flood_context: "Water + Flood",
   weather_flood: "Weather + Flood",
   air_quality_weather: "Air Quality + Weather",
-  multi_domain_high_risk: "Multiple domains",
+  air_quality_traffic: "Air Quality + Traffic",
+  multi_domain_high_risk: "Multiple systems under strain",
 };
+
+/** `air_quality` -> `Air Quality`. Never leak the raw id into the UI. */
+function domainLabel(domain: string): string {
+  const words = String(domain ?? "").replace(/_/g, " ").trim().split(/\s+/).filter(Boolean);
+  return words.length ? words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") : "City";
+}
+
+/** Human title for a signal type. */
+function signalTitle(impact: CrossDomainImpact): string {
+  if (DOMAIN_ICON[impact.type]) return DOMAIN_ICON[impact.type];
+  const domains = (impact.domains_involved ?? []).map(domainLabel);
+  if (domains.length >= 2) return `${domains.slice(0, 2).join(" + ")} at once`;
+  return domainLabel(impact.type);
+}
 
 interface Props {
   impacts: CrossDomainImpact[] | null | undefined;
@@ -160,9 +175,9 @@ export default function RiskSignals(props: Props) {
                       <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 min-w-0">
                         <Crosshair size={13} className="shrink-0" />
                         <span className="truncate">
-                          {(impact.domains_involved ?? [])
-                            .map((d) => d.charAt(0).toUpperCase() + d.slice(1))
-                            .join(" + ") || DOMAIN_ICON[impact.type] || impact.type}
+                          {(impact.domains_involved ?? []).map(domainLabel).join(" + ") ||
+                            DOMAIN_ICON[impact.type] ||
+                            impact.type}
                         </span>
                       </div>
                       <span
@@ -176,7 +191,7 @@ export default function RiskSignals(props: Props) {
                     </div>
 
                     <h4 className="font-bold text-slate-100 text-sm mb-1">
-                      {DOMAIN_ICON[impact.type] ?? impact.type.replace(/_/g, " ")}
+                      {signalTitle(impact)}
                     </h4>
                     <p data-testid="risk-signal-description" className="text-xs text-slate-300">
                       {impact.description}

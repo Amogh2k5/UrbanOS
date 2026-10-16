@@ -488,10 +488,14 @@ class TestOnlyValidResultsAreCached:
 # ============================================= grounding still intact
 class TestGroundingPreserved:
     def test_validator_still_enforces_the_word_bound(self):
+        """The City Situation is a structured report, so the cap is generous -
+        but it is still a briefing, not a dump."""
+        from backend.app.ai.narrative import _MAX_NARRATIVE_WORDS
+
         ni = build_narrative_input(_plain_report())
-        long_text = "City status DISRUPTED. " * 60   # 180 words, over the 140 cap
-        assert len(long_text.split()) > 140
-        v = validate_narrative(long_text, ni)
+        over_cap = "City status DISRUPTED. " * (_MAX_NARRATIVE_WORDS // 3 + 10)
+        assert len(over_cap.split()) > _MAX_NARRATIVE_WORDS
+        v = validate_narrative(over_cap, ni)
         assert not v.ok
         assert any("too long" in r for r in v.reasons)
 

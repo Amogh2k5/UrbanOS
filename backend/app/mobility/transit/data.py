@@ -991,10 +991,30 @@ class TransitDataStore:
         return inserted
 
     def get_latest_train_alerts(self, limit: int = 50) -> List[StoredTrainAlert]:
+        """Most recent *distinct* advisories, newest sighting first.
+
+        The collector re-runs on a timer and re-inserts every advisory each cycle,
+        because the insert-level duplicate check includes ``fetched_at`` - a value
+        that changes on every run. Counting raw rows therefore reported a single
+        advisory many times over: measured, 7 stored rows held 1 distinct message,
+        and the Overview "Train Alerts" KPI read 5, then 19, minutes apart, for the
+        same one advisory.
+
+        Collapse on the natural key ``(line, message)`` and keep the newest insert.
+        ``cleanup_old_alerts`` prunes rows older than 24h, so the grouping stays
+        bounded to the advisories still in force.
+        """
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT * FROM train_alerts ORDER BY fetched_at DESC LIMIT ?",
-                (limit,)
+                """
+                SELECT * FROM train_alerts
+                WHERE id IN (
+                    SELECT MAX(id) FROM train_alerts GROUP BY line, message
+                )
+                ORDER BY fetched_at DESC
+                LIMIT ?
+                """,
+                (limit,),
             ).fetchall()
             return [StoredTrainAlert(**dict(row)) for row in rows]
 
@@ -1116,6 +1136,14 @@ def bus_stops_snapshot_to_stored(snapshot) -> List[StoredBusStop]:
 
 
 def train_alerts_snapshot_to_stored(snapshot) -> List[StoredTrainAlert]:
+    """Project a fetched snapshot onto the storable rows.
+
+    ``category`` must be carried across. It is omitted from the adapter payload
+    and defaulted to ``"rail"`` on ``StoredTrainAlert``, so a bus diversion was
+    stored as a rail alert and then counted by the Overview as a train alert.
+    The adapter classifies every record via ``_classify_alert_category``.
+    """
+    created_at = datetime.now(SG_OFFSET).isoformat()
     return [
         StoredTrainAlert(
             id=0,  # auto-increment
@@ -1126,7 +1154,8 @@ def train_alerts_snapshot_to_stored(snapshot) -> List[StoredTrainAlert]:
             status=a.status,
             source=a.source,
             fetched_at=a.fetched_at,
-            created_at=datetime.now(SG_OFFSET).isoformat(),
+            created_at=created_at,
+            category=getattr(a, "category", None) or "rail",
         )
         for a in snapshot.alerts
     ]

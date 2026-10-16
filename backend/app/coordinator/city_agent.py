@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
 from langgraph.graph import END, StateGraph
 
 from backend.app.intelligence.contracts import (
@@ -95,6 +96,9 @@ class CityCoordinatorState:
     domain_status: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     cross_domain_impacts: List[Dict[str, Any]] = field(default_factory=list)
+    #: Rules evaluated but not raised, with the input that was missing.
+    #: Disclosure only - never contributes to risk, incidents or recommendations.
+    near_misses: List[Dict[str, Any]] = field(default_factory=list)
     priority_incidents: List[Dict[str, Any]] = field(default_factory=list)
     city_level_recommendations: List[str] = field(default_factory=list)
     affected_zones: List[str] = field(default_factory=list)
@@ -187,7 +191,14 @@ def _unavailable(domain: str, error: str) -> Dict[str, Any]:
 def collect_reports(state: CityCoordinatorState) -> CityCoordinatorState:
     """Run every domain agent. No single failure may abort the coordinator."""
     try:
-        state.environment_report = EnvironmentModule().run()
+        # Issue the environment forecast for a current hour. Without this the
+        # module caps t0 at the newest entry in the research weather CSVs
+        # (2024) and reports that as the city environment.
+        t0 = _environment_t0()
+        state.environment_report = (
+            EnvironmentModule().run(prediction_timestamp=t0)
+            if t0 is not None else EnvironmentModule().run()
+        )
         state.source_reports["environment"] = _source_meta(state.environment_report, "environment")
     except Exception as exc:
         state.environment_report = None
@@ -260,6 +271,85 @@ def _pm25_risk(max_pm25: Optional[float]) -> Optional[str]:
     return "HIGH"
 
 
+def _observed_air_quality() -> Dict[str, Any]:
+    """Current NEA PM2.5 observations from the live collector's SQLite store.
+
+    The ML environment module forecasts from the static research dataset, whose
+    weather inputs stop in 2024 - so its forecast is pinned to 2024-12-31 and
+    cannot describe today. The cross-domain air-quality rules must reason about
+    *observed* air quality, which this store keeps current via the PM2.5
+    collector. Same underlying NEA source, read through the store the Overview
+    already uses.
+
+    Never raises: an unreadable store yields an empty result, which the caller
+    treats as "no observation", not as clean air.
+    """
+    try:
+        from backend.app.environment.pm25.data import Pm25ObservationStore
+
+        snapshot = Pm25ObservationStore().get_latest_snapshot() or {}
+    except Exception as exc:  # noqa: BLE001 - evidence must never abort a run
+        log.warning("Observed air quality unavailable: %s", exc)
+        return {"available": False, "reason": str(exc)}
+
+    values: Dict[str, float] = {}
+    observed_at: Optional[str] = None
+    for region, reading in snapshot.items():
+        if not isinstance(reading, dict):
+            continue
+        value = _num(reading.get("value"))
+        if value is None:
+            continue
+        values[str(region)] = value
+        stamp = reading.get("observed_at")
+        if stamp:
+            observed_at = str(stamp)
+
+    if not values:
+        return {"available": False, "reason": "no usable regional reading"}
+
+    return {
+        "available": True,
+        "max_pm25": max(values.values()),
+        "mean_pm25": sum(values.values()) / len(values),
+        "regions": values,
+        "observed_at": observed_at,
+    }
+
+
+def _environment_t0() -> Optional[pd.Timestamp]:
+    """Issuance hour for the environment forecast.
+
+    The module's own default caps t0 by the newest issue in the *research*
+    weather CSVs, which end in 2024, so it silently backdates the whole
+    environment assessment by roughly 22 months and reports a 2024 forecast as
+    current. We ask for a current issuance instead and let the module flag its
+    own stale weather input honestly (it already emits
+    ``weather_forecast_stale:*``), rather than quietly serving last year.
+    """
+    try:
+        from backend.app.environment.pm25.data import Pm25ObservationStore
+
+        stamp = Pm25ObservationStore().get_latest_observation_timestamp()
+        if stamp:
+            latest = pd.Timestamp(stamp)
+            if latest.tzinfo is None:
+                latest = latest.tz_localize(SG)
+            else:
+                latest = latest.tz_convert(SG)
+        else:
+            latest = pd.Timestamp.now(tz=SG)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not derive environment t0; falling back to now: %s", exc)
+        return None
+
+    # D-1 23:00: the issuance cutoff, with a fully observable next-day window.
+    t0 = latest.normalize() - pd.Timedelta(days=1) + pd.Timedelta(hours=23)
+    if t0 > latest:
+        t0 = latest.floor("h")
+    return t0
+
+
 def _normalize_environment(report: Any) -> Dict[str, Any]:
     d = _dump(report)
     regions = d.get("regions") or []
@@ -287,13 +377,44 @@ def _normalize_environment(report: Any) -> Dict[str, Any]:
     flags = [str(f) for f in (d.get("data_quality_flags")
                               or getattr(report, "data_quality_flags", None) or [])]
 
+    # Observed air quality is what the cross-domain rules must judge. The
+    # forecast above comes from a model fed the static research dataset and can
+    # lag real conditions badly, so it is reported but never used as the
+    # evidence for a city-level conclusion.
+    observed = _observed_air_quality()
+    observed_max = observed.get("max_pm25") if observed.get("available") else None
+    forecast_risk = _pm25_risk(max_pm25)
+
+    # The domain's own risk reflects the worse of the two, so a clean forecast
+    # cannot mask unhealthy air that is actually being measured now.
+    air_risk = observed_max if observed_max is not None else max_pm25
+    band = _pm25_risk(air_risk) or "UNKNOWN"
+
+    limitations = ["PM2.5 forecast values are next-day model predictions, not observations."]
+    if observed.get("available"):
+        limitations.append(
+            "City-level air-quality conclusions use the current NEA observation "
+            f"(observed {observed.get('observed_at')}), not the model forecast."
+        )
+    else:
+        limitations.append(
+            "No current PM2.5 observation was available; only the model forecast "
+            "could be reported."
+        )
+
     return {
         "domain": "environment",
         "available": True,
-        "overall_status": "NORMAL" if _pm25_risk(max_pm25) in (None, "LOW") else "ELEVATED",
-        "overall_risk": _pm25_risk(max_pm25) or "UNKNOWN",
+        "overall_status": "NORMAL" if band in ("LOW",) else "ELEVATED",
+        "overall_risk": band,
         "key_metrics": {
             "max_pm25_next_day_max": max_pm25,
+            "max_pm25_observed": observed_max,
+            "mean_pm25_observed": observed.get("mean_pm25"),
+            "observed_pm25_regions": observed.get("regions", {}),
+            "observed_pm25_at": observed.get("observed_at"),
+            "observed_air_quality_available": bool(observed.get("available")),
+            "forecast_pm25_risk": forecast_risk,
             "region_count": len(regions) or len(getattr(report, "regions", None) or []),
             "weather_forecast_available": weather_available,
             "forecast_date": d.get("forecast_date") or _iso(
@@ -301,12 +422,16 @@ def _normalize_environment(report: Any) -> Dict[str, Any]:
             "data_quality_flags": flags,
         },
         "active_alert_count": 0,
-        "affected_zones": [],
+        "affected_zones": sorted(
+            r for r, v in (observed.get("regions") or {}).items() if _num(v) is not None
+        ),
         "primary_risk_factors": flags,
         "confidence": "medium",
-        "limitations": ["PM2.5 values are next-day model predictions, not observations."],
+        "limitations": limitations,
         "warnings": flags,
-        "errors": [],
+        "errors": [] if observed.get("available") else [
+            str(observed.get("reason") or "observed air quality unavailable")
+        ],
         "is_ml_prediction": True,
         "generated_at": _iso(getattr(report, "generated_at", None) or d.get("generated_at")),
     }
@@ -636,7 +761,10 @@ def prioritize_risks(state: CityCoordinatorState) -> CityCoordinatorState:
 #: place* and therefore warrant their own priority incident. ``weather_flood``
 #: and ``air_quality_weather`` are context for those conditions, not incidents
 #: in their own right, so they inform without duplicating the priority list.
-_INCIDENT_IMPACT_TYPES = ("flood_traffic", "drain_flood_context", "multi_domain_high_risk")
+_INCIDENT_IMPACT_TYPES = (
+    "flood_traffic", "drain_flood_context", "multi_domain_high_risk",
+    "air_quality_traffic",
+)
 
 
 def _incidents_from_impacts(impacts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -675,15 +803,30 @@ def _traffic_bad(s: Dict[str, Any]) -> bool:
     return status in ("disrupted", "critical") or risk in ("HIGH", "CRITICAL")
 
 
+def _domain_label(domain: str) -> str:
+    """Human-readable domain name: ``air_quality`` -> ``Air Quality``."""
+    words = str(domain or "").replace("_", " ").split()
+    return " ".join(w.capitalize() for w in words) if words else str(domain)
+
+
 def analyze_cross_domain_impacts(state: CityCoordinatorState) -> CityCoordinatorState:
     """Raise an impact only where real evidence from both domains exists.
 
     Every impact cites the domains whose own reports justify it. Co-elevation of
     unrelated domains is reported as ``multi_domain_high_risk`` - a count, never
     a causal claim.
+
+    Rules the engine did *not* raise are recorded in ``state.near_misses`` with
+    the specific input that was missing, so "no signals" is explainable rather
+    than a blank panel. A near miss is disclosure only: it never contributes to
+    risk, incidents or recommendations.
     """
     statuses = state.domain_status or {}
     impacts: List[Dict[str, Any]] = []
+    near_misses: List[Dict[str, Any]] = []
+
+    def miss(rule: str, reason: str) -> None:
+        near_misses.append({"rule": rule, "reason": reason})
 
     flood = statuses.get("flood") or {}
     traffic = statuses.get("traffic") or {}
@@ -696,7 +839,16 @@ def analyze_cross_domain_impacts(state: CityCoordinatorState) -> CityCoordinator
     e_ok = bool(env.get("available"))
     e_km = env.get("key_metrics") or {}
     weather = bool(e_km.get("weather_forecast_available"))
-    max_pm25 = _num(e_km.get("max_pm25_next_day_max"))
+    # Judge air quality on the current observation. The model forecast is fed
+    # the static research dataset and can sit far below what is measured now.
+    obs_pm25 = _num(e_km.get("max_pm25_observed"))
+    max_pm25 = obs_pm25 if obs_pm25 is not None else _num(
+        e_km.get("max_pm25_next_day_max"))
+    obs_regions = {
+        str(k): _num(v)
+        for k, v in (e_km.get("observed_pm25_regions") or {}).items()
+        if _num(v) is not None
+    }
 
     f_zones = [str(z) for z in (flood.get("affected_zones") or [])]
     t_zones = [str(z) for z in (traffic.get("affected_zones") or [])]
@@ -717,8 +869,9 @@ def analyze_cross_domain_impacts(state: CityCoordinatorState) -> CityCoordinator
         impacts.append({
             "type": "flood_traffic",
             "description": (
-                f"{f_risk} flood risk coincides with {traffic.get('overall_status')} traffic "
-                f"conditions" + (f" in {', '.join(zones)}." if zones else ".")
+                f"Roads are {traffic.get('overall_status')} while flood risk sits at {f_risk}"
+                + (f", in the same area{'' if len(zones) == 1 else 's'} "
+                   f"({', '.join(zones)})." if zones else ".")
             ),
             "severity": "HIGH",
             "affected_zones": zones,
@@ -735,8 +888,8 @@ def analyze_cross_domain_impacts(state: CityCoordinatorState) -> CityCoordinator
         impacts.append({
             "type": "weather_flood",
             "description": (
-                f"Weather conditions accompany {f_risk} flood risk"
-                + (f" affecting {', '.join(f_zones)}." if f_zones else ".")
+                f"Today's weather forecast is consistent with the {f_risk} flood risk"
+                + (f", affecting {', '.join(f_zones)}." if f_zones else ".")
             ),
             "severity": "HIGH",
             "affected_zones": f_zones,
@@ -746,21 +899,92 @@ def analyze_cross_domain_impacts(state: CityCoordinatorState) -> CityCoordinator
 
     # --- air quality + weather: only at the PSI "unhealthy" boundary.
     if e_ok and weather and max_pm25 is not None and max_pm25 >= _PM25_IMPACT_THRESHOLD:
+        basis = "observed" if obs_pm25 is not None else "forecast"
+        unhealthy_now = sorted(r for r, v in obs_regions.items()
+                               if v is not None and v >= _PM25_IMPACT_THRESHOLD)
+        because_clause = (
+            f" in {', '.join(unhealthy_now)}" if unhealthy_now else " citywide"
+        )
+        weather_phrase = "thundery showers" if weather else "showers"
         evidence = [
-            f"Forecast maximum PM2.5 of {max_pm25} µg/m³, at or above the "
-            f"{int(_PM25_IMPACT_THRESHOLD)} µg/m³ unhealthy boundary.",
+            f"NEA measured a PM2.5 peak of {max_pm25:g} µg/m³ at "
+            f"{e_km.get('observed_pm25_at') or 'the latest observation'}.",
             "NEA weather forecast present in the environment report.",
         ]
         impacts.append({
             "type": "air_quality_weather",
             "description": (
-                f"Forecast PM2.5 reaches {max_pm25} µg/m³ alongside the current weather forecast."
+                f"Air is unhealthy{because_clause} while the NEA has "
+                f"{weather_phrase} in today's forecast. Wet weather and poor air "
+                f"often arrive together this time of year, but we have no data "
+                f"that links the two."
             ),
             "severity": "HIGH",
-            "affected_zones": [],
+            "affected_zones": [r for r, v in obs_regions.items()
+                                if v is not None and v >= _PM25_IMPACT_THRESHOLD],
             "domains_involved": ["air_quality", "weather"],
             "evidence": evidence,
         })
+    elif e_ok:
+        miss(
+            "air_quality_weather",
+            f"PM2.5 {max_pm25:g} µg/m³ is below the "
+            f"{int(_PM25_IMPACT_THRESHOLD)} µg/m³ boundary." if max_pm25 is not None
+            else "no PM2.5 observation or forecast available.",
+        )
+
+    # --- air quality + traffic.
+    # Unhealthy air and disrupted traffic are each independently operationally
+    # significant and both are observed directly, so their coincidence is a real
+    # picture worth an operator's attention. Neither side is assumed from the
+    # other: each carries its own measurement.
+    if (e_ok and t_bad and obs_pm25 is not None
+            and obs_pm25 >= _PM25_IMPACT_THRESHOLD):
+        unhealthy = sorted(r for r, v in obs_regions.items()
+                           if v is not None and v >= _PM25_IMPACT_THRESHOLD)
+        evidence = [
+            f"NEA measured a PM2.5 peak of {obs_pm25:g} µg/m³ at "
+            f"{e_km.get('observed_pm25_at') or 'the latest observation'}.",
+            f"Regions at or above the {int(_PM25_IMPACT_THRESHOLD)} µg/m³ "
+            f"unhealthy boundary: {', '.join(unhealthy)}."
+            if unhealthy else
+            f"Citywide peak of {obs_pm25:g} µg/m³.",
+            f"Road speeds independently reported as "
+            f"{traffic.get('overall_status')}.",
+        ]
+        if t_zones:
+            evidence.append(f"Affected roads are around {', '.join(t_zones)}.")
+        impacts.append({
+            "type": "air_quality_traffic",
+            "description": (
+                f"Unhealthy air and slow roads are happening at the same time. "
+                f"The worst air is over {', '.join(unhealthy)}"
+                f"{' and' if t_zones else ''} traffic is disrupted across "
+                f"{', '.join(t_zones) if t_zones else 'the network'}. "
+                f"Treat them as two separate problems that overlap, and plan "
+                f"exposure and journeys together."
+            ),
+            "severity": "HIGH",
+            "affected_zones": sorted(set(unhealthy) | set(t_zones)),
+            "domains_involved": ["air_quality", "traffic"],
+            "evidence": evidence,
+        })
+    elif e_ok and t_bad:
+        miss(
+            "air_quality_traffic",
+            f"Observed PM2.5 {obs_pm25:g} µg/m³ is below the "
+            f"{int(_PM25_IMPACT_THRESHOLD)} µg/m³ boundary."
+            if obs_pm25 is not None else "no current PM2.5 observation available.",
+        )
+
+    if f_ok and t_bad:
+        pass
+    else:
+        miss(
+            "flood_traffic",
+            f"flood risk is {f_risk}, not HIGH/CRITICAL"
+            if flood.get("available") else "flood domain unavailable",
+        )
 
     # --- water + flood: requires *measured* drain loading, not an assumption.
     w_km = water.get("key_metrics") or {}
@@ -779,15 +1003,23 @@ def analyze_cross_domain_impacts(state: CityCoordinatorState) -> CityCoordinator
             impacts.append({
                 "type": "drain_flood_context",
                 "description": (
-                    f"Measured drain loading ({stressed}% of reference depth) coincides "
-                    f"with {f_risk} flood risk"
-                    + (f" affecting {', '.join(f_zones)}." if f_zones else ".")
+                    f"Drains are carrying {stressed:g}% of their reference depth while "
+                    f"flood risk is {f_risk}"
+                    + (f", in {', '.join(f_zones)}." if f_zones else ".")
                 ),
                 "severity": sev,
                 "affected_zones": f_zones,
                 "domains_involved": ["water", "flood"],
                 "evidence": evidence,
             })
+        else:
+            miss("drain_flood_context", "no measured drain loading available")
+    else:
+        miss(
+            "drain_flood_context",
+            "PUB drain sensors are not reporting" if water.get("available")
+            else "water domain unavailable",
+        )
 
     # --- multi-domain: a count of independently elevated domains. This is
     # explicitly not a causal claim; the description says so.
@@ -796,20 +1028,28 @@ def analyze_cross_domain_impacts(state: CityCoordinatorState) -> CityCoordinator
         if isinstance(s, dict) and str(s.get("overall_risk") or "").upper() in ("HIGH", "CRITICAL")
     ]
     if len(high_domains) >= 2:
+        named = " and ".join(_domain_label(d) for d in high_domains)
         impacts.append({
             "type": "multi_domain_high_risk",
             "description": (
-                f"{len(high_domains)} domains independently report HIGH or CRITICAL risk "
-                f"({', '.join(high_domains)}). No causal link between them is asserted."
+                f"{named} are both under strain right now. Each is measured "
+                f"independently. No causal link between them is asserted — "
+                f"treat them as separate problems that happen to overlap."
             ),
             "severity": "CRITICAL" if len(high_domains) >= 3 else "HIGH",
             "affected_zones": [],
             "domains_involved": high_domains,
             "evidence": [
-                f"{d} reports {str(statuses[d].get('overall_risk')).upper()} risk."
+                f"{_domain_label(d)} reports {str(statuses[d].get('overall_risk')).upper()} risk."
                 for d in high_domains
             ],
         })
+    else:
+        miss(
+            "multi_domain_high_risk",
+            f"{len(high_domains)} domain is at HIGH/CRITICAL; two are needed"
+            if high_domains else "no domain is at HIGH/CRITICAL",
+        )
 
     impacts.sort(
         key=lambda i: _RISK_ORDER.get(i.get("severity", "LOW"), 0), reverse=True)
@@ -817,6 +1057,9 @@ def analyze_cross_domain_impacts(state: CityCoordinatorState) -> CityCoordinator
     # Priority incidents follow directly from the validated impacts, so a
     # caller that runs only this node still gets an actionable list.
     state.priority_incidents = _incidents_from_impacts(impacts)
+    # Disclosure only. Near misses are dropped from the impact list so they can
+    # never reach risk, incidents or recommendations.
+    state.near_misses = near_misses
     return state
 
 
@@ -841,6 +1084,11 @@ _IMPACT_RECO = {
         "WATER",
         "Measured drain loading coincides with flood risk. Review drain capacity "
         "and flood readings together before deploying crews to {zones}.",
+    ),
+    "air_quality_traffic": (
+        "AIR QUALITY + TRAFFIC",
+        "Unhealthy air quality and disrupted traffic occur together. Advise "
+        "sensitive groups and expect reduced road speeds around {zones}.",
     ),
     "multi_domain_high_risk": (
         "MULTI-DOMAIN CRITICAL",
@@ -993,6 +1241,16 @@ def build_report(state: CityCoordinatorState) -> CityCoordinatorState:
         if e not in limitations:
             limitations.append(str(e))
 
+    # Genuine gaps, one sentence each, so the narrative's "data gaps" section
+    # says what is actually missing rather than repeating methodology notes.
+    data_gaps: List[str] = []
+    for domain, s in sorted((state.domain_status or {}).items()):
+        if not isinstance(s, dict) or s.get("available"):
+            continue
+        reason = str(s.get("error") or "").strip()
+        data_gaps.append(f"{domain.title()}: {reason}" if reason
+                         else f"{domain.title()}: could not be assessed.")
+
     state.report = CitySituationReport(
         generated_at=_iso(state.generated_at) if getattr(state, "generated_at", None)
         else datetime.now(SG).isoformat(),
@@ -1001,11 +1259,13 @@ def build_report(state: CityCoordinatorState) -> CityCoordinatorState:
         domain_status=statuses,
         priority_incidents=incidents,
         cross_domain_impacts=impacts,
+        near_misses=state.near_misses or [],
         city_level_recommendations=state.city_level_recommendations or [],
         affected_zones=state.affected_zones or [],
         evidence=evidence,
         confidence=state.confidence,  # type: ignore[arg-type]
         limitations=limitations,
+        data_gaps=data_gaps,
         source_reports=state.source_reports or {},
         warnings=list(state.warnings),
         errors=list(state.errors),

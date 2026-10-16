@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 from datetime import datetime
@@ -340,51 +341,28 @@ async def get_road_speed_context() -> Dict[str, Any]:
 
 @router.get("/analytics/summary")
 async def get_roads_analytics() -> Dict[str, Any]:
-    """Get roads analytics summary."""
+    """Roads analytics summary.
+
+    Delegates to the shared aggregator so this route and the Overview get the
+    same bounded, failure-isolated result. It previously fetched all three LTA
+    feeds sequentially and unbounded, so a degraded upstream produced a 19s
+    failure here and a 120s hang on /speed-context's sibling paths.
+    """
     try:
-        # Fetch all data
-        raw_works = list(RoadWorksApiClient().fetch_all())
-        raw_openings = list(RoadOpeningsApiClient().fetch_all())
-        raw_stands = TaxiStandsApiClient().fetch()
-        
-        # Process raw data into Pydantic models
-        road_works = RoadDataProcessor.process_road_works(raw_works)
-        road_openings = RoadDataProcessor.process_road_openings(raw_openings)
-        taxi_stands = RoadDataProcessor.process_taxi_stands(raw_stands)
-        
-        # Road works stats
-        active_works = [w for w in road_works if w.is_active]
-        upcoming_works = [w for w in road_works if w.is_upcoming]
-        completed_works = [w for w in road_works if not w.is_active and not w.is_upcoming]
-        
-        # Road openings stats
-        active_openings = [o for o in road_openings if o.is_active]
-        upcoming_openings = [o for o in road_openings if o.is_upcoming]
-        
-        # Taxi stands stats
-        bfa_stands = [s for s in taxi_stands if s.is_bfa_accessible]
-        ownership_counts = {}
-        for s in taxi_stands:
-            ownership_counts[s.ownership] = ownership_counts.get(s.ownership, 0) + 1
-        
+        from backend.app.mobility.roads.aggregator import get_roads_snapshot
+
+        snap = await asyncio.to_thread(get_roads_snapshot)
         return {
-            "road_works": {
-                "total": len(road_works),
-                "active": len(active_works),
-                "upcoming": len(upcoming_works),
-                "completed": len(completed_works),
-            },
-            "road_openings": {
-                "total": len(road_openings),
-                "active": len(active_openings),
-                "upcoming": len(upcoming_openings),
-            },
-            "taxi_stands": {
-                "total": len(taxi_stands),
-                "bfa_accessible": len(bfa_stands),
-                "by_ownership": ownership_counts,
-            },
-            "timestamp": datetime.now().isoformat()
+            "road_works": snap.get("road_works"),
+            "road_openings": snap.get("road_openings"),
+            "taxi_stands": snap.get("taxi_stands"),
+            "timestamp": snap.get("fetched_at"),
+            "source_status": snap.get("source_status"),
+            "partial": snap.get("partial", False),
+            "stale": snap.get("stale", False),
+            "age_seconds": snap.get("age_seconds"),
+            "unavailable_sources": snap.get("unavailable_sources", []),
+            "warnings": snap.get("warnings", []),
         }
     except Exception as e:
         log.exception("Failed to generate analytics")

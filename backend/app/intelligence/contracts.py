@@ -174,6 +174,11 @@ class CitySituationReport(BaseModel):
     domain_status: Dict[str, DomainStatus] = Field(default_factory=dict)
     priority_incidents: List[PriorityIncident] = Field(default_factory=list)
     cross_domain_impacts: List[CrossDomainImpact] = Field(default_factory=list)
+    #: Cross-domain rules that were evaluated and did not fire, each with the
+    #: specific input that was missing. Disclosure only: a near miss is never a
+    #: signal, never an incident and never a recommendation, so "no signals"
+    #: can be explained rather than left blank.
+    near_misses: List[Dict[str, Any]] = Field(default_factory=list)
     city_level_recommendations: List[str] = Field(default_factory=list)
     affected_zones: List[str] = Field(default_factory=list)
 
@@ -182,6 +187,10 @@ class CitySituationReport(BaseModel):
     limitations: List[str] = Field(default_factory=list)
     source_reports: Dict[str, Any] = Field(default_factory=dict)
     warnings: List[str] = Field(default_factory=list)
+    #: Genuine data gaps only - domains that could not be assessed. Kept apart
+    #: from ``limitations`` (methodology notes) so "data gaps" never overstates
+    #: how much data is actually missing.
+    data_gaps: List[str] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
     is_ml_prediction: bool = False
 

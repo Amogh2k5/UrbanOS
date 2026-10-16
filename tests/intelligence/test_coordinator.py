@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import contextlib
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -212,6 +212,128 @@ def test_no_impact_when_flood_domain_is_missing():
                                  "key_metrics": {}, "error": "down"}
     out = analyze_cross_domain_impacts(st)
     assert not out.cross_domain_impacts
+
+
+def test_observed_air_quality_drives_the_environment_domain():
+    """The cross-domain air-quality rules must judge what is measured now, not
+    a model forecast fed by the static research dataset (which ends in 2024)."""
+    from backend.app.coordinator import city_agent
+
+    observed = {
+        "available": True, "max_pm25": 119.0, "mean_pm25": 101.0,
+        "regions": {"west": 119.0, "east": 114.0, "central": 105.0, "north": 60.0},
+        "observed_at": "2026-10-17T03:00:00+08:00",
+    }
+    rep = MagicMock()
+    rep.regions = [{"pm25_next_day_max": 20.0}]
+    rep.weather_forecast = {"forecast_code": "TS"}
+    rep.data_quality_flags = []
+    rep.generated_at = "2026-10-17T03:00:00+08:00"
+    rep.model_dump.return_value = {"regions": [{"pm25_next_day_max": 20.0}]}
+    rep.model_dump.side_effect = lambda **kw: {"regions": [{"pm25_next_day_max": 20.0}]}
+
+    with patch.object(city_agent, "_observed_air_quality", lambda: observed):
+        out = city_agent._normalize_environment(rep)
+
+    assert out["overall_risk"] == "HIGH"          # 119 is above the PSI high band
+    assert out["key_metrics"]["max_pm25_observed"] == 119.0
+    assert out["key_metrics"]["max_pm25_next_day_max"] == 20.0
+    assert "west" in out["affected_zones"]
+    # And the forecast is still reported, just not used as the conclusion.
+    assert out["key_metrics"]["forecast_pm25_risk"] == "LOW"
+
+
+def test_unhealthy_air_and_disrupted_traffic_produce_a_validated_signal():
+    """Regression: the engine could never pair these, so it produced nothing
+    while the city genuinely had two problems at once."""
+    st = _state_with_status(
+        traffic={"available": True, "overall_status": "disrupted", "overall_risk": "HIGH",
+                 "affected_zones": ["West North"], "key_metrics": {}, "limitations": []},
+        environment={
+            "available": True, "overall_status": "ELEVATED", "overall_risk": "HIGH",
+            "affected_zones": ["west"],
+            "key_metrics": {
+                "max_pm25_observed": 119.0,
+                "observed_pm25_regions": {"west": 119.0, "east": 114.0},
+                "observed_pm25_at": "2026-10-17T03:00:00+08:00",
+                "weather_forecast_available": True,
+            },
+            "limitations": [],
+        },
+    )
+    out = analyze_cross_domain_impacts(st)
+    aq_traffic = [i for i in out.cross_domain_impacts if i["type"] == "air_quality_traffic"]
+
+    assert len(aq_traffic) == 1
+    impact = aq_traffic[0]
+    # Both sides carry their own evidence; neither is inferred from the other.
+    assert any("119" in e for e in impact["evidence"])
+    assert any("disrupted" in e for e in impact["evidence"])
+    assert impact["evidence"]                       # never empty
+    assert set(impact["domains_involved"]) == {"air_quality", "traffic"}
+    # It becomes an actionable priority incident, not just a count.
+    assert any(i["type"] == "air_quality_traffic" for i in out.priority_incidents)
+
+
+def test_healthy_air_with_disrupted_traffic_produces_no_air_quality_signal():
+    """The rule must not fire on traffic alone."""
+    st = _state_with_status(
+        traffic={"available": True, "overall_status": "disrupted", "overall_risk": "HIGH",
+                 "affected_zones": ["West North"], "key_metrics": {}, "limitations": []},
+        environment={
+            "available": True, "overall_status": "NORMAL", "overall_risk": "LOW",
+            "affected_zones": [],
+            "key_metrics": {"max_pm25_observed": 40.0,
+                            "observed_pm25_regions": {"west": 40.0},
+                            "weather_forecast_available": True},
+            "limitations": [],
+        },
+    )
+    out = analyze_cross_domain_impacts(st)
+    types = [i["type"] for i in out.cross_domain_impacts]
+    assert "air_quality_traffic" not in types
+    # ...and the engine explains why it did not fire.
+    assert any(m["rule"] == "air_quality_traffic" for m in out.near_misses)
+
+
+def test_near_misses_never_become_signals():
+    """A near miss is disclosure only: it must not reach incidents or risk."""
+    st = _state_with_status(
+        flood={"available": True, "overall_risk": "LOW", "affected_zones": [],
+               "key_metrics": {}, "limitations": []},
+        traffic={"available": True, "overall_status": "normal", "overall_risk": "LOW",
+                 "affected_zones": [], "key_metrics": {}, "limitations": []},
+    )
+    out = analyze_cross_domain_impacts(st)
+    assert out.cross_domain_impacts == []
+    assert out.priority_incidents == []
+    assert out.near_misses
+
+
+def test_data_gaps_lists_only_real_gaps_not_methodology_notes():
+    """Regression: the Data Gaps section repeated the coordinator's own
+    methodology notes, overstating how much data was missing."""
+    from backend.app.coordinator.city_agent import CityCoordinatorState, build_report
+    from backend.app.coordinator.city_agent import _normalize_crime
+
+    state = CityCoordinatorState()
+    state.domain_status = {
+        "crime": {**_normalize_crime(None), "available": False,
+                  "error": "Crime statistics are unavailable for the published period."},
+        "land": {"available": True, "overall_status": "NORMAL", "overall_risk": "LOW",
+                 "key_metrics": {}, "limitations": [], "affected_zones": []},
+    }
+    state.warnings = ["Water report unavailable"]
+    state.errors = ["Fire Agent failed"]
+
+    report = build_report(state).report
+
+    assert report.data_gaps
+    joined = " ".join(report.data_gaps).lower()
+    assert "crime" in joined
+    # Methodology boilerplate must not be dressed up as a data gap.
+    assert "deterministic rule engine" not in joined
+    assert "core domains" not in joined
 
 
 def test_co_elevated_domains_are_counted_but_never_causally_linked():

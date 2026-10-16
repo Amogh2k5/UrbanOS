@@ -18,7 +18,6 @@ import {
   formatKpiValue,
   statusLabel,
   statusTextClass,
-  moduleStatusBand,
 } from "./presentation";
 
 const ICONS: Record<string, LucideIcon> = {
@@ -64,8 +63,14 @@ export default function DomainKpiGrid({
         {(modules ?? []).map((mod) => {
           const Icon = ICONS[mod.id] ?? Sparkles;
           const accent = accentFor(mod.id);
-          const unavailable = moduleStatusBand(mod.status) === "unavailable";
-          const kpiText = unavailable ? null : formatKpiValue(mod.kpi?.value, mod.kpi?.unit);
+          // Status and metric are independent facts. The backend only supplies
+          // a KPI when a real measurement exists, so show whichever one it gave
+          // us: water, for example, has a genuine potable-sales reading while
+          // its risk assessment is unavailable. Suppressing the metric whenever
+          // status is "unavailable" threw away a real number and made the card
+          // look broken. formatKpiValue already returns null for no value, so
+          // an absent KPI still renders "Unavailable".
+          const kpiText = formatKpiValue(mod.kpi?.value, mod.kpi?.unit);
 
           return (
             <Link
