@@ -22,6 +22,7 @@ Two access modes, because the two callers want opposite things:
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import threading
 import time
@@ -46,7 +47,11 @@ _generation = 0
 
 #: Whether a cold read may start a background coordinator run. Turning this off
 #: is a test hook: it keeps the suite from launching real ~74s runs.
-_background_enabled = True
+#:
+#: Defaults from the environment so a process that must not reach live sources
+#: (the test session) can opt out before this module is even imported, which a
+#: runtime setter could not guarantee.
+_background_enabled = os.getenv("URBANOS_COORDINATOR_BACKGROUND", "1") != "0"
 
 
 def set_background_runs_enabled(enabled: bool) -> None:
@@ -157,6 +162,35 @@ def _start_background_run() -> bool:
     threading.Thread(target=_run, name="urbanos-city-coordinator", daemon=True).start()
     log.info("City coordinator background run started.")
     return True
+
+
+def start_coordinator_warmup() -> None:
+    """Begin one coordinator run at startup so the cache is warm.
+
+    A measured run takes ~74s. Without this, the first dashboard request after a
+    restart always finds a cold cache and can only show per-domain evidence,
+    leaving the City Situation pending until the run finishes. Prewarming closes
+    that window, and mirrors the warm-up Water and Land already perform.
+
+    Honours :data:`_background_enabled`, so a process that must not reach live
+    sources simply skips it. Fire and forget either way: a failed run is logged,
+    the cache stays empty, and the next request starts another through the
+    normal accessor.
+    """
+    with _run_lock:
+        if not _background_enabled:
+            log.info("City coordinator warm-up skipped: background runs disabled.")
+            return
+
+    def _run() -> None:
+        try:
+            city_report_cached()
+        except Exception:
+            log.exception("City coordinator warm-up failed.")
+
+    threading.Thread(target=_run, name="urbanos-city-coordinator-warmup",
+                     daemon=True).start()
+    log.info("City coordinator warm-up started.")
 
 
 def coordinator_run_in_flight() -> bool:

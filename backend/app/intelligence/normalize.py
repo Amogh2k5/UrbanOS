@@ -70,6 +70,16 @@ def _num(value: Any) -> Optional[float]:
     return None
 
 
+def _risk_level_text(raw: Any) -> str:
+    """Normalise a risk-level field to an upper-case string.
+
+    Accepts a plain string or a ``str``-Enum member (the Flood agent reports
+    ``FloodRiskLevel``), because ``str()`` on an enum member yields
+    ``"FloodRiskLevel.LOW"`` - a string no status rule would ever match.
+    """
+    return str(getattr(raw, "value", raw) or "").strip().upper()
+
+
 def _mk(
     domain: str,
     suffix: str,
@@ -123,11 +133,26 @@ def _unavailable_finding(domain: str, reason: str, question: Optional[str] = Non
 
 
 # --------------------------------------------------------------- module KPIs
+def _count_kpi(label: str, value: Any) -> Optional[Dict[str, Any]]:
+    """KPI for a plain count, or ``None`` when the count is not a real reading.
+
+    Rejects ``None``, non-numeric strings and sentinel placeholders such as
+    ``"n/a"``: rendering one of those as a headline number would present a data
+    gap as a measurement. An explicit numeric ``0`` is a reading and is kept.
+    """
+    count = _num(value)
+    if count is None:
+        return None
+    return {"label": label, "value": int(count), "unit": ""}
+
+
 def build_kpi(module_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Single headline metric per module, or None when unsupported.
 
     Returned shape matches the existing ``ModuleKPI`` contract so the overview
-    cards keep working unchanged.
+    cards keep working unchanged. ``None`` is returned whenever the underlying
+    value is absent or malformed, so the card renders "Unavailable" instead of
+    a placeholder that reads like a measurement.
     """
     if module_id == "traffic":
         speed = _num(data.get("overall_average_speed"))
@@ -137,34 +162,37 @@ def build_kpi(module_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if congestion:
             return {"label": "Congestion", "value": str(congestion).replace("_", " ").title(), "unit": ""}
     elif module_id == "roads":
-        active = (data.get("road_works") or {}).get("active")
-        if active is not None:
-            return {"label": "Active Road Works", "value": active, "unit": ""}
+        road_works = data.get("road_works")
+        active = road_works.get("active") if isinstance(road_works, dict) else None
+        return _count_kpi("Active Road Works", active)
     elif module_id == "transit":
-        alerts = data.get("active_train_alerts")
-        if alerts is not None:
-            return {"label": "Train Alerts", "value": alerts, "unit": ""}
+        return _count_kpi("Train Alerts", data.get("active_train_alerts"))
     elif module_id == "pm25":
-        regions = data.get("regions") or {}
+        regions = data.get("regions")
         values = [
-            _num(v.get("value")) for v in regions.values()
-            if isinstance(v, dict)
-        ]
-        values = [v for v in values if v is not None]
+            v for v in (_num(r.get("value")) for r in regions.values()
+                        if isinstance(r, dict))
+            if v is not None
+        ] if isinstance(regions, dict) else []
         if values:
             return {"label": "Current PM2.5", "value": round(sum(values) / len(values), 1), "unit": "µg/m³"}
     elif module_id == "weather":
-        temp = (data.get("general") or {}).get("temperature_c")
+        # Out of scope for this change: value semantics are unchanged, only the
+        # shape guard is added so a malformed payload cannot raise.
+        general = data.get("general")
+        temp = general.get("temperature_c") if isinstance(general, dict) else None
         if temp is not None:
             return {"label": "Temperature", "value": temp, "unit": "°C"}
     elif module_id == "flood":
-        risk = data.get("risk_level")
-        if risk:
-            return {"label": "Flood Risk", "value": str(risk).replace("_", " ").title(), "unit": ""}
+        risk = _risk_level_text(data.get("risk_level"))
+        # UNKNOWN is the agent saying "no rainfall source was live", which is
+        # not a measurement. Returning None makes the card render "Unavailable"
+        # instead of a value that reads like an observation.
+        if risk in ("LOW", "MODERATE", "HIGH", "CRITICAL"):
+            return {"label": "Flood Risk", "value": risk.title(), "unit": ""}
+        return None
     elif module_id == "fire":
-        active = data.get("active_incident_count")
-        if active is not None:
-            return {"label": "Active Incidents", "value": active, "unit": ""}
+        return _count_kpi("Active Incidents", data.get("active_incident_count"))
     elif module_id == "crime":
         total = _num(data.get("total_physical_crime_2025"))
         if total is not None:
@@ -197,10 +225,22 @@ def build_kpi(module_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 # ------------------------------------------------------------------- status
+#: NEA 24-hour forecast codes that represent convective or rain-bearing weather
+#: rather than settled conditions. Mirrors the set the Flood agent applies to the
+#: same field, so one reading of the source cannot mean "thunderstorm" in one
+#: module and "normal" in another.
+_ELEVATED_FORECAST_CODES = ("TS", "TL", "TRW", "HR")
+
+
 def determine_status(module_id: str, data: Dict[str, Any]) -> str:
     """Deterministic status: normal | elevated | critical | unavailable.
 
     Thresholds are ordered high-to-low so the most severe branch is reachable.
+
+    A domain whose required field is absent, ``None`` or malformed returns
+    ``"unavailable"``. It never falls through to ``"normal"``: absence of data
+    is not evidence of normal conditions. An explicit ``0`` supplied by a valid
+    source *is* a reading and is honoured.
     """
     if data.get("error"):
         return "unavailable"
@@ -214,7 +254,10 @@ def determine_status(module_id: str, data: Dict[str, Any]) -> str:
         return "normal"
 
     if module_id == "roads":
-        active = (data.get("road_works") or {}).get("active") or 0
+        road_works = data.get("road_works")
+        active = _num(road_works.get("active")) if isinstance(road_works, dict) else None
+        if active is None:
+            return "unavailable"
         if active > 500:
             return "critical"
         if active > 100:
@@ -222,16 +265,25 @@ def determine_status(module_id: str, data: Dict[str, Any]) -> str:
         return "normal"
 
     if module_id == "transit":
-        return "elevated" if (data.get("active_train_alerts") or 0) > 10 else "normal"
+        alerts = _num(data.get("active_train_alerts"))
+        if alerts is None:
+            return "unavailable"
+        return "elevated" if alerts > 10 else "normal"
 
     if module_id == "pm25":
-        regions = data.get("regions") or {}
-        if not regions:
-            return "normal"
+        regions = data.get("regions")
+        if not isinstance(regions, dict) or not regions:
+            # No regional readings at all: air quality could not be assessed.
+            return "unavailable"
         values = [
-            _num(v.get("value")) for v in regions.values() if isinstance(v, dict)
+            v for v in (_num(r.get("value")) for r in regions.values()
+                        if isinstance(r, dict))
+            if v is not None
         ]
-        if any(v is not None and v > 100 for v in values):
+        if not values:
+            # Regions present but none carries a usable reading.
+            return "unavailable"
+        if any(v > 100 for v in values):
             return "elevated"
         return "normal"
 
@@ -239,20 +291,36 @@ def determine_status(module_id: str, data: Dict[str, Any]) -> str:
         if data.get("error") == "rate_limited":
             return "unavailable"
         forecast = (data.get("general") or {}).get("forecast_code", "")
-        return "elevated" if forecast in ("TS", "HR") else "normal"
+        # NEA 24h forecast codes. TS/TL/TRW are the convective (thundery
+        # shower / thunderstorm) codes and HR is heavy rain. A live reading of
+        # TL / "Thundery Showers" was being reported as "normal" because only
+        # TS and HR were listed; the Flood agent already treats exactly this set
+        # as thunderstorm evidence, so the two modules disagreed.
+        return "elevated" if forecast in _ELEVATED_FORECAST_CODES else "normal"
 
     if module_id == "flood":
-        risk = str(data.get("risk_level") or "").lower()
-        if risk == "high":
+        risk = _risk_level_text(data.get("risk_level"))
+        if risk == "CRITICAL":
             return "critical"
-        if risk == "moderate":
+        if risk == "HIGH":
+            # Unchanged mapping: HIGH flood has always been the strongest band
+            # this four-value vocabulary offers.
+            return "critical"
+        if risk == "MODERATE":
             return "elevated"
-        return "normal"
+        if risk == "LOW":
+            return "normal"
+        # UNKNOWN, absent or unrecognised: the assessment could not be made.
+        # Never report "normal" here - an absent rainfall reading is not a
+        # dry-weather reading.
+        return "unavailable"
 
     if module_id == "fire":
         active = _num(data.get("active_incident_count"))
         if active is None:
-            return "normal"
+            # The feed returned nothing. Absence of records is not absence of
+            # fires, so this is an unavailable assessment, not a normal one.
+            return "unavailable"
         if active > 5:
             return "critical"
         if active > 0:
@@ -277,7 +345,12 @@ def determine_status(module_id: str, data: Dict[str, Any]) -> str:
             return "critical"
         if risk in ("HIGH", "MODERATE"):
             return "elevated"
-        return "normal"
+        if risk == "LOW":
+            return "normal"
+        # UNKNOWN or absent: the water agent could not assess risk (measured:
+        # overall_risk UNKNOWN with drain readings unavailable). Reporting
+        # "normal" asserted a clean bill of health the data does not support.
+        return "unavailable"
 
     if module_id == "land":
         return "normal"
@@ -528,7 +601,10 @@ def normalize_domain_report(module_id: str, data: Dict[str, Any]) -> DomainStatu
     if kpi:
         key_metrics["headline"] = kpi
     for key in ("overall_risk", "risk_level", "overall_status", "confidence",
-                "active_alert_count", "source_status", "is_ml_prediction"):
+                "active_alert_count", "source_status", "is_ml_prediction",
+                # Freshness, for domains that can serve a cached payload
+                # (Roads/LTA). Absent elsewhere; never invented.
+                "stale", "age_seconds", "partial", "unavailable_sources"):
         if data.get(key) is not None:
             key_metrics[key] = data[key]
 

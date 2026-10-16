@@ -71,7 +71,9 @@ SG_OFFSET = timezone(timedelta(hours=8))
 # The coordinator run is expensive (~60s of CPU), so it is coalesced behind a
 # single-flight lock and a short TTL cache shared by /api/city/report and the
 # Overview city endpoint. See backend/app/coordinator/access.py.
-from backend.app.coordinator.access import city_report_cached  # noqa: E402
+from backend.app.coordinator.access import (  # noqa: E402
+    city_report_cached, start_coordinator_warmup,
+)
 
 
 def _build_app() -> FastAPI:
@@ -102,7 +104,14 @@ def _build_app() -> FastAPI:
     except Exception:
         app.state.traffic_client = None
     app.state.traffic_incidents_client = TrafficIncidentsApiClient(offline=offline)
-    app.state.flood_client = FloodAlertsApiClient(offline=offline)
+    # allow_fallback_fixture=False: this client backs a route named
+    # /kpi/live/flood, and the default True made an unreachable PUB endpoint
+    # return the deterministic fixture - two invented "Flash Flood" advisories
+    # dated 2024-12-01 - as a 200 live KPI. Same reason the Flood agent passes
+    # it. An unreachable source is now an explicit error, not fiction.
+    app.state.flood_client = FloodAlertsApiClient(
+        offline=offline, allow_fallback_fixture=False
+    )
 
     # Traffic Agent (LangGraph) - lazy loaded
     app.state.traffic_agent = None
@@ -1016,6 +1025,11 @@ def _build_app() -> FastAPI:
     # Start water warm-up in background thread (datasets are annual/periodic;
     # warm-up avoids first-request latency and fails silently if sources are down)
     start_water_warmup()
+
+    # Same reasoning for the City Coordinator: one background run at startup so
+    # the first dashboard request finds a warm cache instead of a pending city
+    # assessment. Fails silently; the accessor re-runs on demand.
+    start_coordinator_warmup()
 
     return app
 

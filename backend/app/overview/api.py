@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Path, Query, status, Request
 from pydantic import BaseModel, Field
@@ -31,6 +31,14 @@ log = logging.getLogger(__name__)
 SG_OFFSET = timezone(timedelta(hours=8))
 
 router = APIRouter(prefix="/api/overview", tags=["overview"])
+
+# Keys under which expensive per-request results are memoised. The dict holding
+# them is created fresh by each route handler and discarded when the response is
+# built, so one caller can never see another's data.
+#: A full flood assessment costs several live API calls and is needed twice.
+_FLOOD_ASSESSMENT_KEY = "flood_assessment"
+#: The crime report costs four data.gov.sg dataset fetches and is needed twice.
+_CRIME_REPORT_KEY = "crime_report"
 
 
 # ============================================================
@@ -69,6 +77,29 @@ class CityOverviewResponse(BaseModel):
     #: Normalised per-domain intelligence. The single source consumed by the
     #: coordinator, the KPI insight panels and the Copilot.
     domain_status: Dict[str, DomainStatus] = {}
+    #: True only when ``ai_brief`` is a coordinator-backed city assessment.
+    #: False means the coordinator had not finished when this response was
+    #: built, so the brief is per-domain evidence that claims no city status.
+    #: The dashboard reads this to decide whether to reconcile, rather than
+    #: guessing from the brief's wording.
+    city_assessment_ready: bool = False
+
+
+class CityNarrativeResponse(BaseModel):
+    """Just the city assessment, so reconciliation does not re-run every domain.
+
+    The full Overview endpoint re-runs all ten domain agents, which costs
+    several live API calls. Fetching it a second time purely to pick up a
+    narrative the coordinator finished after the first call answered would be
+    wasteful, so this endpoint reads only the cached coordinator report and the
+    cached narrative.
+    """
+
+    ai_brief: Optional[str] = None
+    city_assessment_ready: bool = False
+    #: Generation time of the coordinator report behind this narrative, so a
+    #: caller can tell whether it is describing the same assessment it holds.
+    report_generated_at: Optional[str] = None
 
 
 class ModuleDetailResponse(BaseModel):
@@ -177,6 +208,51 @@ async def _narrative_or_fallback(ai_service, city_report) -> Optional[str]:
         log.warning("City narrative generation failed: %s", e)
         return fallback
     return narrative or fallback
+
+
+async def _coordinator_assessment() -> Tuple[Optional[str], bool, Optional[str]]:
+    """Grounded city assessment from the cached coordinator report.
+
+    Returns ``(narrative, ready, report_generated_at)``.
+
+    ``ready`` is ``False`` whenever the coordinator report is unavailable or
+    carries no usable evidence. That distinction is the whole point: a pending
+    assessment must never be presented as a completed one, so the caller decides
+    what to show and can tell the dashboard that reconciliation is needed.
+
+    The report is read through the same cached accessor ``/api/city/report``
+    uses, so both routes share one coordinator run, and the narrative is keyed
+    on a hash of the evidence, so repeating this call within the cache window
+    costs no provider quota.
+
+    Regression note: the accessor returns a ``(report, json_payload)`` tuple.
+    Passing that tuple straight to :func:`build_narrative_input` looks up
+    attributes on the tuple, finds none, and returns ``None`` - so this endpoint
+    fell back to per-domain prose on *every* request, not only cold ones. The
+    report object must be unpacked first.
+    """
+    try:
+        cached = city_report_cached(block=False)
+    except Exception as e:
+        log.warning("Coordinator report unavailable: %s", e)
+        return None, False, None
+
+    if cached is None:
+        # Cold cache. The accessor has started a single background run; this
+        # caller deliberately does not wait for it.
+        return None, False, None
+
+    report = cached[0] if isinstance(cached, tuple) else cached
+    if report is None:
+        return None, False, None
+
+    # A report with no available domain and no validated finding yields only a
+    # placeholder, which is strictly worse than per-domain evidence.
+    if build_narrative_input(report) is None:
+        return None, False, getattr(report, "generated_at", None)
+
+    narrative = await _narrative_or_fallback(get_ai_service(), report)
+    return narrative, True, getattr(report, "generated_at", None)
 
 
 # ============================================================
@@ -319,50 +395,41 @@ async def _fetch_traffic_overview(app_state) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
+def _roads_overview_sync() -> Dict[str, Any]:
+    """Blocking roads aggregation. Runs in a worker thread, never on the loop.
+
+    Delegates to the Roads aggregator, which bounds each LTA sub-source,
+    isolates their failures and can serve a clearly-marked stale payload when the
+    upstream is down. The three feeds used to be fetched sequentially with no
+    bound on total time.
+    """
+    from backend.app.mobility.roads.aggregator import get_roads_snapshot
+
+    snapshot = get_roads_snapshot()
+    return {
+        "road_works": snapshot.get("road_works"),
+        "road_openings": snapshot.get("road_openings"),
+        "taxi_stands": snapshot.get("taxi_stands"),
+        "timestamp": snapshot.get("fetched_at"),
+        "source_status": snapshot.get("source_status"),
+        "partial": snapshot.get("partial", False),
+        "stale": snapshot.get("stale", False),
+        "age_seconds": snapshot.get("age_seconds"),
+        "unavailable_sources": snapshot.get("unavailable_sources", []),
+        "warnings": snapshot.get("warnings", []),
+    }
+
+
 async def _fetch_roads_overview(app_state) -> Dict[str, Any]:
-    """Fetch lightweight roads overview from analytics."""
+    """Roads overview, aggregated off the event loop.
+
+    The three upstream clients are synchronous HTTP. Running them inline on the
+    loop blocked every other request for the duration: measured, a 2.1s
+    ``/api/mobility/transit/status`` took 24.1s while this fetcher was running,
+    and the Overview itself took 45s.
+    """
     try:
-        from backend.app.mobility.roads.api import RoadWorksApiClient, RoadOpeningsApiClient, TaxiStandsApiClient, RoadDataProcessor
-        
-        raw_works = list(RoadWorksApiClient().fetch_all())
-        raw_openings = list(RoadOpeningsApiClient().fetch_all())
-        raw_stands = TaxiStandsApiClient().fetch()
-        
-        road_works = RoadDataProcessor.process_road_works(raw_works)
-        road_openings = RoadDataProcessor.process_road_openings(raw_openings)
-        taxi_stands = RoadDataProcessor.process_taxi_stands(raw_stands)
-        
-        active_works = [w for w in road_works if w.is_active]
-        upcoming_works = [w for w in road_works if w.is_upcoming]
-        completed_works = [w for w in road_works if not w.is_active and not w.is_upcoming]
-        
-        active_openings = [o for o in road_openings if o.is_active]
-        upcoming_openings = [o for o in road_openings if o.is_upcoming]
-        
-        bfa_stands = [s for s in taxi_stands if s.is_bfa_accessible]
-        ownership_counts = {}
-        for s in taxi_stands:
-            ownership_counts[s.ownership] = ownership_counts.get(s.ownership, 0) + 1
-        
-        return {
-            "road_works": {
-                "total": len(road_works),
-                "active": len(active_works),
-                "upcoming": len(upcoming_works),
-                "completed": len(completed_works),
-            },
-            "road_openings": {
-                "total": len(road_openings),
-                "active": len(active_openings),
-                "upcoming": len(upcoming_openings),
-            },
-            "taxi_stands": {
-                "total": len(taxi_stands),
-                "bfa_accessible": len(bfa_stands),
-                "by_ownership": ownership_counts,
-            },
-            "timestamp": datetime.now().isoformat(),
-        }
+        return await asyncio.to_thread(_roads_overview_sync)
     except Exception as e:
         log.warning("Roads overview fetch failed: %s", e)
         return {"error": str(e)}
@@ -417,15 +484,37 @@ async def _fetch_weather_overview(app_state) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
-async def _fetch_flood_overview(app_state) -> Dict[str, Any]:
-    """Fetch lightweight flood overview from flood client."""
+async def _fetch_flood_overview(app_state, cache: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Full flood assessment from the Flood & Rain agent.
+
+    The Overview card and the City Coordinator must read the *same* assessment.
+    It used to read ``app.state.flood_client``, which is a PUB flood-alert
+    client: that payload carries no ``risk_level`` at all, so the card reported
+    "Normal" whenever the PUB call succeeded - including when every rainfall
+    source was unavailable and the agent had correctly assessed nothing.
+
+    The agent's own report keeps the four inputs distinct
+    (``singapore_rainfall``, ``sumatra_rainfall``, ``active_alerts``,
+    ``regional_weather``), so the Overview inherits that separation instead of
+    collapsing it onto one alert feed.
+    """
+    if cache is not None and _FLOOD_ASSESSMENT_KEY in cache:
+        return cache[_FLOOD_ASSESSMENT_KEY]
+
     try:
-        client = app_state.flood_client
-        snap = await asyncio.to_thread(client.fetch)
-        return snap.to_dict()
+        from backend.app.environment.flood.agent import run_flood_agent_v3
+        # mode="json" so FloodRiskLevel (a str Enum) arrives as a plain string.
+        # In python mode it stays a member, str() yields "FloodRiskLevel.LOW",
+        # and no status rule would match it.
+        report = await asyncio.to_thread(run_flood_agent_v3)
+        data = report.model_dump(mode="json")
     except Exception as e:
         log.warning("Flood overview fetch failed: %s", e)
-        return {"error": str(e)}
+        data = {"error": str(e)}
+
+    if cache is not None:
+        cache[_FLOOD_ASSESSMENT_KEY] = data
+    return data
 
 
 async def _fetch_fire_overview(app_state) -> Dict[str, Any]:
@@ -450,11 +539,20 @@ async def _fetch_water_overview(app_state) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
-async def _fetch_crime_overview(app_state) -> Dict[str, Any]:
-    """Fetch lightweight crime overview using the crime agent."""
+async def _fetch_crime_overview(app_state, cache: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Crime module card, built from the published police statistics.
+
+    The report is memoised so the alert summary in the same request reuses it
+    instead of repeating four data.gov.sg dataset fetches.
+    """
     try:
         from backend.app.safety.crime.agent import run_crime_agent
-        report = await asyncio.to_thread(run_crime_agent)
+        if cache is not None and _CRIME_REPORT_KEY in cache:
+            report = cache[_CRIME_REPORT_KEY]
+        else:
+            report = await asyncio.to_thread(run_crime_agent)
+            if cache is not None:
+                cache[_CRIME_REPORT_KEY] = report
         return report.model_dump()
     except Exception as e:
         log.warning("Crime overview fetch failed: %s", e)
@@ -476,29 +574,95 @@ async def _fetch_land_overview(app_state) -> Dict[str, Any]:
 # Alert Fetching (direct service calls, NO HTTP LOOPBACK)
 # ============================================================
 
-async def _fetch_traffic_incidents() -> List[Dict]:
-    """Fetch traffic incidents for alerts."""
+class AlertBatch(List[Dict[str, Any]]):
+    """Alerts from one source, plus whether that source was reachable.
+
+    Subclasses ``list`` so every existing consumer - ``isinstance(result, list)``
+    and ``all_alerts.extend(...)`` - keeps working unchanged. The extra
+    attributes exist so a source that was *unavailable* can be told apart from
+    one that genuinely returned zero records: the first is a data gap that must
+    be logged and treated as degraded, the second is a real "nothing is
+    happening right now".
+    """
+
+    def __init__(self, alerts: Iterable[Dict[str, Any]] = (), *,
+                 source_ok: bool = True, source_error: Optional[str] = None) -> None:
+        super().__init__(alerts)
+        self.source_ok = source_ok
+        self.source_error = source_error
+
+    @classmethod
+    def unavailable(cls, source: str) -> "AlertBatch":
+        """Empty and flagged as unreachable.
+
+        ``source_error`` is a fixed, non-leaky label. The raw exception may name
+        hosts, URLs or credential problems, so it goes to the log only and never
+        reaches an API response.
+        """
+        return cls((), source_ok=False, source_error=f"{source} alert source unavailable")
+
+
+def _alert_timestamp(value: Any) -> str:
+    """Normalise a source timestamp to an ISO string for sorting and display."""
+    if value is None:
+        return ""
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+async def _fetch_traffic_incidents(cache: Optional[Dict[str, Any]] = None) -> AlertBatch:
+    """Live traffic incidents from the LTA DataMall adapter.
+
+    ``TrafficIncident`` exposes ``incident_type`` (not ``type``) and carries no
+    per-incident timestamp at all, so the observation time of the snapshot the
+    record came from is used instead of inventing one.
+
+    The feed publishes no severity, so none is inferred: ``"info"`` says
+    "reported" without ranking something the source never ranked.
+
+    ``cache`` is accepted (and unused) so every alert fetcher has the same
+    signature as the one the endpoint calls. A mismatch here previously raised
+    ``TypeError`` inside the endpoint and silently emptied this source.
+    """
     try:
         from backend.app.mobility.traffic.api import TrafficIncidentsApiClient
         client = TrafficIncidentsApiClient(offline=False)
         snap = await asyncio.to_thread(client.fetch)
-        incidents = []
-        for inc in (snap.incidents or [])[:3]:
-            incidents.append({
-                "domain": "traffic",
-                "severity": inc.type or "UNKNOWN",
-                "title": inc.type or "Traffic Incident",
-                "description": inc.message,
-                "timestamp": inc.timestamp,
-                "affected_zones": [inc.zone_id] if inc.zone_id else [],
-            })
-        return incidents
-    except Exception:
-        return []
+    except Exception as exc:
+        log.warning("Traffic incident source unavailable: %s", exc)
+        return AlertBatch.unavailable("traffic")
+
+    snapshot_at = getattr(snap, "snapshot_at", None)
+    alerts: List[Dict[str, Any]] = []
+    for inc in (snap.incidents or [])[:3]:
+        incident_type = getattr(inc, "incident_type", None) or "Traffic Incident"
+        description = getattr(inc, "message", None) or incident_type
+        # Prefer the human-readable zone name in prose; keep the canonical id
+        # in affected_zones so downstream consumers match on a stable value.
+        zone_label = inc.zone_name or inc.zone_id
+        if zone_label:
+            description = f"{description} ({zone_label})"
+        alerts.append({
+            "domain": "traffic",
+            "severity": "info",
+            "title": incident_type,
+            "description": description,
+            # The snapshot this record was read from - the only real time the
+            # adapter exposes for the incident.
+            "timestamp": _alert_timestamp(snapshot_at),
+            "affected_zones": [inc.zone_id] if inc.zone_id else [],
+        })
+    return AlertBatch(alerts)
 
 
-async def _fetch_fire_incidents() -> List[Dict]:
-    """Fetch fire incidents for alerts."""
+async def _fetch_fire_incidents(cache: Optional[Dict[str, Any]] = None) -> List[Dict]:
+    """Fetch fire incidents for alerts.
+
+    The SCDF feed already carries a severity and a report time per incident, so
+    both are passed through unchanged. ``cache`` is accepted only to match the
+    other alert fetchers; fire is not memoised here.
+    """
     try:
         from backend.app.safety.fire.agent import run_fire_agent
         report = await asyncio.to_thread(run_fire_agent)
@@ -517,52 +681,116 @@ async def _fetch_fire_incidents() -> List[Dict]:
         return []
 
 
-async def _fetch_flood_alerts() -> List[Dict]:
-    """Fetch flood alerts."""
+async def _fetch_flood_alerts(cache: Optional[Dict[str, Any]] = None) -> AlertBatch:
+    """Live PUB flood alerts.
+
+    ``FloodAlert`` names the field ``alert_type`` (its ``to_dict`` renames it to
+    ``"type"``, which is what made the dataclass read look wrong).
+
+    PUB publishes a real severity per alert, so it is passed through rather than
+    mapped onto the platform's own vocabulary. The alert's own issue time is
+    used, falling back to the snapshot time when it is absent.
+
+    ``allow_fallback_fixture=False`` is deliberate. With it, an unreachable PUB
+    endpoint used to return the deterministic fixture instead - two invented
+    "Flash Flood" advisories for Orchard Road and Bukit Timah dated 2024-12-01 -
+    which the Overview then published as live High-severity flood alerts. A
+    source that cannot be reached is now reported as unavailable.
+
+    ``cache`` is accepted (and unused) so every alert fetcher has the same
+    signature as the one the endpoint calls.
+    """
     try:
         from backend.app.environment.flood.api import FloodAlertsApiClient
-        client = FloodAlertsApiClient(offline=False)
+        client = FloodAlertsApiClient(offline=False, allow_fallback_fixture=False)
         snap = await asyncio.to_thread(client.fetch)
-        alerts = []
-        for alert in (snap.alerts or [])[:2]:
-            alerts.append({
-                "domain": "flood",
-                "severity": alert.severity,
-                "title": alert.type,
-                "description": alert.message,
-                "timestamp": alert.issued_at,
-                "affected_zones": [alert.zone_id] if alert.zone_id else [],
-            })
-        return alerts
-    except Exception:
-        return []
+    except Exception as exc:
+        log.warning("Flood alert source unavailable: %s", exc)
+        return AlertBatch.unavailable("flood")
+
+    snapshot_at = getattr(snap, "snapshot_at", None)
+    alerts: List[Dict[str, Any]] = []
+    for alert in (snap.alerts or [])[:2]:
+        alert_type = getattr(alert, "alert_type", None) or "Flood Alert"
+        description = getattr(alert, "message", None) or alert_type
+        if alert.location:
+            description = f"{description} ({alert.location})"
+        alerts.append({
+            "domain": "flood",
+            # The publisher's own severity, verbatim.
+            "severity": alert.severity or "UNKNOWN",
+            "title": alert_type,
+            "description": description,
+            "timestamp": _alert_timestamp(alert.issued_at or snapshot_at),
+            "affected_zones": [alert.zone_id] if alert.zone_id else [],
+        })
+    # Zero alerts from a successful call is a real, healthy answer.
+    return AlertBatch(alerts)
 
 
-async def _fetch_crime_incidents() -> List[Dict]:
-    """Fetch crime incidents from Singapore Police Force data."""
+async def _fetch_crime_incidents(cache: Optional[Dict[str, Any]] = None) -> AlertBatch:
+    """One clearly-labelled summary of the published crime statistics.
+
+    There is no live crime-incident feed in this system. The data.gov.sg
+    datasets are *annual aggregate tables*: rows keyed by ``DataSeries`` with one
+    column per year. Iterating them yields statistical series, not incidents -
+    which is why the previous version rendered three identical
+    ``"Crime Case" / "Incident - N/A"`` rows with an empty timestamp, an
+    invented ``"elevated"`` severity and no location.
+
+    So the real information is preserved as a single statistics entry instead,
+    with no invented identifier, location, incident timestamp or severity. The
+    timestamp is the retrieval time and the description states the data period,
+    so an annual figure can never read as a live incident.
+    """
     try:
-        from backend.app.safety.crime.data import DataGovCrimeClient
-        client = DataGovCrimeClient()
-        snap = await asyncio.to_thread(client.fetch_all)
-        incidents = []
-        # Use crime_cases dataset for recent incidents
-        crime_cases = snap.datasets.get("crime_cases", [])[:3]
-        for inc in crime_cases:
-            incidents.append({
-                "domain": "crime",
-                "severity": "elevated",
-                "title": inc.get("offence", "Crime Case"),
-                "description": f"{inc.get('offence', 'Incident')} - {inc.get('year', 'N/A')}",
-                "timestamp": inc.get("year", ""),
-                "affected_zones": [inc.get("area", "")] if inc.get("area") else [],
-            })
-        return incidents
-    except Exception:
-        return []
+        from backend.app.safety.crime.agent import run_crime_agent
+        if cache is not None and _CRIME_REPORT_KEY in cache:
+            report = cache[_CRIME_REPORT_KEY]
+        else:
+            report = await asyncio.to_thread(run_crime_agent)
+            if cache is not None:
+                cache[_CRIME_REPORT_KEY] = report
+    except Exception as exc:
+        log.warning("Crime statistics source unavailable: %s", exc)
+        return AlertBatch.unavailable("crime")
+
+    if report.source_status == "unavailable":
+        log.warning("Crime statistics unavailable: no official dataset was loaded.")
+        return AlertBatch.unavailable("crime")
+
+    parts: List[str] = []
+    if report.total_physical_crime_2025 is not None:
+        parts.append(f"{report.total_physical_crime_2025:,} physical crimes")
+    if report.total_scams_cybercrime_2025 is not None:
+        parts.append(f"{report.total_scams_cybercrime_2025:,} scams and cybercrime")
+    if not parts:
+        # Loaded successfully but carries nothing to summarise.
+        log.info("Crime statistics loaded but hold no reportable 2025 totals.")
+        return AlertBatch(())
+
+    period = report.data_period if report.data_period != "unknown" else "period not stated"
+    return AlertBatch([{
+        "domain": "crime",
+        # The police statistics carry no severity feed, so none is inferred.
+        "severity": "info",
+        "title": "Crime: published annual statistics",
+        "description": (
+            f"Police statistics ({period}): " + " and ".join(parts)
+            + ". Annual published figures, not live incidents - this system "
+              "has no incident-level crime feed."
+        ),
+        "timestamp": _alert_timestamp(report.generated_at),
+        "affected_zones": [],
+    }])
 
 
-async def _fetch_water_incidents() -> List[Dict]:
-    """Fetch water alerts from water agent (drain conditions, quality exceedances, usage changes)."""
+async def _fetch_water_incidents(cache: Optional[Dict[str, Any]] = None) -> List[Dict]:
+    """Fetch water alerts from water agent (drain conditions, quality exceedances, usage changes).
+
+    ``cache`` is accepted only to match the other alert fetchers; water is not
+    memoised here.
+    """
     try:
         from backend.app.infrastructure.water.agent import run_water_agent
         report = await asyncio.to_thread(run_water_agent)
@@ -608,8 +836,22 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
         "water": _fetch_water_overview,
         "land": _fetch_land_overview,
     }
+    # Flood and crime both cost several live API calls, and each is needed
+    # twice in this request (module card + alert summary). Memoise them for the
+    # lifetime of this request only: the dict is created here and goes out of
+    # scope with the response, so it can never leak between requests.
+    request_cache: Dict[str, Any] = {}
+
+    async def fetch_module(module_id: str) -> Dict[str, Any]:
+        fetcher = fetchers[module_id]
+        if module_id == "flood":
+            return await fetcher(request.app.state, request_cache)
+        if module_id == "crime":
+            return await fetcher(request.app.state, request_cache)
+        return await fetcher(request.app.state)
+
     results = await asyncio.gather(
-        *(fetchers[m](request.app.state) for m in module_ids),
+        *(fetch_module(m) for m in module_ids),
         return_exceptions=True,
     )
 
@@ -646,9 +888,11 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
             detail_route=DOMAIN_ROUTES.get(module_id, "/"),
         ))
     
-    # Part 2: Fetch real alerts from all sources with error isolation
-    # Part 2: Fetch real alerts from all sources with error isolation
-    all_alerts = []
+    # Part 2: Fetch real alerts from all sources with error isolation.
+    # Each source is independent: one failing source degrades only its own
+    # contribution. A source that could not be reached is logged as a data gap;
+    # a source that was reached and had nothing to report is logged as zero.
+    all_alerts: List[Dict[str, Any]] = []
     for name, fetch_fn in [
         ("traffic", _fetch_traffic_incidents),
         ("fire", _fetch_fire_incidents),
@@ -657,14 +901,19 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
         ("water", _fetch_water_incidents),
     ]:
         try:
-            result = await asyncio.wait_for(fetch_fn(), timeout=8.0)
+            result = await asyncio.wait_for(
+                fetch_fn(request_cache), timeout=8.0
+            )
             if isinstance(result, list):
-                log.info(f"Alert source {name} returned {len(result)} alerts")
+                if isinstance(result, AlertBatch) and not result.source_ok:
+                    log.warning("Alert source %s unavailable: %s", name, result.source_error)
+                else:
+                    log.info("Alert source %s returned %d alerts", name, len(result))
                 all_alerts.extend(result)
         except asyncio.TimeoutError:
-            log.warning(f"{name} fetch timed out after 8 seconds")
+            log.warning("Alert source %s timed out after 8 seconds", name)
         except Exception as e:
-            log.warning(f"{name} fetch failed: {e}")
+            log.warning("Alert source %s failed: %s", name, e)
     
     # Surface status for non-normal modules.
     # An unavailable module is NOT turned into an alert: a missing feed is a
@@ -687,27 +936,18 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
 
     # ---- City Situation narrative (Phase 3) ---------------------------------
     # The deterministic coordinator report is the only permitted source for the
-    # city-level narrative. It is obtained through the same cached accessor the
-    # /api/city/report route uses, so the two share one coordinator run and one
-    # narrative cache instead of issuing duplicate work per refresh.
+    # city-level narrative, and it is shared with /api/city/report through the
+    # cached accessor, so the two never run the coordinator twice.
     #
-    # Non-blocking on purpose: a measured coordinator run takes ~74s, which is
-    # far longer than a dashboard refresh may wait, so waiting for it only
-    # produced a null brief on every cold request. We take a cached report when
-    # one exists and otherwise let the accessor start a single background run.
-    city_report = None
-    try:
-        city_report = city_report_cached(block=False)
-    except Exception as e:
-        log.warning("Coordinator report unavailable: %s", e)
+    # Non-blocking on purpose: a measured coordinator run takes ~74s, far longer
+    # than a dashboard refresh may wait. When the cache is cold this response
+    # carries per-domain evidence only and says so via
+    # ``city_assessment_ready=False``; the dashboard reconciles once the report
+    # it is already waiting on completes.
+    narrative, assessment_ready, _report_at = await _coordinator_assessment()
 
-    ai_service = get_ai_service()
-    # Only use the coordinator report when it can actually support a narrative.
-    # A report with no available domain and no validated finding yields only a
-    # placeholder, which is strictly worse than the per-domain evidence this
-    # endpoint already validated.
-    if city_report is not None and build_narrative_input(city_report) is not None:
-        ai_brief = await _narrative_or_fallback(ai_service, city_report)
+    if assessment_ready:
+        ai_brief = narrative
     else:
         # Cold start, or a coordinator report carrying no usable evidence: fall
         # back to the per-domain readings rather than showing nothing. This
@@ -730,7 +970,34 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
             for a in top_alerts
         ],
         ai_brief=ai_brief,
+        city_assessment_ready=assessment_ready,
     )
+
+
+@router.get("/city-narrative", response_model=CityNarrativeResponse)
+async def get_city_narrative() -> CityNarrativeResponse:
+    """Reconcile the City Situation against a finished coordinator report.
+
+    The Overview endpoint cannot simply be called twice to pick up a report
+    that finished after it answered, because it re-runs all ten domain agents -
+    several live API calls. This endpoint reads only the cached coordinator
+    report and the cached narrative, so reconciliation is cheap and costs no
+    provider quota when the evidence has not changed.
+    """
+    narrative, ready, report_at = await _coordinator_assessment()
+    return CityNarrativeResponse(
+        ai_brief=narrative,
+        city_assessment_ready=ready,
+        report_generated_at=_iso_or_none(report_at),
+    )
+
+
+def _iso_or_none(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
 
 
 @router.get("/module/{module_id}", response_model=ModuleDetailResponse)

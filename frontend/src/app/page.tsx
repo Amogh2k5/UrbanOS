@@ -16,11 +16,12 @@
  *
  * No intelligence logic lives here. Every value rendered comes from the API.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchCityReport,
   fetchOverviewCity,
   fetchOverviewModule,
+  fetchCityNarrative,
   fetchChat,
   ApiError,
 } from "@/services/api";
@@ -114,6 +115,50 @@ export default function OverviewPage() {
     };
   }, [load]);
 
+  // ------------------------------------------------- City Situation reconciliation
+  // A coordinator run takes far longer than a page load, so `/api/overview/city`
+  // usually answers from a cold cache: its narrative is per-domain evidence that
+  // explicitly claims no city status. `/api/city/report` blocks until that same
+  // run finishes. Once it does, the pending text is stale and must be replaced.
+  //
+  // This effect reacts to the report completing and asks only for the narrative,
+  // never the whole Overview - that endpoint re-runs all ten domain agents.
+  //
+  // At most one refresh, guarded by a ref: this is reconciliation, not polling.
+  // The backend serves the narrative from the report cache and an
+  // evidence-keyed narrative cache, so the refresh costs no provider quota.
+  const reconciledRef = useRef(false);
+
+  useEffect(() => {
+    // No report: the coordinator failed or is unreachable. The honest
+    // deterministic fallback stays exactly as the Overview returned it.
+    if (!report) return;
+    if (!overview) return;
+    // Already a coordinator-backed assessment - nothing to reconcile.
+    if (overview.city_assessment_ready) return;
+    if (reconciledRef.current) return;
+    reconciledRef.current = true;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const narrative = await fetchCityNarrative();
+        if (cancelled) return;
+        if (!narrative.city_assessment_ready || !narrative.ai_brief) return;
+        setOverview((prev) =>
+          prev ? { ...prev, ai_brief: narrative.ai_brief, city_assessment_ready: true } : prev
+        );
+      } catch {
+        // A failed reconciliation is not a page-level failure: the Overview
+        // response is still valid per-domain evidence. Leave the deterministic
+        // fallback visible and do not surface an error the user cannot act on.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [report, overview]);
+
   const loadModuleDetail = useCallback(async (moduleId: string) => {
     setSelectedModule(moduleId);
     setModuleLoading(true);
@@ -183,6 +228,7 @@ export default function OverviewPage() {
         <CitySituationPanel
           narrative={overview?.ai_brief ?? null}
           report={report}
+          assessmentReady={overview?.city_assessment_ready ?? false}
           loading={overviewLoading && reportLoading}
           error={overviewError}
         />

@@ -85,6 +85,7 @@ describe("CitySituationPanel", () => {
       <CitySituationPanel
         narrative="City operations are disrupted in Central South."
         report={REAL_REPORT}
+        assessmentReady
       />
     );
     expect(screen.getByTestId("city-situation-narrative").textContent).toContain(
@@ -93,32 +94,32 @@ describe("CitySituationPanel", () => {
   });
 
   it("shows the coordinator status, risk and confidence", () => {
-    render(<CitySituationPanel narrative="x" report={REAL_REPORT} />);
+    render(<CitySituationPanel narrative="x" report={REAL_REPORT} assessmentReady />);
     expect(screen.getByTestId("city-status-badge").textContent).toBe("CRITICAL");
     expect(screen.getByTestId("city-confidence").textContent).toContain("high");
   });
 
   it("states plainly when no narrative is available rather than inventing one", () => {
-    render(<CitySituationPanel narrative={null} report={REAL_REPORT} />);
+    render(<CitySituationPanel narrative={null} report={REAL_REPORT} assessmentReady />);
     expect(screen.getByTestId("city-situation-unavailable")).toBeTruthy();
     expect(screen.queryByTestId("city-situation-narrative")).toBeNull();
   });
 
   it("distinguishes an API error from a missing narrative", () => {
     render(
-      <CitySituationPanel narrative={null} report={null} error="API error 500" />
+      <CitySituationPanel narrative={null} report={null} assessmentReady={false} error="API error 500" />
     );
     expect(screen.getByTestId("city-situation-error").textContent).toContain("API error 500");
     expect(screen.queryByTestId("city-situation-unavailable")).toBeNull();
   });
 
   it("renders a loading skeleton", () => {
-    render(<CitySituationPanel narrative={null} report={null} loading />);
+    render(<CitySituationPanel narrative={null} report={null} assessmentReady={false} loading />);
     expect(screen.getByTestId("city-situation-loading")).toBeTruthy();
   });
 
   it("surfaces affected zones and limitations as provenance", () => {
-    render(<CitySituationPanel narrative="x" report={REAL_REPORT} />);
+    render(<CitySituationPanel narrative="x" report={REAL_REPORT} assessmentReady />);
     expect(screen.getByTestId("city-affected-zones").textContent).toContain("Central South");
     expect(screen.getByTestId("city-limitations").textContent).toContain(
       "deterministic rule engine"
@@ -126,8 +127,47 @@ describe("CitySituationPanel", () => {
   });
 
   it("renders with no report at all without crashing", () => {
-    render(<CitySituationPanel narrative={null} report={null} />);
+    render(<CitySituationPanel narrative={null} report={null} assessmentReady={false} />);
     expect(screen.getByTestId("city-situation")).toBeTruthy();
+  });
+
+  // ------------------------------------------------------------------
+  // A report object existing is not the same as a validated city
+  // assessment. Presenting NORMAL / Risk LOW while the assessment is still
+  // pending would publish an unvalidated value as a city conclusion.
+  // ------------------------------------------------------------------
+  it("shows an explicit pending state instead of a status while pending", () => {
+    render(
+      <CitySituationPanel narrative={null} report={REAL_REPORT} assessmentReady={false} />
+    );
+    expect(screen.getByTestId("city-assessment-pending")).toBeTruthy();
+    expect(screen.queryByTestId("city-status-badge")).toBeNull();
+    expect(screen.queryByTestId("city-risk")).toBeNull();
+    expect(screen.queryByTestId("city-confidence")).toBeNull();
+  });
+
+  it("does not leak the report's status text while pending", () => {
+    render(
+      <CitySituationPanel narrative={null} report={REAL_REPORT} assessmentReady={false} />
+    );
+    const header = document.querySelector('[data-testid="city-situation"]');
+    expect(header?.textContent).not.toContain("CRITICAL");
+    expect(header?.textContent).not.toContain("Risk HIGH");
+  });
+
+  it("reveals the validated status once the assessment is ready", () => {
+    render(
+      <CitySituationPanel narrative="Assessed." report={REAL_REPORT} assessmentReady />
+    );
+    expect(screen.queryByTestId("city-assessment-pending")).toBeNull();
+    expect(screen.getByTestId("city-status-badge").textContent).toBe("CRITICAL");
+    expect(screen.getByTestId("city-risk").textContent).toContain("CRITICAL");
+  });
+
+  it("renders no status block at all when there is no report", () => {
+    render(<CitySituationPanel narrative={null} report={null} assessmentReady={false} />);
+    expect(screen.queryByTestId("city-assessment-pending")).toBeNull();
+    expect(screen.queryByTestId("city-status-badge")).toBeNull();
   });
 });
 
@@ -313,6 +353,31 @@ describe("DomainKpiGrid", () => {
     expect(crimeCard.getAttribute("data-status")).toBe("unavailable");
     expect(crimeCard.textContent).toContain("Unavailable");
     expect(crimeCard.textContent).toContain("No supported metric");
+  });
+
+  it("shows a real KPI even when the domain status is unavailable", () => {
+    // Regression: the card suppressed the metric whenever status was
+    // "unavailable", so Water - which has a genuine potable-sales reading but
+    // an unassessable risk level (overall_risk UNKNOWN) - rendered
+    // "No supported metric" and looked broken. Status and metric are
+    // independent facts and both must survive.
+    const modules: ModuleSummary[] = [
+      {
+        id: "water",
+        name: "Water",
+        status: "unavailable",
+        kpi: { label: "Potable Sales", value: 515.5, unit: "million m3" },
+        updated_at: null,
+        detail_route: "/infrastructure/water",
+      },
+    ];
+    render(<DomainKpiGrid modules={modules} domainsWithFindings={new Set()} onOpenInsight={vi.fn()} />);
+
+    const card = screen.getByTestId("domain-kpi-card");
+    expect(screen.getByTestId("kpi-value").textContent).toBe("515.5 million m3");
+    // The honest status is still shown alongside the real metric.
+    expect(screen.getByTestId("kpi-status").textContent).toBe("Unavailable");
+    expect(screen.queryByTestId("kpi-value-unavailable")).toBeNull();
   });
 
   it("never renders a bare zero for a missing KPI", () => {

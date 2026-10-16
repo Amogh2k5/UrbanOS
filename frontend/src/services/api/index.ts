@@ -636,14 +636,50 @@ export interface OverviewCityResponse {
   modules: ModuleSummary[];
   alerts: AlertItem[];
   ai_brief: string | null;
+  /**
+   * True only when `ai_brief` is a coordinator-backed city assessment.
+   *
+   * False means the coordinator had not finished when this response was built,
+   * so `ai_brief` is per-domain evidence that claims no city status. Read this
+   * to decide whether to reconcile - never infer it from the brief's wording.
+   */
+  city_assessment_ready?: boolean;
   /** Per-domain intelligence. Present since the Phase 1 normalisation work. */
   domain_status?: Record<string, DomainStatus>;
 }
+
+/**
+ * Just the city assessment, for reconciliation.
+ *
+ * The full Overview endpoint re-runs all ten domain agents - several live API
+ * calls - so calling it a second time purely to pick up a narrative the
+ * coordinator finished after the first call answered would be wasteful. This
+ * reads only the cached coordinator report and the cached narrative, so it is
+ * cheap and costs no provider quota when the evidence has not changed.
+ */
+export type CityNarrative = {
+  ai_brief: string | null;
+  city_assessment_ready: boolean;
+  report_generated_at: string | null;
+};
 
 export async function fetchOverviewCity(): Promise<OverviewCityResponse> {
   const response = await fetch(`${API_BASE}/api/overview/city`, { cache: 'no-store' });
   if (!response.ok) {
     throw new ApiError(`Failed to fetch overview city: ${response.statusText}`, response.status);
+  }
+  return response.json();
+}
+
+export async function fetchCityNarrative(): Promise<CityNarrative> {
+  const response = await fetch(`${API_BASE}/api/overview/city-narrative`, {
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new ApiError(
+      `Failed to fetch city narrative: ${response.statusText}`,
+      response.status
+    );
   }
   return response.json();
 }

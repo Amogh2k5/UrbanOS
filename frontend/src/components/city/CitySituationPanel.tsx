@@ -14,6 +14,16 @@ import { formatTimestamp } from "./presentation";
 interface Props {
   narrative: string | null;
   report: CitySituationReport | null;
+  /**
+   * True only when the coordinator assessment behind `report` has actually
+   * been accepted as this page's City Situation.
+   *
+   * Required on purpose: a report object existing is not the same as a
+   * validated city assessment, and the header must never present a status or
+   * risk level as validated while the assessment is still pending. A defaulted
+   * prop would quietly reintroduce exactly that.
+   */
+  assessmentReady: boolean;
   loading?: boolean;
   error?: string | null;
 }
@@ -34,10 +44,57 @@ const BAND_BORDER: Record<string, string> = {
   UNKNOWN: "border-slate-700",
 };
 
-export default function CitySituationPanel({ narrative, report, loading, error }: Props) {
+/**
+ * Render a structured City Situation.
+ *
+ * The backend emits plain text with ALL-CAPS section headings on their own
+ * line (SITUATION, CROSS-DOMAIN SIGNALS, DOMAIN ASSESSMENT, ...). Those are
+ * rendered as headings and their bodies as separate blocks, so an operator can
+ * scan the report instead of reading one run-on paragraph. Anything that does
+ * not match the heading shape is passed through unchanged.
+ */
+function renderStructured(text: string): React.ReactNode {
+  const lines = text.split("\n");
+  const blocks: React.ReactNode[] = [];
+
+  lines.forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line) return;
+    const isHeading = /^[A-Z][A-Z\s-]{4,}$/.test(line) && !/\d/.test(line);
+    blocks.push(
+      isHeading ? (
+        <p
+          key={i}
+          data-testid="city-situation-section"
+          className="text-[11px] font-bold uppercase tracking-widest text-slate-500 mt-5 mb-1 first:mt-0"
+        >
+          {line}
+        </p>
+      ) : (
+        <p key={i} className="text-slate-200 leading-relaxed text-sm mb-1.5">
+          {line}
+        </p>
+      )
+    );
+  });
+
+  return <div data-testid="city-situation-structured">{blocks}</div>;
+}
+
+export default function CitySituationPanel({
+  narrative,
+  report,
+  assessmentReady,
+  loading,
+  error,
+}: Props) {
   const status = report?.overall_city_status ?? "UNKNOWN";
   const risk = report?.overall_risk_level ?? "UNKNOWN";
   const confidence = report?.confidence;
+  // A report can exist while the assessment is still pending. Showing its
+  // status/risk then would present an unvalidated value as a city conclusion,
+  // so an explicit pending state is rendered instead.
+  const assessed = Boolean(report) && assessmentReady;
 
   return (
     <section
@@ -52,22 +109,32 @@ export default function CitySituationPanel({ narrative, report, loading, error }
           AI City Situation
         </h2>
 
-        {report && (
-          <div className="flex items-center gap-2 text-xs font-semibold">
-            <span
-              data-testid="city-status-badge"
-              className={`px-2.5 py-1 rounded-lg border ${BAND_BORDER[status]} ${BAND_TEXT[status]}`}
-            >
-              {status}
-            </span>
-            <span className="text-slate-400">Risk {risk}</span>
-            {confidence && (
-              <span className="text-slate-500 font-mono" data-testid="city-confidence">
-                confidence {confidence}
+        {report &&
+          (assessed ? (
+            <div className="flex items-center gap-2 text-xs font-semibold">
+              <span
+                data-testid="city-status-badge"
+                className={`px-2.5 py-1 rounded-lg border ${BAND_BORDER[status]} ${BAND_TEXT[status]}`}
+              >
+                {status}
               </span>
-            )}
-          </div>
-        )}
+              <span data-testid="city-risk" className="text-slate-400">
+                Risk {risk}
+              </span>
+              {confidence && (
+                <span className="text-slate-500 font-mono" data-testid="city-confidence">
+                  confidence {confidence}
+                </span>
+              )}
+            </div>
+          ) : (
+            <span
+              data-testid="city-assessment-pending"
+              className="px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-800/60 text-slate-400 text-xs font-semibold"
+            >
+              Assessment pending
+            </span>
+          ))}
       </div>
 
       <div className="p-6 md:p-8">
@@ -92,12 +159,9 @@ export default function CitySituationPanel({ narrative, report, loading, error }
             </p>
           </div>
         ) : narrative ? (
-          <p
-            data-testid="city-situation-narrative"
-            className="text-slate-200 leading-relaxed text-base md:text-lg max-w-4xl"
-          >
-            {narrative}
-          </p>
+          <div data-testid="city-situation-narrative" className="max-w-4xl">
+            {renderStructured(narrative)}
+          </div>
         ) : (
           <div
             data-testid="city-situation-unavailable"
