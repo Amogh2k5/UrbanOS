@@ -1,52 +1,226 @@
 @import "tailwindcss";
 
+/* ==========================================================================
+   UrbanOS design tokens
+   --------------------------------------------------------------------------
+   Source of truth: the UrbanOS solid-KPI reference (urbanos_solid_kpis.html).
+
+   Two surfaces only:
+     - SOLID coloured cards for KPIs and risk signals. These are the defining
+       feature of the dashboard and carry white text.
+     - WHITE / slate panels for tables, forms, reports, maps and charts, where
+       a colour wash would cost readability.
+
+   Every coloured fill below is verified >= 4.5:1 against white text by
+   presentation.test.ts, which parses these tokens out of this file. Three of
+   the reference hues were deliberately darkened (cyan, amber, emerald) because
+   their 600 step fell short of AA with white text - amber-600 measured 3.18:1.
+   ========================================================================== */
+
 @theme {
-  --color-background: #0a0e14;
-  --color-foreground: #f1f3fc;
-  
-  --color-primary: #00e5ff;
-  --color-primary-dim: #008f9f;
-  --color-secondary: #005762;
-  --color-tertiary: #ff6e81;
+  --color-background: #f1f5f9;
+  --color-foreground: #0f172a;
 
-  --color-surface-lowest: #000000;
-  --color-surface-low: #0f141a;
-  --color-surface: #151a21;
-  --color-surface-high: #1b2028;
-  --color-surface-highest: #20262f;
+  /* Brand accent for chrome - page headings, icons, active nav, focus rings.
+     Never used to encode status; status has its own scale below. */
+  --color-primary: #4f46e5;
+  --color-primary-dim: #4338ca;
+  --color-secondary: #eef2ff;
+  --color-tertiary: #0ea5e9;
 
+  /* Surfaces */
+  --color-surface-lowest: #ffffff;
+  --color-surface-low: #ffffff;
+  --color-surface: #ffffff;
+  --color-surface-high: #f8fafc;
+  --color-surface-highest: #f1f5f9;
+
+  /* Hairlines */
+  --color-line: #e2e8f0;
+  --color-line-soft: #f1f5f9;
+
+  /* Text */
+  --color-ink: #0f172a;
+  --color-ink-soft: #334155;
+  --color-ink-faint: #475569;
+  --color-ink-muted: #64748b;
+
+  /* Legacy severity names, still referenced by SystemHealth and
+     PriorityIncidentFeed. Values match the semantic badges below. */
   --color-severity-low: #3b82f6;
-  --color-severity-moderate: #f59e0b;
-  --color-severity-high: #ef4444;
-  --color-severity-critical: #991b1b;
-  
-  --font-sans: "Inter", Arial, sans-serif;
-  --font-heading: "Space Grotesk", sans-serif;
+  --color-severity-moderate: #b45309;
+  --color-severity-high: #c2410c;
+  --color-severity-critical: #be123c;
+
+  /* Risk-signal card fills. A separate axis from domain fills: these encode
+     urgency, not which system is involved. All clear 4.5:1 with white text -
+     note `elevated` is amber-700, not amber-600, which measured 3.18:1. */
+  --color-signal-low: #2563eb;
+  --color-signal-elevated: #b45309;
+  --color-signal-high: #c2410c;
+  --color-signal-critical: #e11d48;
+
+  /* ---- Solid KPI card fills, one per domain ---------------------------- */
+  /* Transport / Mobility */
+  --color-dom-traffic: #2563eb;
+  --color-dom-transit: #4338ca;
+  --color-dom-roads: #1d4ed8;
+  /* Environment */
+  --color-dom-pm25: #047857;
+  --color-dom-weather: #0f766e;
+  --color-dom-flood: #0369a1;
+  /* Public safety */
+  --color-dom-fire: #e11d48;
+  --color-dom-crime: #9f1239;
+  /* Infrastructure */
+  --color-dom-water: #0e7490;
+  --color-dom-energy: #b45309;
+  --color-dom-waste: #115e59;
+  /* Planning / Administration */
+  --color-dom-land: #6d28d9;
+  --color-dom-housing: #5b21b6;
+
+  /* ---- Semantic status. Badges ONLY - never a card background. -------- */
+  --color-badge-normal: #ecfdf5;
+  --color-badge-normal-ink: #065f46;
+  --color-badge-normal-edge: #6ee7b7;
+
+  --color-badge-elevated: #fffbeb;
+  --color-badge-elevated-ink: #92400e;
+  --color-badge-elevated-edge: #fcd34d;
+
+  --color-badge-high: #fff7ed;
+  --color-badge-high-ink: #7c2d12;
+  --color-badge-high-edge: #fdba74;
+
+  --color-badge-critical: #fff1f2;
+  --color-badge-critical-ink: #9f1239;
+  --color-badge-critical-edge: #fda4af;
+
+  --color-badge-unavailable: #f1f5f9;
+  --color-badge-unavailable-ink: #475569;
+  --color-badge-unavailable-edge: #cbd5e1;
+
+  --font-sans: Inter, Arial, sans-serif;
+  --font-heading: "Space Grotesk", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
 html {
   overflow-y: auto;
 }
+
 body {
   background-color: var(--color-background);
   color: var(--color-foreground);
   font-family: var(--font-sans);
-  height: 100vh;
+  min-height: 100vh;
   overflow: visible;
 }
 
-.glass-panel {
-  background-color: rgba(21, 26, 33, 0.7);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+/* ---------------------------------------------------------------------
+   Solid coloured card - the KPI / risk-signal treatment.
+   White text throughout; hover deepens the fill and lifts the card.
+   ------------------------------------------------------------------ */
+.solid-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 1rem;
+  box-shadow: 0 10px 15px -3px rgb(15 23 42 / 0.1), 0 4px 6px -4px rgb(15 23 42 / 0.1);
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+
+.solid-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 20px 25px -5px rgb(15 23 42 / 0.15), 0 8px 10px -6px rgb(15 23 42 / 0.1);
+}
+
+/* Subtle dot texture lifted straight from the reference. Decorative only. */
+.card-pattern {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.15) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+/* ---------------------------------------------------------------------
+   White content panel - tables, forms, reports, maps, charts.
+   ------------------------------------------------------------------ */
+.card-panel {
+  background-color: #ffffff;
+  border: 1px solid var(--color-line);
+  border-radius: 1rem;
+  box-shadow: 0 1px 2px 0 rgb(15 23 42 / 0.04);
+}
+
+.card-panel-header {
+  background-color: rgba(248, 250, 252, 0.8);
+  border-bottom: 1px solid var(--color-line-soft);
+}
+
+/* Legacy aliases used by pages that predate the tokens above. */
+.glass-panel,
+.glass-panel-glow {
+  background-color: #ffffff;
+  border: 1px solid var(--color-line);
 }
 
 .glass-panel-glow {
-  background-color: rgba(21, 26, 33, 0.9);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 0 20px rgba(0, 229, 255, 0.15);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.1);
+}
+
+/* ---------------------------------------------------------------------
+   Status badge - the only colour allowed to carry risk meaning.
+   ------------------------------------------------------------------ */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.125rem;
+  white-space: nowrap;
+  border-width: 1px;
+  border-style: solid;
+}
+
+.status-badge::before {
+  content: "";
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 9999px;
+  background-color: currentColor;
+  flex-shrink: 0;
+}
+
+.badge-normal {
+  background-color: var(--color-badge-normal);
+  color: var(--color-badge-normal-ink);
+  border-color: var(--color-badge-normal-edge);
+}
+
+.badge-elevated {
+  background-color: var(--color-badge-elevated);
+  color: var(--color-badge-elevated-ink);
+  border-color: var(--color-badge-elevated-edge);
+}
+
+.badge-high {
+  background-color: var(--color-badge-high);
+  color: var(--color-badge-high-ink);
+  border-color: var(--color-badge-high-edge);
+}
+
+.badge-critical {
+  background-color: var(--color-badge-critical);
+  color: var(--color-badge-critical-ink);
+  border-color: var(--color-badge-critical-edge);
+}
+
+.badge-unavailable {
+  background-color: var(--color-badge-unavailable);
+  color: var(--color-badge-unavailable-ink);
+  border-color: var(--color-badge-unavailable-edge);
 }
 
 .custom-scrollbar::-webkit-scrollbar {
@@ -58,16 +232,10 @@ body {
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(100, 116, 139, 0.3);
   border-radius: 4px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-/* Subtle dot pattern used behind the solid KPI cards (reference design). */
-.card-pattern {
-  background-image: radial-gradient(rgba(255, 255, 255, 0.15) 1px, transparent 1px);
-  background-size: 16px 16px;
+  background: rgba(100, 116, 139, 0.5);
 }

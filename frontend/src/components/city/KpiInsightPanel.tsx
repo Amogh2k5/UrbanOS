@@ -26,10 +26,10 @@ function FindingRow({ finding }: { finding: Finding }) {
     <li
       data-testid="kpi-insight-finding"
       data-kind={finding.data_kind}
-      className="border border-slate-800 rounded-lg p-3 bg-slate-900/40"
+      className="border border-slate-200 rounded-lg p-3 bg-slate-50"
     >
       <div className="flex items-start justify-between gap-3 mb-1.5">
-        <h4 className="text-sm font-semibold text-slate-100">{finding.title}</h4>
+        <h4 className="text-sm font-semibold text-slate-800">{finding.title}</h4>
         <span
           data-testid="kpi-insight-kind"
           className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border shrink-0 ${dataKindPillClass(
@@ -44,7 +44,7 @@ function FindingRow({ finding }: { finding: Finding }) {
         <p className="text-[11px] text-slate-500 mb-1 italic">{finding.question}</p>
       )}
 
-      <p data-testid="kpi-insight-answer" className="text-xs text-slate-300 leading-relaxed">
+      <p data-testid="kpi-insight-answer" className="text-xs text-slate-600 leading-relaxed">
         {finding.answer}
       </p>
 
@@ -58,7 +58,7 @@ function FindingRow({ finding }: { finding: Finding }) {
             .map(([k, v]) => (
               <div key={k} className="flex gap-1">
                 <dt className="text-slate-500">{k.replace(/_/g, " ")}</dt>
-                <dd className="text-slate-300 font-mono">{String(v)}</dd>
+                <dd className="text-slate-600 font-mono">{String(v)}</dd>
               </div>
             ))}
         </dl>
@@ -67,7 +67,7 @@ function FindingRow({ finding }: { finding: Finding }) {
       {finding.evidence?.length > 0 && (
         <ul
           data-testid="kpi-insight-evidence"
-          className="mt-2 space-y-0.5 text-[11px] text-slate-400 border-l border-slate-700 pl-2"
+          className="mt-2 space-y-0.5 text-[11px] text-slate-500 border-l border-slate-200 pl-2"
         >
           {finding.evidence.map((e, i) => (
             <li key={i}>{e}</li>
@@ -93,7 +93,7 @@ function FindingRow({ finding }: { finding: Finding }) {
       {finding.limitations?.length > 0 && (
         <ul
           data-testid="kpi-insight-limitations"
-          className="mt-2 space-y-0.5 text-[11px] text-amber-300/80"
+          className="mt-2 space-y-0.5 text-[11px] text-amber-800/80"
         >
           {finding.limitations.map((l, i) => (
             <li key={i} className="flex gap-1">
@@ -114,7 +114,7 @@ export default function KpiInsightPanel({ domainId, status, onClose }: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4"
       onClick={onClose}
       role="presentation"
     >
@@ -124,10 +124,10 @@ export default function KpiInsightPanel({ domainId, status, onClose }: Props) {
         aria-modal="true"
         aria-label={`${status?.display_name ?? domainId} metric insight`}
         onClick={(e) => e.stopPropagation()}
-        className="glass-panel-glow rounded-2xl border border-slate-700 w-full max-w-2xl max-h-[80vh] flex flex-col"
+        className="card-panel rounded-2xl w-full max-w-2xl max-h-[80vh] flex flex-col"
       >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 shrink-0">
-          <h3 className="font-heading font-bold text-sm text-slate-100 flex items-center">
+        <div className="flex items-center justify-between px-6 py-4 card-panel-header shrink-0">
+          <h3 className="font-heading font-bold text-sm text-slate-800 flex items-center">
             <Sparkles size={14} className="mr-2 text-[var(--color-primary)]" />
             {status?.display_name ?? domainId} &middot; Metric Insight
           </h3>
@@ -136,7 +136,7 @@ export default function KpiInsightPanel({ domainId, status, onClose }: Props) {
             onClick={onClose}
             aria-label="Close insight"
             data-testid="kpi-insight-close"
-            className="text-slate-400 hover:text-slate-200 transition-colors"
+            className="text-slate-500 hover:text-slate-700 transition-colors"
           >
             <X size={16} />
           </button>
@@ -146,9 +146,9 @@ export default function KpiInsightPanel({ domainId, status, onClose }: Props) {
           {domainUnavailable && (
             <div
               data-testid="kpi-insight-unavailable"
-              className="flex items-start gap-3 text-sm text-slate-300 border border-slate-700 rounded-lg p-3"
+              className="flex items-start gap-3 text-sm text-slate-700 border border-amber-200 bg-amber-50 rounded-lg p-3"
             >
-              <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-400" />
+              <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" />
               <p>
                 {status?.error
                   ? `This domain could not be assessed: ${status.error}`
@@ -168,7 +168,7 @@ export default function KpiInsightPanel({ domainId, status, onClose }: Props) {
             !domainUnavailable && (
               <div
                 data-testid="kpi-insight-none"
-                className="flex items-start gap-3 text-sm text-slate-400"
+                className="flex items-start gap-3 text-sm text-slate-500"
               >
                 <Info size={16} className="mt-0.5 shrink-0" />
                 <p>
@@ -181,11 +181,11 @@ export default function KpiInsightPanel({ domainId, status, onClose }: Props) {
           )}
 
           {status?.limitations && status.limitations.length > 0 && (
-            <div data-testid="kpi-insight-domain-limitations" className="pt-2 border-t border-slate-800">
+            <div data-testid="kpi-insight-domain-limitations" className="pt-2 border-t border-slate-200">
               <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
                 Domain limitations
               </h4>
-              <ul className="space-y-0.5 text-[11px] text-slate-400">
+              <ul className="space-y-0.5 text-[11px] text-slate-500">
                 {status.limitations.slice(0, 4).map((l, i) => (
                   <li key={i}>{l}</li>
                 ))}

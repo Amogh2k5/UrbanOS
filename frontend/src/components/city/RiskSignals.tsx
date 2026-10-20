@@ -3,24 +3,22 @@
 /**
  * Active Risk Signals.
  *
- * Renders only coordinator cross-domain impacts that carry supporting
- * evidence. An impact with no evidence is correlation, not intelligence, so it
- * is filtered out here rather than displayed as a finding.
+ * Renders only coordinator cross-domain impacts that carry supporting evidence.
+ * An impact with no evidence is correlation, not intelligence, so it is filtered
+ * out here rather than displayed as a finding.
+ *
+ * Signal cards are solid-coloured like the KPI cards; the fill is keyed to
+ * severity for visual urgency, but the severity is still stated by the badge so
+ * nothing depends on colour alone.
  */
 import { Crosshair, ShieldAlert, Info } from "lucide-react";
 import type { CrossDomainImpact } from "@/types/intelligence";
 import {
   isValidatedImpact,
-  riskSignalBorder,
-  severityBand,
+  riskSignalBadgeClass,
+  severityFillClass,
+  toneForSeverity,
 } from "./presentation";
-
-const SEVERITY_PILL: Record<string, string> = {
-  critical: "bg-rose-950 text-rose-200 border-rose-800",
-  high: "bg-amber-950 text-amber-200 border-amber-800",
-  moderate: "bg-amber-500/15 text-amber-200 border-amber-500/40",
-  low: "bg-blue-500/15 text-blue-200 border-blue-500/40",
-};
 
 const SEVERITY_LABEL: Record<string, string> = {
   critical: "Critical",
@@ -40,7 +38,11 @@ const DOMAIN_ICON: Record<string, string> = {
 
 /** `air_quality` -> `Air Quality`. Never leak the raw id into the UI. */
 function domainLabel(domain: string): string {
-  const words = String(domain ?? "").replace(/_/g, " ").trim().split(/\s+/).filter(Boolean);
+  const words = String(domain ?? "")
+    .replace(/_/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
   return words.length ? words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") : "City";
 }
 
@@ -74,19 +76,15 @@ type ImpactState =
   | { kind: "signals"; impacts: CrossDomainImpact[]; hidden: number };
 
 /**
- * Classify what the caller actually has, so that "zero signals" is never
- * confused with "no data" or "could not be computed".
+ * Classify what the caller actually has, so "zero signals" is never confused
+ * with "no data" or "could not be computed".
  */
 export function classifyImpactState(props: Props): ImpactState {
   const { impacts, loading, error, reportAvailable } = props;
 
   if (loading) return { kind: "loading" };
   if (error) return { kind: "error", message: error };
-  // The coordinator report itself is missing or failed: we know nothing about
-  // cross-domain risk, which is not the same as knowing there is none.
   if (reportAvailable === false) return { kind: "unavailable" };
-  // A loaded report that carried no impact array at all. Distinct from `[]`,
-  // which is the coordinator affirmatively reporting zero signals.
   if (impacts === null || impacts === undefined) return { kind: "no-data" };
 
   const validated = impacts.filter(isValidatedImpact);
@@ -103,7 +101,7 @@ export default function RiskSignals(props: Props) {
     <section data-testid="risk-signals" aria-labelledby="risk-signals-heading">
       <h3
         id="risk-signals-heading"
-        className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4"
+        className="text-sm font-bold text-slate-700 uppercase tracking-wider px-3 mb-4 border-l-2 border-slate-200 pl-2.5"
       >
         Active Risk Signals
       </h3>
@@ -115,13 +113,13 @@ export default function RiskSignals(props: Props) {
           aria-busy="true"
         >
           {[0, 1].map((i) => (
-            <div key={i} className="h-28 rounded-xl bg-slate-800/60" />
+            <div key={i} className="h-28 rounded-xl bg-slate-200/60" />
           ))}
         </div>
       ) : state.kind === "error" ? (
         <div
           data-testid="risk-signals-error"
-          className="flex items-start gap-3 text-sm text-rose-300 border border-rose-900/60 bg-rose-950/20 rounded-xl p-4"
+          className="flex items-start gap-3 text-sm text-rose-700 border border-rose-200 bg-rose-50 rounded-xl p-4"
         >
           <ShieldAlert size={18} className="mt-0.5 shrink-0" />
           <p>Risk signals unavailable: {state.message}.</p>
@@ -159,20 +157,18 @@ export default function RiskSignals(props: Props) {
       ) : (
         <>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {state.impacts.map((impact) => {
-              const band = severityBand(impact.severity);
-              return (
-                <article
-                  key={impact.type}
-                  data-testid="risk-signal-card"
-                  data-severity={impact.severity}
-                  className={`glass-panel rounded-xl border border-slate-800 border-l-4 ${riskSignalBorder(
-                    impact.severity
-                  )} p-4 flex flex-col justify-between`}
-                >
+            {state.impacts.map((impact) => (
+              <article
+                key={impact.type}
+                data-testid="risk-signal-card"
+                data-severity={impact.severity}
+                className={severityFillClass(impact.severity)}
+              >
+                <div className="absolute inset-0 card-pattern opacity-30" aria-hidden="true" />
+                <div className="relative z-10 p-4 flex flex-col justify-between h-full">
                   <div>
                     <div className="flex justify-between items-start mb-2 gap-2">
-                      <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 min-w-0">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-white/90 min-w-0">
                         <Crosshair size={13} className="shrink-0" />
                         <span className="truncate">
                           {(impact.domains_involved ?? []).map(domainLabel).join(" + ") ||
@@ -182,25 +178,21 @@ export default function RiskSignals(props: Props) {
                       </div>
                       <span
                         data-testid="risk-signal-severity"
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded border shrink-0 ${
-                          SEVERITY_PILL[band]
-                        }`}
+                        className={riskSignalBadgeClass(impact.severity)}
                       >
-                        {SEVERITY_LABEL[band]}
+                        {SEVERITY_LABEL[toneForSeverity(impact.severity)]}
                       </span>
                     </div>
 
-                    <h4 className="font-bold text-slate-100 text-sm mb-1">
-                      {signalTitle(impact)}
-                    </h4>
-                    <p data-testid="risk-signal-description" className="text-xs text-slate-300">
+                    <h4 className="font-bold text-white text-sm mb-1">{signalTitle(impact)}</h4>
+                    <p data-testid="risk-signal-description" className="text-xs text-white/90">
                       {impact.description}
                     </p>
 
                     {impact.evidence?.length > 0 && (
                       <ul
                         data-testid="risk-signal-evidence"
-                        className="mt-2 space-y-1 text-[11px] text-slate-400 border-l border-slate-700 pl-2"
+                        className="mt-2 space-y-1 text-[11px] text-white/90 border-l border-white/70 pl-2"
                       >
                         {impact.evidence.map((item, i) => (
                           <li key={i}>{item}</li>
@@ -209,14 +201,14 @@ export default function RiskSignals(props: Props) {
                     )}
 
                     {impact.affected_zones?.length > 0 && (
-                      <p data-testid="risk-signal-zones" className="mt-2 text-[11px] text-slate-400">
+                      <p data-testid="risk-signal-zones" className="mt-2 text-[11px] text-white/90">
                         Affected: {impact.affected_zones.join(", ")}
                       </p>
                     )}
                   </div>
-                </article>
-              );
-            })}
+                </div>
+              </article>
+            ))}
           </div>
 
           {state.hidden > 0 && <HiddenDisclosure hidden={state.hidden} />}
@@ -230,8 +222,8 @@ export default function RiskSignals(props: Props) {
  * Centred, deliberately quiet empty state.
  *
  * Deliberately does not say "no risks" or "all clear". It states what is
- * missing - validated cross-domain signals - and points at what is still
- * trustworthy, so absence of evidence is never read as evidence of safety.
+ * missing and points at what is still trustworthy, so absence of evidence is
+ * never read as evidence of safety.
  */
 function EmptyPanel({
   testId,
@@ -247,15 +239,15 @@ function EmptyPanel({
   return (
     <div
       data-testid={testId}
-      className="border border-slate-800 border-dashed rounded-xl px-5 py-8 flex flex-col items-center text-center gap-2"
+      className="card-panel border-dashed px-5 py-8 flex flex-col items-center text-center gap-2"
     >
       <span
         aria-hidden="true"
-        className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-700 bg-slate-800/50"
+        className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-slate-50"
       >
         {icon}
       </span>
-      <p className="text-sm font-semibold text-slate-300">{title}</p>
+      <p className="text-sm font-semibold text-slate-700">{title}</p>
       <p className="text-xs leading-relaxed text-slate-500 max-w-md">{body}</p>
     </div>
   );
@@ -270,8 +262,8 @@ function HiddenDisclosure({ hidden }: { hidden: number }) {
   if (hidden <= 0) return null;
   return (
     <p data-testid="risk-signals-dropped" className="mt-3 text-[11px] text-slate-500">
-      {hidden} unvalidated signal{hidden === 1 ? "" : "s"} hidden: the coordinator
-      produced {hidden === 1 ? "it" : "them"} without supporting evidence.
+      {hidden} unvalidated signal{hidden === 1 ? "" : "s"} hidden: the coordinator produced{" "}
+      {hidden === 1 ? "it" : "them"} without supporting evidence.
     </p>
   );
 }

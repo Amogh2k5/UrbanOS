@@ -4,6 +4,7 @@ import Map, { Marker, NavigationControl, Source, Layer } from "react-map-gl/mapl
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { StyleSpecification, LayerSpecification } from "maplibre-gl";
 import type { LandMapLayer, LandPlanningArea } from "@/services/api";
+import { useState } from "react";
 
 const MAP_STYLE: StyleSpecification = {
   version: 8,
@@ -53,6 +54,7 @@ interface Props {
  * and the map says so rather than implying they are missing from the data.
  */
 export default function LandMap({ layers, planningAreas, selected, onSelect, showSensors }: Props) {
+  const [basemapUnavailable, setBasemapUnavailable] = useState(false);
   const paLayer = layers.find((l) => l.id === "planning_areas");
   const glsLayer = layers.find((l) => l.id === "gls_sites");
 
@@ -76,9 +78,14 @@ export default function LandMap({ layers, planningAreas, selected, onSelect, sho
   return (
     <div className="relative w-full h-full min-h-[460px] overflow-hidden rounded-xl">
       <Map
+        style={{ width: '100%', height: '100%', minHeight: 460 }}
         initialViewState={{ longitude: 103.82, latitude: 1.35, zoom: 10.4 }}
         maxBounds={SG_BOUNDS}
         mapStyle={MAP_STYLE}
+        onError={(event) => {
+          const message = String(event.error?.message ?? "");
+          if (/tile|source|network|fetch|404|403/i.test(message)) setBasemapUnavailable(true);
+        }}
         dragRotate={false}
         pitchWithRotate={false}
         maxZoom={16}
@@ -119,12 +126,18 @@ export default function LandMap({ layers, planningAreas, selected, onSelect, sho
         ))}
       </Map>
 
-      <div className="absolute left-4 top-4 glass-panel p-3 rounded-lg border border-gray-800/80">
-        <div className="text-[10px] uppercase tracking-[0.2em] text-gray-400">Planning areas</div>
-        <div className="text-sm font-semibold text-white">{paLayer?.data.features.length ?? 0} boundaries</div>
-        <div className="text-[10px] text-gray-500 mt-1">Master Plan 2025 (land only, sea excluded)</div>
+      {basemapUnavailable && (
+        <div role="status" aria-live="polite" className="absolute right-4 top-4 z-10 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 shadow-sm">
+          Basemap tiles unavailable. Available planning layers remain visible.
+        </div>
+      )}
+
+      <div className="absolute left-4 top-4 card-panel p-3 rounded-lg border border-slate-200">
+        <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Planning areas</div>
+        <div className="text-sm font-semibold text-slate-900">{paLayer?.data.features.length ?? 0} boundaries</div>
+        <div className="text-[10px] text-slate-500 mt-1">Master Plan 2025 (land only, sea excluded)</div>
         {glsLayer && (
-          <div className="text-[10px] text-gray-500 mt-1 flex items-center gap-1.5">
+          <div className="text-[10px] text-slate-500 mt-1 flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full inline-block" style={{ background: "#fbbf24" }} />
             {glsLayer.data.features.length} awarded GLS sites
           </div>
@@ -132,14 +145,14 @@ export default function LandMap({ layers, planningAreas, selected, onSelect, sho
       </div>
 
       {showSensors && (
-        <div className="absolute right-4 bottom-4 glass-panel p-2 rounded-lg border border-gray-800/80 text-[10px] text-gray-500">
+        <div className="absolute right-4 bottom-4 card-panel p-2 rounded-lg border border-slate-200 text-[10px] text-slate-500">
           GLS points shown for the most recent awards only.
         </div>
       )}
 
       {empty && (
         <div className="absolute inset-0 flex items-center justify-center p-6 text-center">
-          <div className="glass-panel p-4 rounded-lg border border-yellow-500/25 text-xs text-gray-400 max-w-sm">
+          <div className="card-panel p-4 rounded-lg border border-yellow-500/25 text-xs text-slate-500 max-w-sm">
             No map layers are available. The planning-area and GLS sources did not return geometry in this
             build.
           </div>

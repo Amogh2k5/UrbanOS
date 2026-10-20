@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { domainCardClass } from "@/components/city/presentation";
 
 interface CrimeReport {
   generated_at: string;
@@ -88,31 +89,31 @@ export default function CrimeClient({ initialData }: CrimeClientProps) {
     return (
       <div className="p-6 space-y-4">
         <div className="flex items-center gap-4">
-          <div className="animate-pulse bg-slate-800 h-8 w-48 rounded" />
-          <div className="animate-pulse bg-slate-800 h-4 w-64 rounded" />
+          <div className="animate-pulse bg-slate-200 h-8 w-48 rounded" />
+          <div className="animate-pulse bg-slate-200 h-4 w-64 rounded" />
         </div>
         <div className="grid gap-4 md:grid-cols-3">
           {[1, 2, 3].map(i => (
-            <div key={i} className="animate-pulse bg-slate-800 h-24 rounded-lg p-4" />
+            <div key={i} className="animate-pulse bg-slate-200 h-24 rounded-lg p-4" />
           ))}
         </div>
-        <div className="animate-pulse bg-slate-800 h-64 rounded-lg" />
+        <div className="animate-pulse bg-slate-200 h-64 rounded-lg" />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="p-6 text-center text-red-400">
+      <div className="p-6 text-center text-red-700">
         <h2 className="text-lg font-semibold mb-2">Unable to load crime data</h2>
-        <p className="text-sm text-gray-500">{error}</p>
+        <p className="text-sm text-slate-500">{error}</p>
       </div>
     );
   }
 
   if (!data) {
     return (
-      <div className="p-6 text-center text-gray-500">
+      <div className="p-6 text-center text-slate-500">
         No crime data available.
       </div>
     );
@@ -127,20 +128,20 @@ export default function CrimeClient({ initialData }: CrimeClientProps) {
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Safety – Crime</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Official Singapore crime statistics from Singapore Police Force (SPF) via data.gov.sg / SINGSTAT
+          <p className="text-sm text-slate-500 mt-1">
+            Singapore crime statistics and annual safety indicators.
           </p>
         </div>
         <div className="flex items-center gap-4 text-sm">
           <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-            isUnavailable ? "bg-red-900/30 text-red-400" :
-            isPartial ? "bg-amber-900/30 text-amber-400" :
-            "bg-green-900/30 text-green-400"
+            isUnavailable ? "bg-red-50 text-red-700" :
+            isPartial ? "bg-amber-50 text-amber-700" :
+            "bg-green-50 text-green-800"
           }`}>
             {data.source_status === "available" ? "Data Available" :
              data.source_status === "partial" ? "Partial Data" : "Unavailable"}
           </span>
-          <time className="text-gray-500 font-mono">
+          <time className="text-slate-500 font-mono">
             {new Date(data.generated_at).toLocaleString("en-SG", {
               timeZone: "Asia/Singapore",
               year: "numeric", month: "short", day: "numeric",
@@ -153,19 +154,19 @@ export default function CrimeClient({ initialData }: CrimeClientProps) {
       {/* Status banner for partial/unavailable */}
       {(isUnavailable || isPartial || data.warnings.length > 0) && (
         <div className={`p-4 rounded-lg border text-sm ${
-          isUnavailable ? "bg-red-900/20 border-red-800 text-red-300" :
-          "bg-amber-900/20 border-amber-800 text-amber-300"
+          isUnavailable ? "bg-red-50 border-red-200 text-red-800" :
+          "bg-amber-50 border-amber-200 text-amber-800"
         }`}>
           {isUnavailable && (
             <>
               <p className="font-medium">Crime data is temporarily unavailable.</p>
-              <p className="mt-1">The official data.gov.sg API is currently rate-limited (HTTP 429). Please try again later.</p>
+              <p className="mt-1">The data service is currently rate-limited (HTTP 429). Please try again later.</p>
             </>
           )}
           {isPartial && (
             <>
               <p className="font-medium">Partial crime data loaded.</p>
-              <p className="mt-1">One or more official datasets could not be retrieved; missing datasets are not represented as zero.</p>
+              <p className="mt-1">One or more datasets could not be retrieved; missing datasets are not represented as zero.</p>
             </>
           )}
           {data.warnings.length > 0 && !isUnavailable && !isPartial && (
@@ -179,24 +180,33 @@ export default function CrimeClient({ initialData }: CrimeClientProps) {
       {/* Summary KPIs */}
       {!isUnavailable && (
         <div className="grid gap-4 md:grid-cols-3">
-          <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
-            <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Physical Crime (2025)</p>
-            <p className="text-3xl font-bold tabular-nums">{formatNumber(data.total_physical_crime_2025)}</p>
-            <p className="text-xs text-gray-500 mt-1">Rate: {formatRate(data.physical_crime_rate_2025)}</p>
+          <div className={domainCardClass("crime", "p-4")}>
+            <div className="absolute inset-0 card-pattern opacity-30" aria-hidden="true" />
+            <div className="relative z-10">
+              <p className="text-xs text-white/90 uppercase tracking-wider mb-1">Physical Crime (2025)</p>
+              <p className="text-3xl font-bold tabular-nums text-white">{formatNumber(data.total_physical_crime_2025)}</p>
+              <p className="text-xs text-white/90 mt-1">Rate: {formatRate(data.physical_crime_rate_2025)}</p>
+            </div>
           </div>
-          <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
-            <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Scams & Cybercrime (2025)</p>
-            <p className="text-3xl font-bold tabular-nums">{formatNumber(data.total_scams_cybercrime_2025)}</p>
-            <p className="text-xs text-gray-500 mt-1">Scams only: {formatNumber(data.total_scams_2025)}</p>
+          <div className={domainCardClass("crime", "p-4")}>
+            <div className="absolute inset-0 card-pattern opacity-30" aria-hidden="true" />
+            <div className="relative z-10">
+              <p className="text-xs text-white/90 uppercase tracking-wider mb-1">Scams &amp; Cybercrime (2025)</p>
+              <p className="text-3xl font-bold tabular-nums text-white">{formatNumber(data.total_scams_cybercrime_2025)}</p>
+              <p className="text-xs text-white/90 mt-1">Scams only: {formatNumber(data.total_scams_2025)}</p>
+            </div>
           </div>
-          <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
-            <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Arrests (2025)</p>
-            <p className="text-3xl font-bold tabular-nums">
-              {data.arrests_2025_total_selected_offences !== null
-                ? formatNumber(data.arrests_2025_total_selected_offences)
-                : "—"}
-            </p>
-            <p className="text-xs text-gray-500 mt-1">Selected offences total</p>
+          <div className={domainCardClass("crime", "p-4")}>
+            <div className="absolute inset-0 card-pattern opacity-30" aria-hidden="true" />
+            <div className="relative z-10">
+              <p className="text-xs text-white/90 uppercase tracking-wider mb-1">Arrests (2025)</p>
+              <p className="text-3xl font-bold tabular-nums text-white">
+                {data.arrests_2025_total_selected_offences !== null
+                  ? formatNumber(data.arrests_2025_total_selected_offences)
+                  : "—"}
+              </p>
+              <p className="text-xs text-white/90 mt-1">Selected offences total</p>
+            </div>
           </div>
         </div>
       )}
@@ -206,32 +216,31 @@ export default function CrimeClient({ initialData }: CrimeClientProps) {
         <section>
           <h2 className="text-lg font-semibold mb-4">Crime Overview by Category (Annual)</h2>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm border border-slate-800">
+            <table className="w-full text-sm border border-slate-200">
               <thead>
-                <tr className="bg-slate-900 border-b border-slate-800">
+                <tr className="bg-slate-100 border-b border-slate-200">
                   <th className="p-3 text-left font-medium">Category</th>
                   <th className="p-3 text-right font-medium">2022</th>
                   <th className="p-3 text-right font-medium">2023</th>
                   <th className="p-3 text-right font-medium">2024</th>
                   <th className="p-3 text-right font-medium">2025</th>
-                  <th className="p-3 text-left font-medium text-gray-500">Unit</th>
+                  <th className="p-3 text-left font-medium text-slate-500">Unit</th>
                 </tr>
               </thead>
               <tbody>
                 {data.overview.map((row, idx) => (
-                  <tr key={idx} className="border-b border-slate-800/50 hover:bg-slate-900/50">
+                  <tr key={idx} className="border-b border-slate-200/50 hover:bg-white">
                     <td className="p-3 font-medium">{row.name}</td>
                     <td className="p-3 text-right tabular-nums">{formatNumber(row.values["2022"])}</td>
                     <td className="p-3 text-right tabular-nums">{formatNumber(row.values["2023"])}</td>
                     <td className="p-3 text-right tabular-nums">{formatNumber(row.values["2024"])}</td>
                     <td className="p-3 text-right tabular-nums font-medium">{formatNumber(row.values["2025"])}</td>
-                    <td className="p-3 text-left text-gray-500">{row.unit}</td>
+                    <td className="p-3 text-left text-slate-500">{row.unit}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <p className="text-xs text-gray-500 mt-2">Source: {data.data_sources[0]}</p>
         </section>
       )}
 
@@ -240,9 +249,9 @@ export default function CrimeClient({ initialData }: CrimeClientProps) {
         <section>
           <h2 className="text-lg font-semibold mb-4">Top Scam Types (2025)</h2>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm border border-slate-800">
+            <table className="w-full text-sm border border-slate-200">
               <thead>
-                <tr className="bg-slate-900 border-b border-slate-800">
+                <tr className="bg-slate-100 border-b border-slate-200">
                   <th className="p-3 text-left font-medium">Scam Type</th>
                   <th className="p-3 text-right font-medium">Cases</th>
                   <th className="p-3 text-right font-medium">Total Loss (SGD M)</th>
@@ -251,7 +260,7 @@ export default function CrimeClient({ initialData }: CrimeClientProps) {
               </thead>
               <tbody>
                 {data.scam_types.map((row, idx) => (
-                  <tr key={idx} className="border-b border-slate-800/50 hover:bg-slate-900/50">
+                  <tr key={idx} className="border-b border-slate-200/50 hover:bg-white">
                     <td className="p-3 font-medium">{row.name}</td>
                     <td className="p-3 text-right tabular-nums">{formatNumber(row.cases)}</td>
                     <td className="p-3 text-right tabular-nums">{row.loss_sgd_million.toFixed(1)}</td>
@@ -261,41 +270,29 @@ export default function CrimeClient({ initialData }: CrimeClientProps) {
               </tbody>
             </table>
           </div>
-          <p className="text-xs text-gray-500 mt-2">
-            Source: Singapore Police Force Annual Scam and Cybercrime Brief 2025 Infographic (official PDF release).
-          </p>
         </section>
       )}
 
-      {/* Data Period & Sources */}
-      <section className="pt-4 border-t border-slate-800">
+      {/* Data period and limitations */}
+      <section className="pt-4 border-t border-slate-200">
         <h3 className="text-sm font-medium mb-2">Data Information</h3>
         <dl className="grid gap-2 sm:grid-cols-2 text-sm">
-          <dt className="text-gray-500">Data Period</dt>
-          <dd className="text-white">{data.data_period}</dd>
-          <dt className="text-gray-500">Geographic Scope</dt>
-          <dd className="text-white">{data.geographic_scope}</dd>
-          <dt className="text-gray-500">Generated</dt>
-          <dd className="text-white font-mono">
+          <dt className="text-slate-500">Data Period</dt>
+          <dd className="text-slate-900">{data.data_period}</dd>
+          <dt className="text-slate-500">Geographic Scope</dt>
+          <dd className="text-slate-900">{data.geographic_scope}</dd>
+          <dt className="text-slate-500">Generated</dt>
+          <dd className="text-slate-900 font-mono">
             {new Date(data.generated_at).toLocaleString("en-SG", { timeZone: "Asia/Singapore" })} SGT
           </dd>
-          <dt className="text-gray-500">ML Prediction</dt>
-          <dd className="text-white">{data.is_ml_prediction ? "Yes" : "No"}</dd>
+          <dt className="text-slate-500">ML Prediction</dt>
+          <dd className="text-slate-900">{data.is_ml_prediction ? "Yes" : "No"}</dd>
         </dl>
-
-        {data.data_sources.length > 0 && (
-          <div className="mt-4">
-            <h4 className="text-sm font-medium mb-2 text-gray-400">Data Sources</h4>
-            <ul className="text-sm text-gray-300 list-disc list-inside space-y-1">
-              {data.data_sources.map((src, i) => <li key={i}>{src}</li>)}
-            </ul>
-          </div>
-        )}
 
         {data.limitations.length > 0 && (
           <div className="mt-4">
-            <h4 className="text-sm font-medium mb-2 text-gray-400">Limitations</h4>
-            <ul className="text-sm text-gray-300 list-disc list-inside space-y-1">
+            <h4 className="text-sm font-medium mb-2 text-slate-500">Limitations</h4>
+            <ul className="text-sm text-slate-600 list-disc list-inside space-y-1">
               {data.limitations.map((lim, i) => <li key={i}>{lim}</li>)}
             </ul>
           </div>
@@ -303,8 +300,8 @@ export default function CrimeClient({ initialData }: CrimeClientProps) {
 
         {data.errors.length > 0 && (
           <div className="mt-4">
-            <h4 className="text-sm font-medium mb-2 text-red-400">Errors</h4>
-            <ul className="text-sm text-red-300 list-disc list-inside space-y-1">
+            <h4 className="text-sm font-medium mb-2 text-red-700">Errors</h4>
+            <ul className="text-sm text-red-800 list-disc list-inside space-y-1">
               {data.errors.map((err, i) => <li key={i}>{err}</li>)}
             </ul>
           </div>

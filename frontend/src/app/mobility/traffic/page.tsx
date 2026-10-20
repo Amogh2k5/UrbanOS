@@ -5,6 +5,8 @@ import { useEffect, useState } from 'react';
 import { fetchTrafficReport, fetchTrafficPrediction, type TrafficPredictionResponse, type TrafficDivisionForecast } from '@/services/api';
 import { Car, TrendingUp } from 'lucide-react';
 import TrafficMap from './TrafficMap';
+import { domainCardClass } from '@/components/city/presentation';
+import { formatSingaporeTime } from "@/services/time";
 
 const DIVISION_ORDER = [
   'Central',
@@ -28,11 +30,11 @@ function formatDivisionName(id: string) {
 
 function getCongestionColor(level: string) {
   switch ((level || '').toLowerCase()) {
-    case 'free_flow': return 'text-green-400';
-    case 'moderate': return 'text-yellow-400';
-    case 'heavy': return 'text-orange-400';
-    case 'severe': return 'text-red-400';
-    default: return 'text-gray-400';
+    case 'free_flow': return 'text-emerald-100'; // on solid card
+    case 'moderate': return 'text-amber-100'; // on solid card
+    case 'heavy': return 'text-orange-100'; // on solid card
+    case 'severe': return 'text-red-100'; // on solid card
+    default: return 'text-white/90';
   }
 }
 
@@ -153,27 +155,27 @@ export default function TrafficPage() {
 
         {/* Compact KPI Row — driven ONLY by the Live request */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <div className="glass-panel p-4 rounded-lg border border-gray-800">
-            <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Current Avg Speed</div>
+          <div className={`${domainCardClass("traffic", "p-4 rounded-lg shadow-sm")}`}>
+            <div className="text-xs text-white/90 uppercase tracking-wider mb-1">Current Avg Speed</div>
             <div className="text-2xl font-bold text-white">{currentAvgSpeed !== null ? `${currentAvgSpeed.toFixed(1)} km/h` : '--'}</div>
           </div>
-          <div className="glass-panel p-4 rounded-lg border border-gray-800">
-            <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Congestion</div>
+          <div className={`${domainCardClass("traffic", "p-4 rounded-lg shadow-sm")}`}>
+            <div className="text-xs text-white/90 uppercase tracking-wider mb-1">Congestion</div>
             <div className={`text-xl font-bold uppercase ${getCongestionColor(overallCongestion)}`}>{getCongestionLabel(overallCongestion)}</div>
           </div>
-          <div className="glass-panel p-4 rounded-lg border border-gray-800">
-            <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Live Incidents</div>
+          <div className={`${domainCardClass("traffic", "p-4 rounded-lg shadow-sm")}`}>
+            <div className="text-xs text-white/90 uppercase tracking-wider mb-1">Live Incidents</div>
             <div className="text-2xl font-bold text-white">{activeIncidentsCount}</div>
           </div>
-<div className="glass-panel p-4 rounded-lg border border-gray-800">
-             <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Next 5‑min Forecast</div>
+<div className={`${domainCardClass("traffic", "p-4 rounded-lg shadow-sm")}`}>
+             <div className="text-xs text-white/90 uppercase tracking-wider mb-1">Next 5‑min Forecast</div>
              <div className="flex items-center gap-2 text-lg font-bold text-white">
                {forecastLoading && !prediction ? (
-                 <span className="text-gray-500">…</span>
+                 <span className="text-white/90">…</span>
                ) : prediction ? (
-                 <span className="text-green-400">Forecast</span>
+                 <span className="text-white">Forecast</span>
                ) : (
-                 <span className="text-yellow-400">Unavailable</span>
+                 <span className="text-white/90">Unavailable</span>
                )}
              </div>
            </div>
@@ -181,7 +183,7 @@ export default function TrafficPage() {
 
         {/* Live-scoped status: loading/error NEVER affects Forecast */}
         {liveLoading && !liveData && (
-          <div className="mb-4 text-sm text-gray-500 font-mono">Loading live traffic…</div>
+          <div className="mb-4 text-sm text-slate-500 font-mono">Loading live traffic…</div>
         )}
         {liveError && (
           <div className="mb-4 glass-panel p-3 rounded-lg border border-red-500/30 text-red-500 text-sm">
@@ -191,7 +193,7 @@ export default function TrafficPage() {
         )}
 
         {/* Full-width Map */}
-        <div className="mb-6 flex-1 min-h-[500px] glass-panel p-2 rounded-xl overflow-hidden border border-gray-800 relative">
+        <div className="mb-6 flex-1 min-h-[500px] glass-panel p-2 rounded-xl overflow-hidden border border-slate-200 relative">
           <TrafficMap
             incidents={incidents}
             onIncidentClick={handleIncidentClick}
@@ -202,13 +204,13 @@ export default function TrafficPage() {
         {/* Forecast Section — driven ONLY by the Forecast request */}
         <section className="mb-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-bold text-cyan-400 flex items-center gap-2 uppercase tracking-widest text-xs">
+            <h3 className="text-lg font-bold text-cyan-700 flex items-center gap-2 uppercase tracking-widest text-xs">
               <TrendingUp size={18} />
               <span>Traffic Forecast – Next 5 min</span>
             </h3>
             {prediction && (
-              <div className="text-xs text-gray-500 font-mono">
-                Target: {new Date(prediction.target_timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              <div className="text-xs text-slate-500 font-mono">
+                Target: {formatSingaporeTime(prediction.target_timestamp)} SGT
               </div>
             )}
           </div>
@@ -216,14 +218,14 @@ export default function TrafficPage() {
           {forecastLoading && !prediction ? (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {[...Array(5)].map((_, i) => (
-                <div key={i} className="glass-panel p-4 rounded-lg border border-gray-800 animate-pulse">
-                  <div className="h-4 bg-gray-700 rounded w-3/4 mb-2"></div>
-                  <div className="h-6 bg-gray-700 rounded w-1/2"></div>
+                <div key={i} className={`${domainCardClass("traffic", "p-4 rounded-lg shadow-sm")} animate-pulse`}>
+                  <div className="h-4 bg-slate-200 rounded w-3/4 mb-2"></div>
+                  <div className="h-6 bg-slate-200 rounded w-1/2"></div>
                 </div>
               ))}
             </div>
           ) : !prediction?.divisions?.length ? (
-            <div className="glass-panel p-6 rounded-lg border border-gray-800 text-center text-gray-500">
+            <div className="glass-panel p-6 rounded-lg border border-slate-200 text-center text-slate-500">
               {forecastError ? `Forecast unavailable: ${forecastError}` : 'No forecast data'}
             </div>
           ) : (
@@ -237,30 +239,30 @@ export default function TrafficPage() {
                 {orderedDivisions.map((div) => (
                   <div
                     key={div.division}
-                    className="glass-panel p-4 rounded-lg border border-gray-800 hover:border-gray-600 transition-colors"
+                    className={`${domainCardClass("traffic", "p-4 rounded-lg shadow-sm")} hover:shadow-md transition-shadow`}
                   >
                     <div className="font-bold text-white text-sm uppercase tracking-wider mb-2">
                       {formatDivisionName(div.division)}
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div className="text-gray-500">Current</div>
+                      <div className="text-white/90">Current</div>
                       <div className="font-mono text-white text-right">
                         {div.current_avg_speed !== null ? `${div.current_avg_speed.toFixed(1)} km/h` : '--'}
                       </div>
-                      <div className="text-gray-500">Predicted</div>
+                      <div className="text-white/90">Predicted</div>
                       <div className="font-mono text-white text-right">
                         {div.predicted_avg_speed !== null ? `${div.predicted_avg_speed.toFixed(1)} km/h` : '--'}
                       </div>
-                      <div className="text-gray-500">Change</div>
-                      <div className={`font-mono text-right ${div.speed_change !== null && div.speed_change !== undefined ? (div.speed_change > 0 ? 'text-green-400' : div.speed_change < 0 ? 'text-red-400' : 'text-gray-400') : 'text-gray-500'}`}>
+                      <div className="text-white/90">Change</div>
+                      <div className={`font-mono text-right ${div.speed_change !== null && div.speed_change !== undefined ? (div.speed_change > 0 ? 'text-white' : 'text-white/90') : 'text-white/90'}`}>
                         {div.speed_change !== null && div.speed_change !== undefined ? `${div.speed_change > 0 ? '+' : ''}${div.speed_change.toFixed(1)} km/h` : '--'}
                       </div>
-                      <div className="text-gray-500">Status</div>
+                      <div className="text-white/90">Status</div>
                       <div className={`font-mono text-right ${getCongestionColor(div.congestion_level)}`}>
                         {getCongestionLabel(div.congestion_level)}
                       </div>
                     </div>
-                    <div className="mt-3 pt-2 border-t border-gray-800 text-[10px] text-gray-500 uppercase tracking-wider">
+                    <div className="mt-3 pt-2 border-t border-white/30 text-[10px] text-white/90 uppercase tracking-wider">
                       {div.segment_count} segments
                     </div>
                   </div>

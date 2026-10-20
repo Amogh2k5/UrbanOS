@@ -95,15 +95,15 @@ function Kpi({
   detail?: string;
 }) {
   return (
-    <div className="rounded-xl border border-slate-800/90 bg-[#0b111d] px-4 py-3.5">
-      <div className="flex items-center justify-between text-slate-500">
+    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5">
+      <div className="flex items-center justify-between text-slate-600">
         <span className="text-[10px] uppercase tracking-[0.16em]">{label}</span>
         {icon}
       </div>
-      <div className={`mt-1.5 text-2xl font-bold ${alert ? "text-orange-300" : "text-white"}`}>
+      <div className={`mt-1.5 text-2xl font-bold ${alert ? "text-orange-800" : "text-slate-900"}`}>
         {typeof value === "number" ? value.toLocaleString() : value}
       </div>
-      {detail && <div className="mt-0.5 text-[10px] text-slate-500">{detail}</div>}
+      {detail && <div className="mt-0.5 text-[10px] text-slate-600">{detail}</div>}
     </div>
   );
 }
@@ -117,21 +117,21 @@ function RailLineList({ lines, alerts }: { lines: RailLine[]; alerts: TrainAlert
         return (
           <div
             key={line.code}
-            className="flex items-center gap-3 rounded-lg border border-slate-800 bg-[#0d1422] px-3 py-2.5"
+            className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5"
           >
             <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: line.color }} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-slate-200">{line.code}</span>
+                <span className="text-xs font-bold text-slate-800">{line.code}</span>
                 {affected && (
-                  <span className="rounded-full bg-orange-400/10 px-1.5 py-0.5 text-[9px] font-semibold text-orange-300">
+                  <span className="rounded-full bg-orange-400/10 px-1.5 py-0.5 text-[9px] font-semibold text-orange-800">
                     ALERT
                   </span>
                 )}
               </div>
-              <div className="truncate text-[10px] text-slate-500">{line.name}</div>
+              <div className="truncate text-[10px] text-slate-600">{line.name}</div>
             </div>
-            <span className={`text-[10px] font-semibold ${affected ? "text-orange-300" : "text-emerald-400"}`}>
+            <span className={`text-[10px] font-semibold ${affected ? "text-orange-800" : "text-emerald-700"}`}>
               {affected ? `${lineAlerts.length} alert${lineAlerts.length === 1 ? "" : "s"}` : "Normal"}
             </span>
           </div>
@@ -147,25 +147,25 @@ function RailStatusGrid({ alerts }: { alerts: TrainAlert[] }) {
   const lrtLines = RAIL_LINES.filter((line) => ["BPLRT", "SKLRT", "PGLRT"].includes(line.code));
 
   return (
-    <div className="rounded-xl border border-slate-800/90 bg-[#0b111d] p-4">
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <div className="text-sm font-semibold text-white">Rail line status</div>
-          <div className="mt-0.5 text-[11px] text-slate-500">MRT and LRT status from known live alerts</div>
+          <div className="text-sm font-semibold text-slate-900">Rail line status</div>
+          <div className="mt-0.5 text-[11px] text-slate-600">MRT and LRT status from known live alerts</div>
         </div>
-        <Train size={17} className="text-slate-500" />
+        <Train size={17} className="text-slate-600" />
       </div>
 
       <section>
         <div className="mb-2 flex items-center gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">MRT · 6 lines</span>
+          <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-600">MRT · 6 lines</span>
         </div>
         <RailLineList lines={mrtLines} alerts={alerts} />
       </section>
 
-      <section className="mt-5 border-t border-slate-800 pt-4">
+      <section className="mt-5 border-t border-slate-200 pt-4">
         <div className="mb-2 flex items-center gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">LRT · 3 networks</span>
+          <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-600">LRT · 3 networks</span>
         </div>
         <RailLineList lines={lrtLines} alerts={alerts} />
       </section>
@@ -207,9 +207,9 @@ function classifyAlert(alert: TrainAlert): AlertCategory {
 }
 
 const ALERT_CATEGORY_META: Record<AlertCategory, { label: string; icon: ReactNode; color: string }> = {
-  bus: { label: "Bus", icon: <Bus size={14} />, color: "text-cyan-300" },
-  metro: { label: "Metro / MRT", icon: <Train size={14} />, color: "text-orange-300" },
-  rail: { label: "Rail / LRT", icon: <Train size={14} />, color: "text-violet-300" },
+  bus: { label: "Bus", icon: <Bus size={14} />, color: "text-cyan-800" },
+  metro: { label: "Metro / MRT", icon: <Train size={14} />, color: "text-orange-800" },
+  rail: { label: "Rail / LRT", icon: <Train size={14} />, color: "text-violet-800" },
 };
 
 function AlertGroup({
@@ -224,13 +224,13 @@ function AlertGroup({
   const meta = ALERT_CATEGORY_META[category];
 
   return (
-    <div className="border-b border-slate-800 last:border-b-0">
+    <div className="border-b border-slate-200 last:border-b-0">
       <div className="flex items-center justify-between px-4 py-2.5">
         <div className={`flex items-center gap-2 text-xs font-semibold ${meta.color}`}>
           {meta.icon}
           <span>{meta.label}</span>
         </div>
-        <span className="text-[10px] font-semibold text-slate-500">{alerts.length}</span>
+        <span className="text-[10px] font-semibold text-slate-600">{alerts.length}</span>
       </div>
 
       {alerts.length === 0 ? (
@@ -241,14 +241,14 @@ function AlertGroup({
             key={`${category}-${alert.line}-${index}`}
             type="button"
             onClick={() => onSelect(alert)}
-            className="w-full border-t border-slate-800/70 px-4 py-3 text-left transition hover:bg-slate-800/35"
+            className="w-full border-t border-slate-200 px-4 py-3 text-left transition hover:bg-slate-50"
           >
-            <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-300">
-              <AlertCircle size={12} className="shrink-0 text-orange-300" />
+            <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-700">
+              <AlertCircle size={12} className="shrink-0 text-orange-800" />
               <span>{alert.line || (category === "bus" ? "Bus network" : category === "metro" ? "Metro network" : "Rail network")}</span>
-              {alert.status && <span className="text-[9px] uppercase text-slate-500">{alert.status}</span>}
+              {alert.status && <span className="text-[9px] uppercase text-slate-600">{alert.status}</span>}
             </div>
-            <div className="mt-1 line-clamp-2 text-xs leading-5 text-slate-400">{alert.message}</div>
+            <div className="mt-1 line-clamp-2 text-xs leading-5 text-slate-600">{alert.message}</div>
             {alert.station && <div className="mt-1 text-[10px] text-slate-600">Station: {alert.station}</div>}
           </button>
         ))
@@ -271,13 +271,13 @@ function AlertsPanel({
   }, [alerts]);
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-800/90 bg-[#0b111d]">
-      <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
         <div>
-          <div className="text-sm font-semibold text-white">Active transit alerts</div>
-          <div className="text-[10px] text-slate-500">Separated by bus, metro, and rail</div>
+          <div className="text-sm font-semibold text-slate-900">Active transit alerts</div>
+          <div className="text-[10px] text-slate-600">Separated by bus, metro, and rail</div>
         </div>
-        <span className="text-xs font-semibold text-orange-300">{alerts.length}</span>
+        <span className="text-xs font-semibold text-orange-800">{alerts.length}</span>
       </div>
 
       <AlertGroup category="bus" alerts={grouped.bus} onSelect={onSelect} />
@@ -289,12 +289,12 @@ function AlertsPanel({
 
 function BusNetworkPanel({ status }: { status: TransitStatus | null }) {
   return (
-    <div className="rounded-xl border border-slate-800/90 bg-[#0b111d] p-4">
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="flex items-center gap-2">
-        <Bus size={17} className="text-cyan-300" />
+        <Bus size={17} className="text-cyan-800" />
         <div>
-          <div className="text-sm font-semibold text-white">Bus network</div>
-          <div className="text-[10px] text-slate-500">Operational counts only — routes stay off the rail map</div>
+          <div className="text-sm font-semibold text-slate-900">Bus network</div>
+          <div className="text-[10px] text-slate-600">Operational counts only — routes stay off the rail map</div>
         </div>
       </div>
       <div className="mt-4 grid grid-cols-3 gap-3">
@@ -310,7 +310,7 @@ function Metric({ label, value }: { label: string; value: number }) {
   return (
     <div>
       <div className="text-[9px] uppercase tracking-wider text-slate-600">{label}</div>
-      <div className="mt-1 text-lg font-bold text-white">{value.toLocaleString()}</div>
+      <div className="mt-1 text-lg font-bold text-slate-900">{value.toLocaleString()}</div>
     </div>
   );
 }
@@ -319,12 +319,12 @@ function RailMap({ alerts }: { alerts: TrainAlert[] }) {
   const affected = RAIL_LINES.filter((line) => getLineAlerts(line, alerts).length > 0);
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-800 bg-white shadow-2xl">
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
       <div className="flex items-center justify-between gap-4 border-b border-slate-200 bg-white px-5 py-4">
         <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">UrbanOS rail network</div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-600">UrbanOS rail network</div>
           <h3 className="text-xl font-bold text-slate-900">Singapore MRT & LRT</h3>
-          <p className="mt-0.5 text-xs text-slate-500">Complete rail system map with live operational status alongside it</p>
+          <p className="mt-0.5 text-xs text-slate-600">Complete rail system map with live operational status alongside it</p>
         </div>
         <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-[10px] font-semibold text-slate-600 sm:flex">
           <span className={`h-2 w-2 rounded-full ${affected.length ? "bg-orange-400" : "bg-emerald-500"}`} />
@@ -343,7 +343,7 @@ function RailMap({ alerts }: { alerts: TrainAlert[] }) {
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-white/5 via-transparent to-white/10" />
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500">
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-600">
           <span>System map is static; live operational state is shown in the UrbanOS panels.</span>
           <a
             href={SYSTEM_MAP_SOURCE}
@@ -410,7 +410,7 @@ export default function TransitMap() {
 
   if (loading) {
     return (
-      <div className="min-h-[650px] rounded-2xl border border-slate-800 bg-[#070c16] flex items-center justify-center text-slate-400">
+      <div className="min-h-[650px] rounded-2xl border border-slate-200 bg-slate-50 flex items-center justify-center text-slate-600">
         Loading transit operations…
       </div>
     );
@@ -418,10 +418,10 @@ export default function TransitMap() {
 
   if (error) {
     return (
-      <div className="min-h-[650px] rounded-2xl border border-slate-800 bg-[#070c16] flex flex-col items-center justify-center p-6 text-center">
-        <AlertCircle className="mb-3 text-red-400" size={38} />
-        <div className="font-semibold text-white">Transit operations unavailable</div>
-        <div className="mt-1 text-sm text-slate-400">Unable to load the live transit status.</div>
+      <div className="min-h-[650px] rounded-2xl border border-slate-200 bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
+        <AlertCircle className="mb-3 text-red-600" size={38} />
+        <div className="font-semibold text-slate-900">Transit operations unavailable</div>
+        <div className="mt-1 text-sm text-slate-600">Unable to load the live transit status.</div>
         <button
           type="button"
           onClick={() => {
@@ -437,18 +437,18 @@ export default function TransitMap() {
   }
 
   return (
-    <div className="w-full rounded-2xl border border-slate-800 bg-[#070c16] p-4 text-white shadow-xl lg:p-5">
+    <div className="w-full rounded-2xl border border-slate-200 bg-slate-50 p-4 text-slate-900 shadow-xl lg:p-5">
       <header className="mb-4 flex flex-wrap items-end justify-between gap-4">
         <div>
           <div className="flex items-center gap-3">
             <h2 className="text-2xl font-bold tracking-tight">Transit Operations</h2>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-300">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-800">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> LIVE
             </span>
           </div>
-          <p className="mt-1 text-sm text-slate-500">Singapore rail network, live train alerts, and bus operations</p>
+          <p className="mt-1 text-sm text-slate-600">Singapore rail network, live train alerts, and bus operations</p>
         </div>
-        <div className="flex items-center gap-2 text-xs text-slate-500">
+        <div className="flex items-center gap-2 text-xs text-slate-600">
           <Clock3 size={14} />
           {status ? new Date(status.generated_at).toLocaleString("en-SG", { timeZone: "Asia/Singapore" }) : "—"}
         </div>
@@ -466,12 +466,12 @@ export default function TransitMap() {
         <RailMap alerts={alerts} />
 
         <aside className="space-y-4">
-          <div className="rounded-xl border border-slate-800 bg-[#0b111d] p-4">
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="flex items-start gap-3">
               <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${alerts.length ? "bg-orange-400" : "bg-emerald-400"}`} />
               <div>
-                <div className="font-semibold text-white">{alerts.length ? "Network attention" : "Network normal"}</div>
-                <div className="mt-1 text-xs leading-5 text-slate-500">
+                <div className="font-semibold text-slate-900">{alerts.length ? "Network attention" : "Network normal"}</div>
+                <div className="mt-1 text-xs leading-5 text-slate-600">
                   {alerts.length
                     ? `${alerts.length} live rail alert${alerts.length === 1 ? "" : "s"} currently available.`
                     : "No active rail alerts currently available."}
@@ -486,12 +486,12 @@ export default function TransitMap() {
         </aside>
       </div>
 
-      <footer className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-[#0b111d] px-4 py-3">
+      <footer className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
         <div className="flex items-center gap-2 text-sm font-semibold">
-          <Gauge size={16} className="text-cyan-300" />
+          <Gauge size={16} className="text-cyan-800" />
           Operations view
         </div>
-        <div className="text-xs text-slate-500">
+        <div className="text-xs text-slate-600">
           Static network map + live status API. No bus route geometry is shown here.
         </div>
       </footer>
@@ -502,18 +502,18 @@ export default function TransitMap() {
           onClick={() => setSelectedAlert(null)}
         >
           <div
-            className="w-full max-w-lg rounded-2xl border border-slate-700 bg-[#0b111d] shadow-2xl"
+            className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-start justify-between border-b border-slate-800 p-5">
+            <div className="flex items-start justify-between border-b border-slate-200 p-5">
               <div>
-                <div className="flex items-center gap-2 text-orange-300">
+                <div className="flex items-center gap-2 text-orange-800">
                   <AlertCircle size={18} />
                   <span className="font-semibold">{ALERT_CATEGORY_META[classifyAlert(selectedAlert)].label} alert</span>
                 </div>
-                <div className="mt-1 text-lg font-bold text-white">{selectedAlert.line || "Train network"}</div>
+                <div className="mt-1 text-lg font-bold text-slate-900">{selectedAlert.line || "Train network"}</div>
               </div>
-              <button type="button" onClick={() => setSelectedAlert(null)} className="text-slate-500 hover:text-white">
+              <button type="button" onClick={() => setSelectedAlert(null)} className="text-slate-600 hover:text-slate-900">
                 <X size={18} />
               </button>
             </div>
@@ -532,9 +532,9 @@ export default function TransitMap() {
 
 function Info({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-slate-800 bg-[#0d1422] p-3">
-      <div className="mb-1 text-[10px] uppercase tracking-wider text-slate-500">{label}</div>
-      <div className="whitespace-pre-wrap text-sm text-slate-200">{value}</div>
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="mb-1 text-[10px] uppercase tracking-wider text-slate-600">{label}</div>
+      <div className="whitespace-pre-wrap text-sm text-slate-800">{value}</div>
     </div>
   );
 }

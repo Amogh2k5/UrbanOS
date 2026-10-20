@@ -114,8 +114,9 @@ export default function SingaporeMap() {
   const floodAlerts = report?.source_reports?.flood?.active_alerts || [];
 
   return (
-    <div className="relative w-full h-full min-h-[500px] glass-panel rounded-xl overflow-hidden border border-gray-800 traffic-map-container" style={{ touchAction: 'pan-y' }}>
+    <div className="relative w-full h-full min-h-[500px] card-panel rounded-xl overflow-hidden border border-slate-200 traffic-map-container" style={{ touchAction: 'pan-y' }}>
       <Map
+        style={{ width: '100%', height: '100%', minHeight: 500 }}
           initialViewState={{
             longitude: 103.8198,
             latitude: 1.3521,
@@ -182,13 +183,13 @@ export default function SingaporeMap() {
 
       {hoverInfo && (
         <div 
-          className="absolute z-20 glass-panel-glow p-3 rounded pointer-events-none text-sm max-w-[200px]"
+          className="absolute z-20 card-panel p-3 rounded pointer-events-none text-sm max-w-[200px]"
           style={{ left: hoverInfo.x + 15, top: hoverInfo.y + 15 }}
         >
           <div className="font-heading font-bold text-[var(--color-primary)] capitalize">
             {hoverInfo.feature.properties.name?.replace('SG_', '').replace('_', ' ')}
           </div>
-          <div className="text-gray-300 mt-1 text-xs">
+          <div className="text-slate-600 mt-1 text-xs">
             Click to open Zone Inspector for details
           </div>
         </div>

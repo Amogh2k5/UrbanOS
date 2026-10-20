@@ -252,16 +252,16 @@ export default function OverviewPage() {
         {selectedModule && (
           <section
             data-testid="module-detail"
-            className="glass-panel rounded-2xl border border-slate-800 p-6"
+            className="card-panel p-6"
           >
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-heading font-bold text-sm text-slate-100">
+              <h3 className="font-heading font-bold text-sm text-slate-800">
                 {moduleDetail?.module_name ?? selectedModule} Detail
               </h3>
               <button
                 type="button"
                 onClick={() => setSelectedModule(null)}
-                className="text-slate-400 hover:text-slate-200"
+                className="text-slate-500 hover:text-slate-800"
                 aria-label="Close module detail"
               >
                 <X size={16} />
@@ -269,17 +269,17 @@ export default function OverviewPage() {
             </div>
 
             {moduleLoading && (
-              <p data-testid="module-detail-loading" className="text-sm text-slate-400 animate-pulse">
+              <p data-testid="module-detail-loading" className="text-sm text-slate-500 animate-pulse">
                 Loading module detail...
               </p>
             )}
             {moduleError && (
-              <p data-testid="module-detail-error" className="text-sm text-rose-300 flex items-center gap-2">
+              <p data-testid="module-detail-error" className="text-sm text-rose-800 flex items-center gap-2">
                 <TriangleAlert size={14} /> {moduleError}
               </p>
             )}
             {moduleDetail && !moduleLoading && (
-              <div className="space-y-2 text-sm text-slate-300">
+              <div className="space-y-2 text-sm text-slate-700">
                 <p data-testid="module-detail-summary">{moduleDetail.summary}</p>
                 <p className="text-xs text-slate-500 font-mono">
                   status: {moduleDetail.status}
@@ -294,13 +294,16 @@ export default function OverviewPage() {
 
         {/* Alerts (existing behaviour, preserved) */}
         {overview && overview.alerts.length > 0 && (
-          <section data-testid="overview-alerts" className="glass-panel rounded-2xl border border-slate-800 p-6">
-            <h3 className="font-heading font-bold text-sm text-slate-100 mb-3">Alerts</h3>
+          <section data-testid="overview-alerts" className="card-panel p-6">
+            <h3 className="font-heading font-bold text-sm text-slate-900 mb-3">Alerts</h3>
             <ul className="space-y-2">
               {overview.alerts.map((a, i) => (
-                <li key={`${a.domain}-${i}`} className="text-xs text-slate-300 border-l-2 border-amber-500 pl-3">
-                  <span className="font-semibold text-slate-200">{a.title}</span>
-                  <span className="block text-slate-400">{a.description}</span>
+                <li
+                  key={`${a.domain}-${i}`}
+                  className="text-xs text-slate-500 border-l-2 border-slate-200 pl-3"
+                >
+                  <span className="font-semibold text-slate-800">{a.title}</span>
+                  <span className="block text-slate-500">{a.description}</span>
                 </li>
               ))}
             </ul>
@@ -325,7 +328,7 @@ export default function OverviewPage() {
         onClick={() => setChatOpen((v) => !v)}
         data-testid="copilot-toggle"
         aria-label="Toggle assistant"
-        className="fixed bottom-6 right-6 w-14 h-14 bg-slate-800 text-white rounded-full shadow-lg hover:scale-105 transition-transform z-[100] flex items-center justify-center ring-4 ring-slate-900"
+        className="fixed bottom-6 right-6 w-14 h-14 bg-indigo-600 text-white rounded-full shadow-lg hover:scale-105 transition-transform z-[100] flex items-center justify-center ring-4 ring-slate-200"
       >
         <MessageSquare size={22} />
       </button>
@@ -333,26 +336,26 @@ export default function OverviewPage() {
       {chatOpen && (
         <div
           data-testid="copilot-panel"
-          className="fixed bottom-24 right-6 w-[350px] h-[460px] bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl flex flex-col z-[90] overflow-hidden"
+          className="fixed bottom-24 right-6 w-[350px] h-[460px] bg-white border border-slate-200 rounded-2xl shadow-2xl flex flex-col z-[90] overflow-hidden"
         >
-          <div className="flex items-center justify-between px-5 h-12 border-b border-slate-700 shrink-0">
-            <span className="font-bold text-slate-100 text-sm flex items-center">
-              <MessageSquare size={15} className="mr-2 text-slate-300" /> Assistant
+          <div className="flex items-center justify-between px-5 h-12 border-b border-slate-200 shrink-0">
+            <span className="font-bold text-slate-800 text-sm flex items-center">
+              <MessageSquare size={15} className="mr-2 text-slate-700" /> Assistant
             </span>
             <button
               type="button"
               onClick={() => setChatOpen(false)}
-              className="text-slate-400 hover:text-slate-200"
+              className="text-slate-500 hover:text-slate-800"
               aria-label="Close assistant"
             >
               <X size={16} />
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-950/60 custom-scrollbar">
+          <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50 custom-scrollbar">
             {chatMessages.length === 0 && (
               <div data-testid="copilot-intro" className="space-y-2">
-                <p className="text-xs text-slate-400">
+                <p className="text-xs text-slate-500">
                   Ask about the current city status, a domain, or an active
                   risk signal.
                 </p>
@@ -369,8 +372,8 @@ export default function OverviewPage() {
                 <div
                   className={`max-w-[85%] text-xs rounded-2xl px-3 py-2 leading-relaxed ${
                     m.role === "user"
-                      ? "bg-slate-800 text-white rounded-tr-sm"
-                      : "bg-slate-900 border border-slate-700 text-slate-300 rounded-tl-sm"
+                      ? "bg-indigo-600 text-white rounded-tr-sm"
+                      : "bg-white border border-slate-200 text-slate-600 rounded-tl-sm"
                   }`}
                 >
                   {m.text}
@@ -383,13 +386,13 @@ export default function OverviewPage() {
               </p>
             )}
             {chatError && (
-              <p data-testid="copilot-error" className="text-xs text-rose-300">
+              <p data-testid="copilot-error" className="text-xs text-rose-800">
                 {chatError}
               </p>
             )}
           </div>
 
-          <div className="p-3 border-t border-slate-700 flex gap-2 shrink-0">
+          <div className="p-3 border-t border-slate-200 flex gap-2 shrink-0">
             <input
               type="text"
               value={chatInput}
@@ -399,14 +402,14 @@ export default function OverviewPage() {
               }}
               placeholder="Ask about UrbanOS data"
               data-testid="copilot-input"
-              className="flex-1 bg-slate-800 border border-slate-700 text-slate-100 text-xs rounded-lg px-3 py-2 focus:outline-none"
+              className="flex-1 bg-white border border-slate-300 text-slate-800 text-xs rounded-lg px-3 py-2 focus:outline-none"
             />
             <button
               type="button"
               onClick={() => void submitChat()}
               disabled={chatLoading || !chatInput.trim()}
               data-testid="copilot-send"
-              className="px-3 bg-slate-700 text-white rounded-lg disabled:opacity-40"
+              className="px-3 bg-indigo-600 text-white rounded-lg disabled:bg-slate-200 disabled:text-slate-500"
               aria-label="Send"
             >
               <Send size={14} />
@@ -430,7 +433,7 @@ export default function OverviewPage() {
               className={`text-[11px] px-2.5 py-1 rounded-lg border transition-colors ${
                 selectedModule === m.id
                   ? "border-[var(--color-primary)] text-[var(--color-primary)]"
-                  : "border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-500"
+                  : "border-slate-300 text-slate-500 hover:text-slate-800 hover:border-slate-400"
               }`}
             >
               {m.name}

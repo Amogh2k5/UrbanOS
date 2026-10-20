@@ -105,11 +105,25 @@ export async function fetchWeatherKpi(): Promise<any> {
 }
 
 export async function fetchPm25Kpi(): Promise<any> {
-  const response = await fetch(`${API_BASE}/kpi/live/pm25`, { cache: 'no-store' });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch PM2.5 KPI: ${response.statusText}`);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const response = await fetch(`${API_BASE}/kpi/live/pm25`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch PM2.5 KPI: ${response.statusText}`);
+    }
+    return response.json();
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("PM2.5 KPI request timed out");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return response.json();
 }
 
 export interface Pm25PredictionRegion {
@@ -897,6 +911,406 @@ export async function fetchWaterReport(refresh = false): Promise<WaterReport> {
   const response = await fetch(`${API_BASE}/api/water/report${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
   if (!response.ok) {
     throw new Error(`Failed to fetch water report: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+// ---------------------------------------------------------------------------
+// Waste (Infrastructure) domain — mirrors backend/app/infrastructure/waste/models.py
+// ---------------------------------------------------------------------------
+export type WasteDataKind = 'live' | 'latest_available' | 'historical' | 'reference' | 'forecast' | 'unavailable';
+export type WasteAlertSeverity = 'LOW' | 'MODERATE';
+export type WasteSourceStatus = 'ok' | 'stale_cache' | 'loading' | 'unavailable';
+export type WasteFacilityKind = 'recycling_bins' | 'ewaste' | 'lighting_waste' | 'disposal_sites';
+
+export interface WasteIndicator {
+  key: string;
+  label: string;
+  period: string;
+  value: number | null;
+  change_abs: number | null;
+  change_pct: number | null;
+  previous_period: string;
+  unit: string;
+  data_kind: WasteDataKind;
+  note?: string;
+  published_value?: number | null;
+}
+
+export interface WasteSource {
+  key: string;
+  organization: string;
+  name: string;
+  identifier: string;
+  layer_name: string;
+  url: string;
+  purpose: string;
+  update_frequency: string;
+  coverage: string;
+  authentication: string;
+  data_kind: WasteDataKind;
+  crs: string;
+  component: string;
+  status: WasteSourceStatus;
+  last_fetched_at: string | null;
+  latest_data_period: string | null;
+  error: string | null;
+  record_count: number | null;
+}
+
+export interface WasteKpi {
+  key: string;
+  label: string;
+  period: string;
+  value: number | null;
+  change_abs: number | null;
+  change_pct: number | null;
+  previous_period: string;
+  unit: string;
+  data_kind: WasteDataKind;
+}
+
+export interface WasteAlert {
+  id: string;
+  type: string;
+  severity: WasteAlertSeverity;
+  message: string;
+  evidence: string[];
+  data_kind: WasteDataKind;
+}
+
+export interface WasteInsight {
+  question: string;
+  answer: string;
+  data_kind: WasteDataKind;
+}
+
+export interface WastePoint {
+  year: number;
+  value: number | null;
+}
+
+export interface WasteSeries {
+  key: string;
+  label: string;
+  unit: string;
+  points: WastePoint[];
+  data_kind: WasteDataKind;
+  source_key: string | null;
+}
+
+export interface WasteCategoryRow {
+  key: string;
+  label: string;
+  generated: number | null;
+  recycled: number | null;
+  disposed: number | null;
+  recycling_rate_computed: number | null;
+  recycling_rate_published: number | null;
+  share_of_total_disposed_pct: number | null;
+  data_kind: WasteDataKind;
+}
+
+export interface WasteGenerationSection {
+  data_kind: WasteDataKind;
+  latest_year: number | null;
+  generated: WasteSeries | null;
+  recycled: WasteSeries | null;
+  disposed: WasteSeries | null;
+  recycling_rate_computed: WasteSeries | null;
+  recycling_rate_excl_cd: WasteSeries | null;
+  peak_generated_year: number | null;
+  peak_generated_tonnes: number | null;
+  generated_change_since_peak_pct: number | null;
+  peak_recycling_rate_year: number | null;
+  peak_recycling_rate_pct: number | null;
+  limitations: string[];
+}
+
+export interface WasteCategorySection {
+  data_kind: WasteDataKind;
+  latest_year: number | null;
+  rows: WasteCategoryRow[];
+  limitations: string[];
+}
+
+export interface WasteFoodSection {
+  data_kind: WasteDataKind;
+  latest_year: number | null;
+  generated: WasteIndicator | null;
+  recycling_rate: WasteIndicator | null;
+  share_of_total_disposed_pct: number | null;
+  series_generated: WasteSeries | null;
+  series_disposed: WasteSeries | null;
+  series_recycled: WasteSeries | null;
+  limitations: string[];
+}
+
+export interface WasteServiceClass {
+  key: string;
+  label: string;
+  description: string;
+  licensees: number;
+}
+
+export interface WasteServicesSection {
+  data_kind: WasteDataKind;
+  licensee_count: number | null;
+  dataset_period: string | null;
+  classes: WasteServiceClass[];
+  limitations: string[];
+}
+
+export interface WasteFacilitySummary {
+  key: WasteFacilityKind;
+  label: string;
+  count: number;
+  status: WasteSourceStatus;
+  record_date_min: string | null;
+  record_date_max: string | null;
+}
+
+export interface WasteInfrastructureSection {
+  data_kind: WasteDataKind;
+  map_available: boolean;
+  total_locations: number;
+  kinds: WasteFacilitySummary[];
+  limitations: string[];
+}
+
+export interface WasteQualityCheck {
+  key: string;
+  description: string;
+  passed: boolean;
+  checked: number;
+  failures: string[];
+}
+
+export interface WasteMapFeature {
+  type: 'Feature';
+  geometry: { type: 'Point'; coordinates: [number, number] };
+  properties: Record<string, unknown>;
+}
+
+export interface WasteMapCollection {
+  type: 'FeatureCollection';
+  features: WasteMapFeature[];
+  metadata: Record<string, unknown>;
+}
+
+export interface WasteReport {
+  generated_at: string;
+  domain: string;
+  subdomain: string;
+  status: 'STATISTICS_AVAILABLE' | 'PARTIAL' | 'UNAVAILABLE';
+  overall_risk: 'LOW' | 'MODERATE' | 'HIGH' | 'CRITICAL' | 'UNKNOWN';
+  summary: string;
+  kpis: WasteKpi[];
+  generation: WasteGenerationSection;
+  categories: WasteCategorySection;
+  food: WasteFoodSection;
+  services: WasteServicesSection;
+  infrastructure: WasteInfrastructureSection;
+  unavailable_metrics: { key: string; label: string; reason: string }[];
+  forecast: { available: boolean; reason: string };
+  data_quality: { checks: WasteQualityCheck[]; missing_cells: number; unparseable_cells: number };
+  alerts: WasteAlert[];
+  insights: WasteInsight[];
+  sources: WasteSource[];
+  data_timestamps: Record<string, unknown>;
+  confidence: 'high' | 'medium' | 'low';
+  limitations: string[];
+  warnings: string[];
+  errors: string[];
+  is_ml_prediction: boolean;
+}
+
+export async function fetchWasteReport(refresh = false): Promise<WasteReport> {
+  const response = await fetch(`${API_BASE}/api/waste/report${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch waste report: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchWasteOverview(refresh = false): Promise<any> {
+  const response = await fetch(`${API_BASE}/api/waste/overview${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch waste overview: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchWasteCategories(refresh = false): Promise<any> {
+  const response = await fetch(`${API_BASE}/api/waste/categories${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch waste categories: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchWasteFood(refresh = false): Promise<any> {
+  const response = await fetch(`${API_BASE}/api/waste/food${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch waste food: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchWasteServices(refresh = false): Promise<any> {
+  const response = await fetch(`${API_BASE}/api/waste/services${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch waste services: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchWasteSources(refresh = false): Promise<any> {
+  const response = await fetch(`${API_BASE}/api/waste/sources${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch waste sources: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchWasteMap(kind?: string, refresh = false): Promise<any> {
+  const url = kind ? `${API_BASE}/api/waste/map?kind=${kind}${refresh ? '&refresh=true' : ''}` : `${API_BASE}/api/waste/map${refresh ? '?refresh=true' : ''}`;
+  const response = await fetch(url, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch waste map: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+// ---------------------------------------------------------------------------
+// Housing (Planning) domain — mirrors backend/app/planning/housing/models.py
+// ---------------------------------------------------------------------------
+export type HousingDataKind = 'live' | 'latest_available' | 'historical' | 'forecast' | 'unavailable';
+export type HousingSourceStatus = 'available' | 'partial' | 'unavailable';
+
+export interface HousingMeta {
+  generated_at: string;
+  status: HousingSourceStatus;
+  data_timestamps: Record<string, unknown>;
+  warnings: string[];
+  errors: string[];
+  limitations: string[];
+}
+
+export interface HousingSource {
+  key: string;
+  name: string;
+  agency: string;
+  url: string;
+  status: HousingSourceStatus;
+  retrieved_at: string | null;
+  error: string | null;
+  record_count: number;
+  fields: string[];
+}
+
+export interface HousingReport {
+  generated_at: string;
+  domain: string;
+  subdomain: string;
+  status: HousingSourceStatus;
+  kpis: Record<string, unknown>;
+  resale_trend: Array<Record<string, unknown>>;
+  town_prices: Array<Record<string, unknown>>;
+  resale_by_flat_type: Array<Record<string, unknown>>;
+  housing_stock: Record<string, unknown>;
+  rental_market: Record<string, unknown>;
+  private_residential: Record<string, unknown>;
+  supply_pipeline: Record<string, unknown>;
+  household_context: Record<string, unknown>;
+  map_data: Record<string, unknown>;
+  sources: HousingSource[];
+  errors: string[];
+  warnings: string[];
+  limitations: string[];
+  insights: Array<{ question: string; answer: string; data_kind: HousingDataKind }>;
+  confidence: 'high' | 'medium' | 'low';
+  data_timestamps: Record<string, unknown>;
+  is_ml_prediction: boolean;
+}
+
+export async function fetchHousingReport(refresh = false): Promise<HousingReport> {
+  const response = await fetch(`${API_BASE}/api/planning/housing/report${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch housing report: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchHousingSources(refresh = false): Promise<any> {
+  const response = await fetch(`${API_BASE}/api/planning/housing/sources${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch housing sources: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+// ---------------------------------------------------------------------------
+// Energy (Infrastructure) domain — mirrors backend/app/infrastructure/energy/models.py
+// ---------------------------------------------------------------------------
+export type EnergyDataKind = 'live' | 'latest_available' | 'historical' | 'forecast' | 'unavailable';
+
+export interface EnergyMeta {
+  generated_at: string;
+  status: 'OK' | 'PARTIAL' | 'UNAVAILABLE';
+  data_timestamps: Record<string, unknown>;
+  warnings: string[];
+  errors: string[];
+  limitations: string[];
+}
+
+export interface EnergySource {
+  name: string;
+  organization: string;
+  dataset_id: string;
+  url: string;
+  frequency: string;
+  coverage: string;
+  unit: string;
+  status: string;
+  latest_period: string | null;
+  records: number;
+  error: string | null;
+}
+
+export interface EnergyReport {
+  generated_at: string;
+  domain: string;
+  subdomain: string;
+  status: 'OK' | 'PARTIAL' | 'UNAVAILABLE';
+  summary: string;
+  key_metrics: Record<string, unknown>;
+  peak_demand: Array<Record<string, unknown>>;
+  consumption: Array<Record<string, unknown>>;
+  solar_by_region: Array<Record<string, unknown>>;
+  solar_capacity: Array<Record<string, unknown>>;
+  sources: EnergySource[];
+  limitations: string[];
+  warnings: string[];
+  errors: string[];
+  forecast: Record<string, unknown>;
+  confidence: 'high' | 'medium' | 'low';
+  data_timestamps: Record<string, unknown>;
+  is_ml_prediction: boolean;
+}
+
+export async function fetchEnergyReport(refresh = false): Promise<EnergyReport> {
+  const response = await fetch(`${API_BASE}/api/infrastructure/energy/report${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch energy report: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchEnergySources(refresh = false): Promise<any> {
+  const response = await fetch(`${API_BASE}/api/infrastructure/energy/sources${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch energy sources: ${response.statusText}`);
   }
   return response.json();
 }

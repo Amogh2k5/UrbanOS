@@ -12,6 +12,8 @@ import {
   Building,
   Calendar,
 } from 'lucide-react';
+import { domainCardClass } from '@/components/city/presentation';
+import { formatSingaporeDate } from '@/services/time';
 import {
   fetchRoadWorks,
   fetchRoadOpenings,
@@ -30,11 +32,8 @@ function formatDate(dateStr: string): string {
   try {
     const date = new Date(dateStr);
     if (isNaN(date.getTime())) return dateStr;
-    return date.toLocaleDateString('en-SG', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-    });
+    const formatted = formatSingaporeDate(date);
+    return formatted === '—' ? dateStr : formatted;
   } catch {
     return dateStr;
   }
@@ -42,12 +41,12 @@ function formatDate(dateStr: string): string {
 
 function getStatusBadge(status: 'active' | 'upcoming' | 'completed') {
   const styles: Record<string, string> = {
-    active: 'bg-red-500/20 text-red-400 border-red-500/30',
-    upcoming: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
-    completed: 'bg-green-500/20 text-green-400 border-green-500/30',
+    active: 'bg-red-500/20 text-red-700 border-red-500/30',
+    upcoming: 'bg-amber-500/20 text-amber-700 border-amber-500/30',
+    completed: 'bg-green-500/20 text-green-800 border-green-500/30',
   };
   return (
-    <span className={`px-2 py-0.5 text-xs font-medium rounded-full border ${styles[status] || 'bg-gray-500/20 text-gray-400'}`}>
+    <span className={`px-2 py-0.5 text-xs font-medium rounded-full border ${styles[status] || 'bg-slate-200 text-slate-500'}`}>
       {status.charAt(0).toUpperCase() + status.slice(1)}
     </span>
   );
@@ -55,12 +54,12 @@ function getStatusBadge(status: 'active' | 'upcoming' | 'completed') {
 
 function getOwnershipBadge(ownership: string) {
   const colors: Record<string, string> = {
-    LTA: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-    Private: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
-    CCS: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-    SMRT: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+    LTA: 'bg-blue-500/20 text-blue-700 border-blue-500/30',
+    Private: 'bg-purple-500/20 text-purple-700 border-purple-500/30',
+    CCS: 'bg-emerald-500/20 text-emerald-700 border-emerald-500/30',
+    SMRT: 'bg-orange-500/20 text-orange-700 border-orange-500/30',
   };
-  const style = colors[ownership] || 'bg-gray-500/20 text-gray-400 border-gray-500/30';
+  const style = colors[ownership] || 'bg-slate-200 text-slate-500 border-slate-300';
   return (
     <span className={`px-2 py-0.5 text-xs font-medium rounded-full border ${style}`}>
       {ownership}
@@ -70,21 +69,24 @@ function getOwnershipBadge(ownership: string) {
 
 function getBFACheck(isAccessible: boolean) {
   return isAccessible ? (
-    <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+    <svg className="w-4 h-4 text-emerald-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
     </svg>
   ) : (
-    <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+    <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
     </svg>
   );
 }
 
-function KPICard({ label, value, icon: Icon, color = 'text-white' }: { label: string; value: string | number; icon: React.ComponentType<{ className?: string }>; color?: string }) {
+function KPICard({ label, value, icon: Icon }: { label: string; value: string | number; icon: React.ComponentType<{ className?: string }> }) {
   return (
-    <div className="glass-panel p-4 rounded-lg border border-gray-800">
-      <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">{label}</div>
-      <div className={`text-2xl font-bold ${color}`}>{value}</div>
+    <div className={`${domainCardClass("roads", "p-4")}`}>
+      <div className="flex items-center gap-2 text-xs text-white/90 uppercase tracking-wider mb-1">
+        <Icon className="h-3 w-3" />
+        {label}
+      </div>
+      <div className="text-2xl font-bold text-white">{value}</div>
     </div>
   );
 }
@@ -98,8 +100,8 @@ function StatusFilters({ active, onChange, labels }: { active: 'all' | 'active' 
           onClick={() => onChange(filter)}
           className={`px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${
             active === filter
-              ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-              : 'text-gray-400 hover:text-white border border-gray-700'
+              ? 'bg-blue-500/20 text-blue-700 border border-blue-500/30'
+              : 'text-slate-600 hover:text-slate-900 border border-slate-200'
           }`}
         >
           {labels[filter as keyof typeof labels]}
@@ -126,11 +128,11 @@ function DataTable<T>({
     return (
       <div className="space-y-3">
         {[...Array(5)].map((_, i) => (
-          <div key={i} className="animate-pulse glass-panel p-4 rounded-lg border border-gray-800 flex items-center gap-4">
-            <div className="w-8 h-8 bg-gray-700 rounded"></div>
+          <div key={i} className="animate-pulse glass-panel p-4 rounded-lg border border-slate-200 flex items-center gap-4">
+            <div className="w-8 h-8 bg-slate-200 rounded"></div>
             <div className="flex-1">
-              <div className="h-4 bg-gray-700 rounded w-1/2 mb-2"></div>
-              <div className="h-3 bg-gray-700 rounded w-1/4"></div>
+              <div className="h-4 bg-slate-200 rounded w-1/2 mb-2"></div>
+              <div className="h-3 bg-slate-200 rounded w-1/4"></div>
             </div>
           </div>
         ))}
@@ -144,7 +146,7 @@ function DataTable<T>({
 
   if (!data.length) {
     return (
-      <div className="p-8 text-center text-gray-500">
+      <div className="p-8 text-center text-slate-500">
         {emptyMessage}
       </div>
     );
@@ -154,7 +156,7 @@ function DataTable<T>({
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="text-gray-500 border-b border-gray-800">
+          <tr className="text-slate-500 border-b border-slate-200">
             {columns.map((col) => (
               <th key={col.key} className="text-left p-3 font-medium">{col.header}</th>
             ))}
@@ -162,7 +164,7 @@ function DataTable<T>({
         </thead>
         <tbody>
           {data.map((item, idx) => (
-            <tr key={idx} className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors">
+            <tr key={idx} className="border-b border-slate-200 hover:bg-slate-100/30 transition-colors">
               {columns.map((col) => (
                 <td key={col.key} className="p-3">{col.render(item)}</td>
               ))}
@@ -218,7 +220,6 @@ export default function RoadsPage() {
   // Fetch Road Works
   useEffect(() => {
     let cancelled = false;
-    setRoadWorksLoading(true);
     fetchRoadWorks(50, 0, worksFilter === 'all' ? undefined : worksFilter)
       .then((data) => { if (!cancelled) { setRoadWorks(data.works); setRoadWorksError(null); } })
       .catch((err: Error) => { if (!cancelled) setRoadWorksError(err.message); })
@@ -229,7 +230,6 @@ export default function RoadsPage() {
   // Fetch Road Openings
   useEffect(() => {
     let cancelled = false;
-    setRoadOpeningsLoading(true);
     fetchRoadOpenings(50, 0, openingsFilter === 'all' ? undefined : openingsFilter)
       .then((data) => { if (!cancelled) { setRoadOpenings(data.openings); setRoadOpeningsError(null); } })
       .catch((err: Error) => { if (!cancelled) setRoadOpeningsError(err.message); })
@@ -240,7 +240,6 @@ export default function RoadsPage() {
   // Fetch Car Stands
   useEffect(() => {
     let cancelled = false;
-    setTaxiStandsLoading(true);
     fetchTaxiStands(316, 0)
       .then((data) => { if (!cancelled) { setTaxiStands(data.stands); setTaxiStandsError(null); } })
       .catch((err: Error) => { if (!cancelled) setTaxiStandsError(err.message); })
@@ -251,7 +250,6 @@ export default function RoadsPage() {
   // Fetch Speed Context
   useEffect(() => {
     let cancelled = false;
-    setSpeedContextLoading(true);
     fetchRoadSpeedContext()
       .then((data) => { if (!cancelled) { setSpeedContext(data); setSpeedContextError(null); } })
       .catch((err: Error) => { if (!cancelled) setSpeedContextError(err.message); })
@@ -268,23 +266,23 @@ export default function RoadsPage() {
       <div className="flex flex-col flex-grow min-h-0 overflow-y-auto">
         {/* Header */}
         <div className="mb-6 flex items-center gap-3">
-          <Road size={24} className="text-blue-400" />
-          <h2 className="text-2xl font-heading text-blue-400">Road Infrastructure Intelligence</h2>
+          <Road size={24} className="text-blue-700" />
+          <h2 className="text-2xl font-heading text-blue-700">Road Infrastructure Intelligence</h2>
         </div>
 
         {/* KPI Summary Section */}
         <section className="mb-6">
-          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <Package size={20} className="text-blue-400" />
+          <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
+            <Package size={20} className="text-blue-700" />
             <span>Road Infrastructure Overview</span>
           </h3>
 
           {analyticsLoading && !analytics && (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
               {[...Array(6)].map((_, i) => (
-                <div key={i} className="glass-panel p-4 rounded-lg border border-gray-800 animate-pulse">
-                  <div className="h-4 bg-gray-700 rounded w-3/4 mb-2"></div>
-                  <div className="h-8 bg-gray-700 rounded w-1/3"></div>
+                <div key={i} className="glass-panel p-4 rounded-lg border border-slate-200 animate-pulse">
+                  <div className="h-4 bg-slate-200 rounded w-3/4 mb-2"></div>
+                  <div className="h-8 bg-slate-200 rounded w-1/3"></div>
                 </div>
               ))}
             </div>
@@ -298,26 +296,25 @@ export default function RoadsPage() {
 
           {analytics && !analyticsLoading && !analyticsError && (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-              <KPICard label="Active Road Works" value={analytics.road_works.active} icon={Construction} color="text-red-400" />
-              <KPICard label="Upcoming Works" value={analytics.road_works.upcoming} icon={TrendingUp} color="text-amber-400" />
-              <KPICard label="Road Openings" value={analytics.road_openings.upcoming} icon={Truck} color="text-blue-400" />
-              <KPICard label="Car Stands" value={analytics.taxi_stands.total} icon={Car} color="text-white" />
-              <KPICard label="BFA Accessible" value={analytics.taxi_stands.bfa_accessible} icon={Accessibility} color="text-emerald-400" />
+              <KPICard label="Active Road Works" value={analytics.road_works.active} icon={Construction} />
+              <KPICard label="Upcoming Works" value={analytics.road_works.upcoming} icon={TrendingUp} />
+              <KPICard label="Road Openings" value={analytics.road_openings.upcoming} icon={Truck} />
+              <KPICard label="Car Stands" value={analytics.taxi_stands.total} icon={Car} />
+              <KPICard label="BFA Accessible" value={analytics.taxi_stands.bfa_accessible} icon={Accessibility} />
               <KPICard 
                 label="Ownership Types" 
                 value={Object.keys(analytics.taxi_stands.by_ownership).length} 
                 icon={Building} 
-                color="text-purple-400" 
               />
             </div>
           )}
 
           {analytics && !analyticsLoading && !analyticsError && (
-            <div className="mt-4 glass-panel p-4 rounded-lg border border-gray-800">
-              <div className="text-xs text-gray-500 mb-2">Ownership Breakdown</div>
+            <div className="mt-4 glass-panel p-4 rounded-lg border border-slate-200">
+              <div className="text-xs text-slate-500 mb-2">Ownership Breakdown</div>
               <div className="flex flex-wrap gap-2">
                 {Object.entries(analytics.taxi_stands.by_ownership).map(([key, val]) => (
-                  <span key={key} className="px-2 py-1 text-xs bg-gray-800 rounded border border-gray-700">
+                  <span key={key} className="px-2 py-1 text-xs bg-slate-100 rounded border border-slate-200">
                     {key}: {val}
                   </span>
                 ))}
@@ -328,17 +325,17 @@ export default function RoadsPage() {
 
         {/* Speed Context Section */}
         <section className="mb-6">
-          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <TrendingUp size={20} className="text-cyan-400" />
+          <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
+            <TrendingUp size={20} className="text-cyan-700" />
             <span>Road Speed Context (Live)</span>
           </h3>
 
           {speedContextLoading && !speedContext && (
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
               {[...Array(5)].map((_, i) => (
-                <div key={i} className="glass-panel p-4 rounded-lg border border-gray-800 animate-pulse">
-                  <div className="h-4 bg-gray-700 rounded w-3/4 mb-2"></div>
-                  <div className="h-6 bg-gray-700 rounded w-1/2"></div>
+                <div key={i} className="glass-panel p-4 rounded-lg border border-slate-200 animate-pulse">
+                  <div className="h-4 bg-slate-200 rounded w-3/4 mb-2"></div>
+                  <div className="h-6 bg-slate-200 rounded w-1/2"></div>
                 </div>
               ))}
             </div>
@@ -352,13 +349,13 @@ export default function RoadsPage() {
 
           {speedContext && !speedContextLoading && !speedContextError && (
             <div className="space-y-2">
-              <div className="text-xs text-gray-500">
+              <div className="text-xs text-slate-500">
                 Showing top 10 of {speedContext.total_roads} roads by speed change (predicted vs current)
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="text-gray-500 border-b border-gray-800">
+                    <tr className="text-slate-500 border-b border-slate-200">
                       <th className="text-left p-3 font-medium">Road</th>
                       <th className="text-right p-3 font-medium">Current</th>
                       <th className="text-right p-3 font-medium">Predicted</th>
@@ -368,18 +365,18 @@ export default function RoadsPage() {
                   </thead>
                   <tbody>
                     {speedContext.roads.slice(0, 10).map((road, idx) => (
-                      <tr key={`${road.road}-${idx}`} className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors">
-                        <td className="p-3 font-mono text-white truncate max-w-[200px]" title={road.road}>
+                      <tr key={`${road.road}-${idx}`} className="border-b border-slate-200 hover:bg-slate-100/30 transition-colors">
+                        <td className="p-3 font-mono text-slate-800 truncate max-w-[200px]" title={road.road}>
                           {road.road}
                         </td>
-                        <td className="p-3 text-right font-mono text-white">{road.avg_current_speed.toFixed(1)} km/h</td>
-                        <td className="p-3 text-right font-mono text-white">{road.avg_predicted_speed.toFixed(1)} km/h</td>
+                        <td className="p-3 text-right font-mono text-slate-800">{road.avg_current_speed.toFixed(1)} km/h</td>
+                        <td className="p-3 text-right font-mono text-slate-800">{road.avg_predicted_speed.toFixed(1)} km/h</td>
                         <td className="p-3 text-right font-mono">
-                          <span className={road.avg_change > 0 ? 'text-green-400' : road.avg_change < 0 ? 'text-red-400' : 'text-gray-400'}>
+                          <span className={road.avg_change > 0 ? 'text-green-800' : road.avg_change < 0 ? 'text-red-700' : 'text-slate-500'}>
                             {road.avg_change > 0 ? '+' : ''}{road.avg_change.toFixed(1)} km/h
                           </span>
                         </td>
-                        <td className="p-3 text-right font-mono text-gray-400">{road.segment_count}</td>
+                        <td className="p-3 text-right font-mono text-slate-500">{road.segment_count}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -391,13 +388,13 @@ export default function RoadsPage() {
 
         {/* Tabbed Content Area */}
         <div className="mb-6">
-          <div className="flex gap-2 mb-4 border-b border-gray-800">
+          <div className="flex gap-2 mb-4 border-b border-slate-200">
             <button
               onClick={() => setActiveTab('works')}
               className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
                 activeTab === 'works'
-                  ? 'bg-blue-500/20 text-blue-400 border-b-2 border-blue-400'
-                  : 'text-gray-400 hover:text-white'
+                  ? 'bg-blue-500/20 text-blue-700 border-b-2 border-blue-400'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <Construction className="w-4 h-4 inline mr-1" />
@@ -407,8 +404,8 @@ export default function RoadsPage() {
               onClick={() => setActiveTab('openings')}
               className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
                 activeTab === 'openings'
-                  ? 'bg-blue-500/20 text-blue-400 border-b-2 border-blue-400'
-                  : 'text-gray-400 hover:text-white'
+                  ? 'bg-blue-500/20 text-blue-700 border-b-2 border-blue-400'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <Truck className="w-4 h-4 inline mr-1" />
@@ -418,8 +415,8 @@ export default function RoadsPage() {
               onClick={() => setActiveTab('taxi')}
               className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
                 activeTab === 'taxi'
-                  ? 'bg-blue-500/20 text-blue-400 border-b-2 border-blue-400'
-                  : 'text-gray-400 hover:text-white'
+                  ? 'bg-blue-500/20 text-blue-700 border-b-2 border-blue-400'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <Car className="w-4 h-4 inline mr-1" />
@@ -429,8 +426,8 @@ export default function RoadsPage() {
               onClick={() => setActiveTab('speed')}
               className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
                 activeTab === 'speed'
-                  ? 'bg-blue-500/20 text-blue-400 border-b-2 border-blue-400'
-                  : 'text-gray-400 hover:text-white'
+                  ? 'bg-blue-500/20 text-blue-700 border-b-2 border-blue-400'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <TrendingUp className="w-4 h-4 inline mr-1" />
@@ -439,7 +436,7 @@ export default function RoadsPage() {
           </div>
 
           {/* Tab Content */}
-          <div className="glass-panel rounded-b-xl border border-gray-800 border-t-0 overflow-hidden">
+          <div className="glass-panel rounded-b-xl border border-slate-200 border-t-0 overflow-hidden">
             {/* Road Works Tab */}
             {activeTab === 'works' && (
               <div className="p-4">
@@ -451,9 +448,9 @@ export default function RoadsPage() {
                 <DataTable
                   data={filteredWorks}
                   columns={[
-                    { key: 'road_name', header: 'Road', render: (w) => <span className="font-mono text-white truncate max-w-[200px]" title={w.road_name}>{w.road_name}</span> },
-                    { key: 'period', header: 'Period', render: (w) => <span className="text-gray-300"><span className="flex items-center gap-1 text-xs"><Calendar className="w-3 h-3 text-gray-500" />{formatDate(w.start_date)} – {formatDate(w.end_date)}</span></span> },
-                    { key: 'svc_dept', header: 'Dept', render: (w) => <span className="text-gray-400 text-xs truncate max-w-[120px]">{w.svc_dept}</span> },
+                    { key: 'road_name', header: 'Road', render: (w) => <span className="font-mono text-slate-800 truncate max-w-[200px]" title={w.road_name}>{w.road_name}</span> },
+                    { key: 'period', header: 'Period', render: (w) => <span className="text-slate-600"><span className="flex items-center gap-1 text-xs"><Calendar className="w-3 h-3 text-slate-500" />{formatDate(w.start_date)} – {formatDate(w.end_date)}</span></span> },
+                    { key: 'svc_dept', header: 'Dept', render: (w) => <span className="text-slate-500 text-xs truncate max-w-[120px]">{w.svc_dept}</span> },
                     { key: 'status', header: 'Status', render: (w) => getStatusBadge(w.is_active ? 'active' : w.is_upcoming ? 'upcoming' : 'completed') },
                   ]}
                   loading={roadWorksLoading}
@@ -474,9 +471,9 @@ export default function RoadsPage() {
                 <DataTable
                   data={filteredOpenings}
                   columns={[
-                    { key: 'road_name', header: 'Road', render: (o) => <span className="font-mono text-white truncate max-w-[200px]" title={o.road_name}>{o.road_name}</span> },
-                    { key: 'period', header: 'Period', render: (o) => <span className="text-gray-300"><span className="flex items-center gap-1 text-xs"><Calendar className="w-3 h-3 text-gray-500" />{formatDate(o.start_date)} – {formatDate(o.end_date)}</span></span> },
-                    { key: 'svc_dept', header: 'Dept', render: (o) => <span className="text-gray-400 text-xs truncate max-w-[120px]">{o.svc_dept}</span> },
+                    { key: 'road_name', header: 'Road', render: (o) => <span className="font-mono text-slate-800 truncate max-w-[200px]" title={o.road_name}>{o.road_name}</span> },
+                    { key: 'period', header: 'Period', render: (o) => <span className="text-slate-600"><span className="flex items-center gap-1 text-xs"><Calendar className="w-3 h-3 text-slate-500" />{formatDate(o.start_date)} – {formatDate(o.end_date)}</span></span> },
+                    { key: 'svc_dept', header: 'Dept', render: (o) => <span className="text-slate-500 text-xs truncate max-w-[120px]">{o.svc_dept}</span> },
                     { key: 'status', header: 'Status', render: (o) => getStatusBadge(o.is_active ? 'active' : o.is_upcoming ? 'upcoming' : 'completed') },
                   ]}
                   loading={roadOpeningsLoading}
@@ -498,9 +495,9 @@ export default function RoadsPage() {
                 <DataTable
                   data={taxiStands}
                   columns={[
-                    { key: 'taxi_code', header: 'Code', render: (s) => <span className="font-mono text-blue-400">{s.taxi_code}</span> },
-                    { key: 'name', header: 'Name', render: (s) => <span className="text-white truncate max-w-[250px]" title={s.name}>{s.name}</span> },
-                    { key: 'type', header: 'Type', render: (s) => <span className="text-gray-300 text-xs capitalize">{s.type.toLowerCase()}</span> },
+                    { key: 'taxi_code', header: 'Code', render: (s) => <span className="font-mono text-blue-700">{s.taxi_code}</span> },
+                    { key: 'name', header: 'Name', render: (s) => <span className="text-slate-800 truncate max-w-[250px]" title={s.name}>{s.name}</span> },
+                    { key: 'type', header: 'Type', render: (s) => <span className="text-slate-600 text-xs capitalize">{s.type.toLowerCase()}</span> },
                     { key: 'ownership', header: 'Ownership', render: (s) => getOwnershipBadge(s.ownership) },
                     { key: 'bfa', header: 'BFA', render: (s) => <span className="text-center">{getBFACheck(s.is_bfa_accessible)}</span> },
                   ]}
@@ -517,9 +514,9 @@ export default function RoadsPage() {
                 {speedContextLoading && !speedContext && (
                   <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
                     {[...Array(5)].map((_, i) => (
-                      <div key={i} className="glass-panel p-4 rounded-lg border border-gray-800 animate-pulse">
-                        <div className="h-4 bg-gray-700 rounded w-3/4 mb-2"></div>
-                        <div className="h-6 bg-gray-700 rounded w-1/2"></div>
+                      <div key={i} className="glass-panel p-4 rounded-lg border border-slate-200 animate-pulse">
+                        <div className="h-4 bg-slate-200 rounded w-3/4 mb-2"></div>
+                        <div className="h-6 bg-slate-200 rounded w-1/2"></div>
                       </div>
                     ))}
                   </div>
@@ -531,13 +528,13 @@ export default function RoadsPage() {
 
                 {speedContext && !speedContextLoading && !speedContextError && (
                   <div className="space-y-2">
-                    <div className="text-xs text-gray-500">
+                    <div className="text-xs text-slate-500">
                       Showing top 10 of {speedContext.total_roads} roads by speed change (predicted vs current)
                     </div>
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead>
-                          <tr className="text-gray-500 border-b border-gray-800">
+                          <tr className="text-slate-500 border-b border-slate-200">
                             <th className="text-left p-3 font-medium">Road</th>
                             <th className="text-right p-3 font-medium">Current</th>
                             <th className="text-right p-3 font-medium">Predicted</th>
@@ -547,12 +544,12 @@ export default function RoadsPage() {
                         </thead>
                         <tbody>
                           {speedContext.roads.slice(0, 10).map((road, idx) => (
-                            <tr key={`${road.road}-${idx}`} className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors">
-                              <td className="p-3 font-mono text-white truncate max-w-[200px]" title={road.road}>{road.road}</td>
-                              <td className="p-3 text-right font-mono text-white">{road.avg_current_speed.toFixed(1)} km/h</td>
-                              <td className="p-3 text-right font-mono text-white">{road.avg_predicted_speed.toFixed(1)} km/h</td>
-                              <td className="p-3 text-right font-mono"><span className={road.avg_change > 0 ? 'text-green-400' : road.avg_change < 0 ? 'text-red-400' : 'text-gray-400'}>{road.avg_change > 0 ? '+' : ''}{road.avg_change.toFixed(1)} km/h</span></td>
-                              <td className="p-3 text-right font-mono text-gray-400">{road.segment_count}</td>
+                            <tr key={`${road.road}-${idx}`} className="border-b border-slate-200 hover:bg-slate-100/30 transition-colors">
+                              <td className="p-3 font-mono text-slate-800 truncate max-w-[200px]" title={road.road}>{road.road}</td>
+                              <td className="p-3 text-right font-mono text-slate-800">{road.avg_current_speed.toFixed(1)} km/h</td>
+                              <td className="p-3 text-right font-mono text-slate-800">{road.avg_predicted_speed.toFixed(1)} km/h</td>
+                              <td className="p-3 text-right font-mono"><span className={road.avg_change > 0 ? 'text-green-800' : road.avg_change < 0 ? 'text-red-700' : 'text-slate-500'}>{road.avg_change > 0 ? '+' : ''}{road.avg_change.toFixed(1)} km/h</span></td>
+                              <td className="p-3 text-right font-mono text-slate-500">{road.segment_count}</td>
                             </tr>
                           ))}
                         </tbody>

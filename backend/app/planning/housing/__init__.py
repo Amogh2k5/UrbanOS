@@ -1,0 +1,1 @@
+"""Singapore Housing Intelligence module."""

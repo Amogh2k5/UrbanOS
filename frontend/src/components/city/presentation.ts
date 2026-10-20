@@ -6,6 +6,23 @@
  *
  * Nothing here invents a value. When the backend reports "unavailable" the
  * helpers surface that fact rather than substituting a zero or a default.
+ *
+ * ---------------------------------------------------------------------------
+ * COLOUR SYSTEM
+ *
+ * Two channels, kept strictly apart:
+ *
+ * 1. DOMAIN FILL (`DOMAIN_FILLS`) - a solid, medium-to-strong colour that
+ *    identifies which domain a card belongs to. Used for KPI cards, and always
+ *    paired with white text. A card's fill never encodes risk: a green
+ *    Environment card can legitimately carry a red "Critical" badge.
+ *
+ * 2. STATUS BADGE (`statusBadgeClass`) - the only colour that carries risk
+ *    meaning. Critical, Elevated, Normal and Unavailable stay distinguishable
+ *    regardless of what the card behind them is coloured.
+ *
+ * Data provenance (live / forecast / historical) is a third axis and is kept
+ * neutral, so a "Forecast" chip can never be misread as a warning.
  */
 import type {
   CrossDomainImpact,
@@ -14,27 +31,133 @@ import type {
 } from "@/types/intelligence";
 import type { ModuleSummary } from "@/services/api";
 
-/** Solid accent colour per domain, mirroring the reference design. */
-export const MODULE_ACCENTS: Record<string, { bg: string; ring: string }> = {
-  traffic: { bg: "bg-blue-600", ring: "shadow-blue-600/20" },
-  roads: { bg: "bg-indigo-600", ring: "shadow-indigo-600/20" },
-  transit: { bg: "bg-cyan-600", ring: "shadow-cyan-600/20" },
-  pm25: { bg: "bg-emerald-600", ring: "shadow-emerald-600/20" },
-  weather: { bg: "bg-teal-600", ring: "shadow-teal-600/20" },
-  flood: { bg: "bg-sky-600", ring: "shadow-sky-600/20" },
-  fire: { bg: "bg-rose-600", ring: "shadow-rose-600/20" },
-  crime: { bg: "bg-orange-600", ring: "shadow-orange-600/20" },
-  water: { bg: "bg-cyan-700", ring: "shadow-cyan-700/20" },
-  land: { bg: "bg-violet-600", ring: "shadow-violet-600/20" },
+/**
+ * The shared risk ladder. KPI status, signal severity and the city status band
+ * all resolve onto it so the badges are comparable everywhere.
+ */
+export type Tone = "normal" | "low" | "elevated" | "high" | "critical" | "unavailable";
+
+/* ------------------------------------------------------------------ *
+ * Domain fills
+ * ------------------------------------------------------------------ */
+
+/**
+ * Every domain gets a solid fill. The shades are the reference palette where
+ * white text already cleared AA, and one step darker where it did not:
+ * cyan-600, amber-600 and emerald-600 all measured under 4.5:1 with white.
+ */
+export const DOMAIN_FILLS: Record<string, string> = {
+  // Transport / Mobility
+  traffic: "bg-dom-traffic",
+  transit: "bg-dom-transit",
+  roads: "bg-dom-roads",
+  // Environment
+  pm25: "bg-dom-pm25",
+  weather: "bg-dom-weather",
+  flood: "bg-dom-flood",
+  // Public safety
+  fire: "bg-dom-fire",
+  crime: "bg-dom-crime",
+  // Infrastructure
+  water: "bg-dom-water",
+  energy: "bg-dom-energy",
+  waste: "bg-dom-waste",
+  // Planning / Administration
+  land: "bg-dom-land",
+  housing: "bg-dom-housing",
 };
 
-export const DEFAULT_ACCENT = { bg: "bg-slate-600", ring: "shadow-slate-600/20" };
+/** Matching darker shade, used for hover and for pressed states. */
+export const DOMAIN_FILLS_HOVER: Record<string, string> = {
+  traffic: "hover:bg-blue-700",
+  transit: "hover:bg-indigo-800",
+  roads: "hover:bg-blue-800",
+  pm25: "hover:bg-emerald-800",
+  weather: "hover:bg-teal-800",
+  flood: "hover:bg-sky-800",
+  fire: "hover:bg-rose-700",
+  crime: "hover:bg-rose-900",
+  water: "hover:bg-cyan-800",
+  energy: "hover:bg-amber-800",
+  waste: "hover:bg-teal-800",
+  land: "hover:bg-violet-800",
+  housing: "hover:bg-violet-900",
+};
 
-export function accentFor(moduleId: string) {
-  return MODULE_ACCENTS[moduleId] ?? DEFAULT_ACCENT;
+/** Matching coloured shadow, as in the reference. */
+export const DOMAIN_FILLS_SHADOW: Record<string, string> = {
+  traffic: "shadow-blue-600/20 hover:shadow-blue-600/30",
+  transit: "shadow-indigo-700/20 hover:shadow-indigo-700/30",
+  roads: "shadow-blue-700/20 hover:shadow-blue-700/30",
+  pm25: "shadow-emerald-700/20 hover:shadow-emerald-700/30",
+  weather: "shadow-teal-700/20 hover:shadow-teal-700/30",
+  flood: "shadow-sky-700/20 hover:shadow-sky-700/30",
+  fire: "shadow-rose-600/20 hover:shadow-rose-600/30",
+  crime: "shadow-rose-800/20 hover:shadow-rose-800/30",
+  water: "shadow-cyan-700/20 hover:shadow-cyan-700/30",
+  energy: "shadow-amber-700/20 hover:shadow-amber-700/30",
+  waste: "shadow-teal-700/20 hover:shadow-teal-700/30",
+  land: "shadow-violet-700/20 hover:shadow-violet-700/30",
+  housing: "shadow-violet-800/20 hover:shadow-violet-800/30",
+};
+
+/** An unknown domain must not borrow a real domain's colour. */
+export const DEFAULT_FILL = "bg-slate-500";
+const DEFAULT_HOVER = "hover:bg-slate-600";
+const DEFAULT_SHADOW = "shadow-slate-500/20 hover:shadow-slate-500/30";
+
+export function domainFill(domainId?: string | null): string {
+  if (!domainId) return DEFAULT_FILL;
+  return DOMAIN_FILLS[domainId] ?? DEFAULT_FILL;
 }
 
-/** Severity band used for risk-signal borders and chips. */
+export function domainFillHover(domainId?: string | null): string {
+  if (!domainId) return DEFAULT_HOVER;
+  return DOMAIN_FILLS_HOVER[domainId] ?? DEFAULT_HOVER;
+}
+
+export function domainFillShadow(domainId?: string | null): string {
+  if (!domainId) return DEFAULT_SHADOW;
+  return DOMAIN_FILLS_SHADOW[domainId] ?? DEFAULT_SHADOW;
+}
+
+/**
+ * The whole solid-card treatment for one domain: fill + hover + shadow.
+ * Use this so a card can never be half-themed.
+ */
+export function solidCardClass(domainId?: string | null, extra?: string): string {
+  return [
+    "solid-card",
+    domainFill(domainId),
+    domainFillHover(domainId),
+    domainFillShadow(domainId),
+    extra ?? "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/**
+ * Solid KPI card on a domain detail page.
+ *
+ * Alias for `solidCardClass`, kept as the name the detail pages import so a
+ * domain's headline card is guaranteed to use the same fill, hover and shadow
+ * as its card on the Overview.
+ */
+export function domainCardClass(domainId: string, extra?: string): string {
+  return solidCardClass(domainId, extra);
+}
+
+/** Detail-page and navigation headings take the domain colour as an accent. */
+export function domainAccentClass(domainId?: string | null): string {
+  const token = domainFill(domainId).replace("bg-", "text-");
+  return token;
+}
+
+/* ------------------------------------------------------------------ *
+ * Status badges - the only risk-bearing colour
+ * ------------------------------------------------------------------ */
+
 export function severityBand(severity?: string | null): "critical" | "high" | "moderate" | "low" {
   switch ((severity ?? "").toUpperCase()) {
     case "CRITICAL":
@@ -48,21 +171,6 @@ export function severityBand(severity?: string | null): "critical" | "high" | "m
   }
 }
 
-/** Border colour for an Active Risk Signal card. */
-export function riskSignalBorder(severity?: string | null): string {
-  switch (severityBand(severity)) {
-    case "critical":
-      return "border-l-rose-700";
-    case "high":
-      return "border-l-rose-500";
-    case "moderate":
-      return "border-l-amber-500";
-    default:
-      return "border-l-blue-500";
-  }
-}
-
-/** Module status from `/api/overview/city`, which uses lower-case bands. */
 export type ModuleStatus = "normal" | "elevated" | "critical" | "unavailable";
 
 export function moduleStatusBand(status?: string | null): "critical" | "elevated" | "unavailable" | "normal" {
@@ -78,36 +186,92 @@ export function moduleStatusBand(status?: string | null): "critical" | "elevated
   }
 }
 
+export function toneForStatus(status?: string | null): Tone {
+  return moduleStatusBand(status);
+}
+
+export function toneForSeverity(severity?: string | null): Tone {
+  switch (severityBand(severity)) {
+    case "critical":
+      return "critical";
+    case "high":
+      return "high";
+    case "moderate":
+      return "elevated";
+    default:
+      return "low";
+  }
+}
+
+/**
+ * The city-wide status band. UNKNOWN resolves to the neutral unavailable badge:
+ * it is the absence of an assessment, not a calm city.
+ */
+export function toneForCityStatus(status?: string | null): Tone {
+  switch ((status ?? "").toUpperCase()) {
+    case "NORMAL":
+      return "normal";
+    case "ELEVATED":
+      return "elevated";
+    case "DISRUPTED":
+      return "high";
+    case "CRITICAL":
+      return "critical";
+    default:
+      return "unavailable";
+  }
+}
+
+const BADGE_CLASSES: Record<Tone, string> = {
+  normal: "badge-normal",
+  low: "badge-normal",
+  elevated: "badge-elevated",
+  high: "badge-high",
+  critical: "badge-critical",
+  unavailable: "badge-unavailable",
+};
+
+export const BADGE_BASE = "status-badge";
+
+export function statusBadgeClass(status?: string | null): string {
+  return `${BADGE_BASE} ${BADGE_CLASSES[toneForStatus(status)]}`;
+}
+
+export function riskSignalBadgeClass(severity?: string | null): string {
+  return `${BADGE_BASE} ${BADGE_CLASSES[toneForSeverity(severity)]}`;
+}
+
+export function cityStatusBadgeClass(status?: string | null): string {
+  return `${BADGE_BASE} ${BADGE_CLASSES[toneForCityStatus(status)]}`;
+}
+
+export const ALL_BADGES: string[] = [...new Set(Object.values(BADGE_CLASSES))];
+
+/**
+ * Solid fill for a risk-signal card, keyed to severity.
+ *
+ * These use the `--color-signal-*` tokens, NOT the domain fills: severity is a
+ * different axis from "which system", and reusing domain colours here would
+ * make a critical Traffic signal look like the Traffic card.
+ */
+export const SEVERITY_FILLS: Record<Tone, { bg: string; hover: string; shadow: string }> = {
+  critical: { bg: "bg-signal-critical", hover: "hover:bg-rose-700", shadow: "shadow-rose-600/20 hover:shadow-rose-600/30" },
+  high: { bg: "bg-signal-high", hover: "hover:bg-orange-800", shadow: "shadow-orange-700/20 hover:shadow-orange-700/30" },
+  elevated: { bg: "bg-signal-elevated", hover: "hover:bg-amber-800", shadow: "shadow-amber-700/20 hover:shadow-amber-700/30" },
+  low: { bg: "bg-signal-low", hover: "hover:bg-blue-700", shadow: "shadow-blue-600/20 hover:shadow-blue-600/30" },
+  normal: { bg: "bg-signal-low", hover: "hover:bg-blue-700", shadow: "shadow-blue-600/20 hover:shadow-blue-600/30" },
+  unavailable: { bg: "bg-slate-500", hover: "hover:bg-slate-600", shadow: "shadow-slate-500/20 hover:shadow-slate-500/30" },
+};
+
+export function severityFillClass(severity?: string | null): string {
+  const f = SEVERITY_FILLS[toneForSeverity(severity)];
+  return ["solid-card", f.bg, f.hover, f.shadow].join(" ");
+}
+
 export function statusLabel(status?: string | null): string {
   const band = moduleStatusBand(status);
   if (band === "unavailable") return "Unavailable";
   return band.charAt(0).toUpperCase() + band.slice(1);
-}
-
-export function statusTextClass(status?: string | null): string {
-  switch (moduleStatusBand(status)) {
-    case "critical":
-      return "text-rose-300";
-    case "elevated":
-      return "text-amber-300";
-    case "unavailable":
-      return "text-slate-400";
-    default:
-      return "text-emerald-300";
-  }
-}
-
-export function statusPillClass(status?: string | null): string {
-  switch (moduleStatusBand(status)) {
-    case "critical":
-      return "bg-rose-500/20 text-rose-200 border-rose-400/40";
-    case "elevated":
-      return "bg-amber-500/20 text-amber-200 border-amber-400/40";
-    case "unavailable":
-      return "bg-slate-700/60 text-slate-300 border-slate-600";
-    default:
-      return "bg-emerald-500/20 text-emerald-200 border-emerald-400/40";
-  }
 }
 
 /**
@@ -129,18 +293,19 @@ export function dataKindLabel(kind?: DataKind | string | null): string {
   }
 }
 
+/** Provenance chips stay neutral so they can never read as severity. */
 export function dataKindPillClass(kind?: DataKind | string | null): string {
   switch (kind) {
     case "live":
-      return "bg-emerald-500/15 text-emerald-300 border-emerald-500/30";
+      return "bg-slate-100 text-slate-700 border-slate-200";
     case "latest_available":
-      return "bg-sky-500/15 text-sky-300 border-sky-500/30";
+      return "bg-slate-100 text-slate-600 border-slate-200";
     case "historical":
-      return "bg-violet-500/15 text-violet-300 border-violet-500/30";
+      return "bg-slate-100 text-slate-600 border-slate-200";
     case "forecast":
-      return "bg-amber-500/15 text-amber-300 border-amber-500/30";
+      return "bg-slate-100 text-slate-600 border-slate-200";
     default:
-      return "bg-slate-700/60 text-slate-300 border-slate-600";
+      return "bg-slate-50 text-slate-500 border-slate-200";
   }
 }
 

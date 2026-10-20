@@ -48,7 +48,7 @@ from backend.app.environment.pm25.live_service import get_pm25_live_service
 from backend.app.environment.pm25.scheduler import Pm25Scheduler, run_pm25_scheduler
 from backend.app.environment.selectors import load_selections
 from backend.app.environment.result import RegionPrediction
-from ml.pm25.config import RAW_PM25_CSV, RAW_WEATHER_DIR, RUNS_DIR
+from ml.pm25.config import PRODUCTION_MODELS_DIR, RAW_PM25_CSV, RAW_WEATHER_DIR, RUNS_DIR
 from backend.app.mobility.traffic.api import router as traffic_router
 from backend.app.mobility.transit.api import router as transit_router
 from backend.app.mobility.roads.api import router as roads_router
@@ -56,8 +56,14 @@ from backend.app.safety.fire.api import router as fire_router
 from backend.app.safety.crime.api import router as crime_router
 from backend.app.infrastructure.water.api import router as water_router
 from backend.app.infrastructure.water.api import start_water_warmup
+from backend.app.infrastructure.waste.api import router as waste_router
+from backend.app.infrastructure.energy.api import router as energy_router
 from backend.app.planning.land.api import router as land_router
 from backend.app.planning.land.api import start_land_warmup
+from backend.app.planning.housing.api import router as housing_router
+from backend.app.planning.housing.api import start_housing_warmup
+from backend.app.infrastructure.energy.api import router as energy_router
+from backend.app.infrastructure.energy.api import start_energy_warmup
 from backend.app.overview.api import router as overview_router
 from backend.app.mobility.transit.scheduler import TransitAlertsScheduler, SchedulerConfig
 
@@ -243,7 +249,7 @@ def _build_app() -> FastAPI:
         return PM25Predictor(
             runs_dir=RUNS_DIR,
             run_id="phase1_v1",  # used for selections.csv fallback and weather data
-            models_dir=Path("ml/pm25/models/production"),
+            models_dir=PRODUCTION_MODELS_DIR,
         )
     
     def _build_pm25_prediction_response(
@@ -1005,6 +1011,9 @@ def _build_app() -> FastAPI:
     app.include_router(fire_router)
     app.include_router(crime_router)
     app.include_router(water_router)
+    app.include_router(waste_router)
+    app.include_router(energy_router)
+    app.include_router(housing_router)
     app.include_router(land_router)
     app.include_router(overview_router)
 
@@ -1025,6 +1034,12 @@ def _build_app() -> FastAPI:
     # Start water warm-up in background thread (datasets are annual/periodic;
     # warm-up avoids first-request latency and fails silently if sources are down)
     start_water_warmup()
+
+    # Housing warm-up (annual/quarterly datasets; avoids first-request latency)
+    start_housing_warmup()
+
+    # Energy warm-up (historical datasets; avoids first-request latency)
+    start_energy_warmup()
 
     # Same reasoning for the City Coordinator: one background run at startup so
     # the first dashboard request finds a warm cache instead of a pending city

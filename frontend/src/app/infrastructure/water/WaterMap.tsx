@@ -5,6 +5,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import type { StyleSpecification } from "maplibre-gl";
 import type { WaterDrainSensorStatus } from "@/services/api";
 import { CONDITION_COLOR } from "./waterConstants";
+import { useState } from "react";
 
 const MAP_STYLE: StyleSpecification = {
   version: 8,
@@ -32,12 +33,18 @@ export default function WaterMap({
   onSelect?: (s: WaterDrainSensorStatus) => void;
   selectedId?: string | null;
 }) {
+  const [basemapUnavailable, setBasemapUnavailable] = useState(false);
   return (
     <div className="relative w-full h-full min-h-[460px] overflow-hidden rounded-xl">
       <Map
+        style={{ width: '100%', height: '100%', minHeight: 460 }}
         initialViewState={{ longitude: 103.8198, latitude: 1.3521, zoom: 10.8 }}
         maxBounds={SG_BOUNDS}
         mapStyle={MAP_STYLE}
+        onError={(event) => {
+          const message = String(event.error?.message ?? "");
+          if (/tile|source|network|fetch|404|403/i.test(message)) setBasemapUnavailable(true);
+        }}
         dragRotate={false}
         pitchWithRotate={false}
         maxZoom={17}
@@ -61,16 +68,22 @@ export default function WaterMap({
         })}
       </Map>
 
-      <div className="absolute left-4 top-4 glass-panel p-3 rounded-lg border border-gray-800/80">
-        <div className="text-[10px] uppercase tracking-[0.2em] text-gray-400">PUB drain &amp; canal sensors</div>
-        <div className="text-sm font-semibold text-white">{sensors.length} locations</div>
-        <div className="text-[10px] text-gray-500 mt-1">
+      {basemapUnavailable && (
+        <div role="status" aria-live="polite" className="absolute right-4 top-4 z-10 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 shadow-sm">
+          Basemap tiles unavailable. Sensor locations remain visible.
+        </div>
+      )}
+
+      <div className="absolute left-4 top-4 card-panel p-3 rounded-lg border border-slate-200">
+        <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">PUB drain &amp; canal sensors</div>
+        <div className="text-sm font-semibold text-slate-900">{sensors.length} locations</div>
+        <div className="text-[10px] text-slate-500 mt-1">
           {readingsAvailable ? "Coloured by latest reading" : "Locations only — grey = no official reading"}
         </div>
       </div>
 
       {!readingsAvailable && (
-        <div className="absolute inset-x-4 bottom-4 glass-panel p-3 rounded-lg border border-yellow-500/20 text-xs text-gray-400">
+        <div className="absolute inset-x-4 bottom-4 card-panel p-3 rounded-lg border border-yellow-500/20 text-xs text-slate-500">
           PUB publishes where its sensors are, but no official open feed of their water-level readings was found.
           Nothing here is a live drain condition.
         </div>

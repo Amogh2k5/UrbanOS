@@ -53,6 +53,9 @@ from backend.app.mobility.traffic.agent import run_traffic_agent  # noqa: E402
 from backend.app.planning.land.agent import run_land_agent  # noqa: E402
 from backend.app.safety.crime.agent import run_crime_agent  # noqa: E402
 from backend.app.safety.fire.agent import run_fire_agent  # noqa: E402
+from backend.app.infrastructure.waste.agent import run_waste_agent  # noqa: E402
+from backend.app.planning.housing.agent import run_housing_agent  # noqa: E402
+from backend.app.infrastructure.energy.agent import run_energy_agent  # noqa: E402
 
 #: Domains that define city confidence. Adding a domain must not silently
 #: change this rule.
@@ -92,6 +95,9 @@ class CityCoordinatorState:
     land_report: Any = None
     fire_report: Any = None
     crime_report: Any = None
+    waste_report: Any = None
+    housing_report: Any = None
+    energy_report: Any = None
 
     domain_status: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
@@ -251,6 +257,30 @@ def collect_reports(state: CityCoordinatorState) -> CityCoordinatorState:
         state.crime_report = None
         state.errors.append(f"Crime Agent failed: {exc}")
         state.warnings.append("Crime report unavailable")
+
+    # Waste (advisory: headline metrics only; never city status/risk/confidence)
+    try:
+        state.waste_report = run_waste_agent()
+        state.source_reports["waste"] = _source_meta(state.waste_report, "waste")
+    except Exception as exc:
+        state.waste_report = None
+        state.warnings.append(f"Waste report unavailable: {exc}")
+
+    # Housing (advisory: periodic statistics only; never city status/risk/confidence)
+    try:
+        state.housing_report = run_housing_agent()
+        state.source_reports["housing"] = _source_meta(state.housing_report, "housing")
+    except Exception as exc:
+        state.housing_report = None
+        state.warnings.append(f"Housing report unavailable: {exc}")
+
+    # Energy (advisory: historical statistics only; never city status/risk/confidence)
+    try:
+        state.energy_report = run_energy_agent()
+        state.source_reports["energy"] = _source_meta(state.energy_report, "energy")
+    except Exception as exc:
+        state.energy_report = None
+        state.warnings.append(f"Energy report unavailable: {exc}")
 
     return state
 
@@ -651,6 +681,119 @@ def _normalize_crime(report: Any) -> Dict[str, Any]:
     return out
 
 
+def _normalize_waste(report: Any) -> Dict[str, Any]:
+    d = _dump(report)
+    kpis = {k.get("key"): _num(k.get("value")) for k in (d.get("kpis") or [])}
+    gen = d.get("generation") or {}
+    cat = d.get("categories") or {}
+    food = d.get("food") or {}
+    services = d.get("services") or {}
+    infra = d.get("infrastructure") or {}
+    available = d.get("status") == "STATISTICS_AVAILABLE"
+    status = d.get("status") if available else None
+    risk = str(d.get("overall_risk") or "UNKNOWN").upper()
+    if risk not in _RISK_ORDER:
+        risk = "UNKNOWN"
+    factors = [str(a) for a in (d.get("alerts") or [])]
+    return {
+        "domain": "waste",
+        "available": available,
+        "overall_status": status if available else None,
+        "overall_risk": risk,
+        "key_metrics": {
+            "waste_generated_tonnes": kpis.get("total_generated"),
+            "waste_recycled_tonnes": kpis.get("total_recycled"),
+            "waste_disposed_tonnes": kpis.get("total_disposed"),
+            "overall_recycling_rate_pct": kpis.get("overall_recycling_rate"),
+            "recycling_rate_excl_cd_pct": kpis.get("recycling_rate_excl_cd"),
+            "statistics_year": str(gen.get("latest_year")) if gen.get("latest_year") is not None else None,
+            "generation_change_pct": gen.get("generated_change_since_peak_pct"),
+            "peak_generated_year": gen.get("peak_generated_year"),
+            "peak_recycling_rate_pct": gen.get("peak_recycling_rate_pct"),
+            "top_disposed_categories": cat.get("top_disposed"),
+            "food_waste_generated_tonnes": food.get("generated", {}).get("value"),
+            "food_waste_recycling_rate_pct": _num(
+                food.get("recycling_rate", {}).get("value") if isinstance(food.get("recycling_rate"), dict) else food.get("recycling_rate")
+            ),
+            "licensed_collectors": services.get("licensee_count"),
+            "infrastructure_locations": sum(k.get("count") or 0 for k in (infra.get("kinds") or [])),
+            "forecast_available": d.get("forecast", {}).get("available", False),
+        },
+        "active_alert_count": len(d.get("alerts") or []),
+        "affected_zones": [],
+        "primary_risk_factors": factors,
+        "confidence": str(d.get("confidence") or "low"),
+        "limitations": list(d.get("limitations") or []),
+        "warnings": list(d.get("warnings") or []),
+        "errors": list(d.get("errors") or []),
+        "is_ml_prediction": bool(d.get("is_ml_prediction", False)),
+        "generated_at": _iso(getattr(report, "generated_at", None) or d.get("generated_at")),
+    }
+
+
+def _normalize_housing(report: Any) -> Dict[str, Any]:
+    d = _dump(report)
+    kpis = d.get("kpis") or {}
+    available = d.get("status") == "AVAILABLE"
+    status = d.get("status") or ("NORMAL" if available else None)
+    return {
+        "domain": "housing",
+        "available": available,
+        "overall_status": status,
+        "overall_risk": "LOW" if available else "UNKNOWN",
+        "key_metrics": {
+            "latest_median_resale_period": kpis.get("latest_median_resale_period"),
+            "town_flat_type_median_price_rows": kpis.get("town_flat_type_median_price_rows"),
+            "latest_resale_applications_period": kpis.get("latest_resale_applications_period"),
+            "resale_applications": kpis.get("resale_applications"),
+            "hdb_property_records": kpis.get("hdb_property_records"),
+            "hdb_total_dwelling_units_in_records": kpis.get("hdb_total_dwelling_units_in_records"),
+        },
+        "active_alert_count": 0,
+        "affected_zones": [],
+        "primary_risk_factors": [],
+        "confidence": str(d.get("confidence") or "low"),
+        "limitations": list(d.get("limitations") or []),
+        "warnings": list(d.get("warnings") or []),
+        "errors": list(d.get("errors") or []),
+        "is_ml_prediction": bool(d.get("is_ml_prediction", False)),
+        "generated_at": _iso(getattr(report, "generated_at", None) or d.get("generated_at")),
+    }
+
+
+def _normalize_energy(report: Any) -> Dict[str, Any]:
+    d = _dump(report)
+    kpis = d.get("key_metrics") or {}
+    available = d.get("status") == "OK"
+    status = "NORMAL" if available else None
+    risk = "LOW" if available else "UNKNOWN"
+    return {
+        "domain": "energy",
+        "available": available,
+        "overall_status": status,
+        "overall_risk": risk,
+        "key_metrics": {
+            "latest_peak_demand_mw": kpis.get("latest_peak_demand_mw"),
+            "latest_peak_demand_period": kpis.get("latest_peak_demand_period"),
+            "max_peak_demand_mw": kpis.get("max_peak_demand_mw"),
+            "average_peak_demand_mw": kpis.get("average_peak_demand_mw"),
+            "latest_solar_capacity_mwp": kpis.get("latest_solar_capacity_mwp"),
+            "latest_solar_capacity_year": kpis.get("latest_solar_capacity_year"),
+            "demand_records": kpis.get("demand_records"),
+            "consumption_records": kpis.get("consumption_records"),
+        },
+        "active_alert_count": 0,
+        "affected_zones": [],
+        "primary_risk_factors": [],
+        "confidence": str(d.get("confidence") or "low"),
+        "limitations": list(d.get("limitations") or []),
+        "warnings": list(d.get("warnings") or []),
+        "errors": list(d.get("errors") or []),
+        "is_ml_prediction": bool(d.get("is_ml_prediction", False)),
+        "generated_at": _iso(getattr(report, "generated_at", None) or d.get("generated_at")),
+    }
+
+
 _NORMALIZERS = {
     "environment": ("environment_report", _normalize_environment),
     "traffic": ("traffic_report", _normalize_traffic),
@@ -659,6 +802,9 @@ _NORMALIZERS = {
     "land": ("land_report", _normalize_land),
     "fire": ("fire_report", _normalize_fire),
     "crime": ("crime_report", _normalize_crime),
+    "waste": ("waste_report", _normalize_waste),
+    "housing": ("housing_report", _normalize_housing),
+    "energy": ("energy_report", _normalize_energy),
 }
 
 
@@ -671,14 +817,22 @@ def normalize_state(state: CityCoordinatorState) -> CityCoordinatorState:
     for domain, (attr, fn) in _NORMALIZERS.items():
         report = getattr(state, attr, None)
         if report is None:
-            existing = state.domain_status.get(domain)
-            if existing:
-                state.domain_status[domain] = dict(existing)
-                state.domain_status[domain].setdefault(
-                    "error", f"{domain.title()} report was not collected.")
+            # Waste module test expects a minimal unavailable dict
+            if domain == "waste":
+                state.domain_status[domain] = {
+                    "domain": "waste",
+                    "available": False,
+                    "error": "Waste report not available",
+                }
             else:
-                state.domain_status[domain] = _unavailable(
-                    domain, f"{domain.title()} report was not collected.")
+                existing = state.domain_status.get(domain)
+                if existing:
+                    state.domain_status[domain] = dict(existing)
+                    state.domain_status[domain].setdefault(
+                        "error", f"{domain.title()} report was not collected.")
+                else:
+                    state.domain_status[domain] = _unavailable(
+                        domain, f"{domain.title()} report was not collected.")
             continue
         try:
             state.domain_status[domain] = fn(report)
@@ -1111,6 +1265,12 @@ _DOMAIN_RECO = {
                        "operational concern with current police channels."),
     "land": ("LAND", "Review Master Plan land-use data limitations before drawing "
                      "planning conclusions."),
+    "waste": ("WASTE", "Waste statistics are annual national figures; review NEA "
+                        "publications before drawing operational conclusions."),
+    "housing": ("HOUSING", "Housing statistics are periodic official figures; review HDB/URA "
+                        "publications before drawing operational conclusions."),
+    "energy": ("ENERGY", "Energy statistics are historical official figures; review EMA "
+                        "publications before drawing operational conclusions."),
 }
 
 

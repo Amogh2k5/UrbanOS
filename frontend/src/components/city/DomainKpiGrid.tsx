@@ -3,10 +3,13 @@
 /**
  * Domain Performance KPI cards.
  *
- * Each card navigates to its existing domain page. The insight action is a
- * separate control that opens the grounded KPI insight panel and must never
- * trigger the card's navigation.
+ * Solid, medium-to-strong domain colour with white text - the defining
+ * surface of the dashboard. The colour says which domain this is; the status
+ * badge says how bad it is. Those are independent, so a green Environment card
+ * carrying a red "Critical" badge is correct, not a contradiction.
  *
+ * Each card navigates to its existing domain page. The insight action is a
+ * separate control that must never trigger the card's navigation.
  * Unavailable data is rendered as such - never as zero.
  */
 import Link from "next/link";
@@ -14,10 +17,11 @@ import { Sparkles, Car, Route, Train, Wind, CloudSun, Waves, Flame, ShieldAlert,
 import type { LucideIcon } from "lucide-react";
 import type { ModuleSummary } from "@/services/api";
 import {
-  accentFor,
   formatKpiValue,
+  formatTimestamp,
+  solidCardClass,
+  statusBadgeClass,
   statusLabel,
-  statusTextClass,
 } from "./presentation";
 
 const ICONS: Record<string, LucideIcon> = {
@@ -50,21 +54,20 @@ export default function DomainKpiGrid({
       <div className="flex items-center justify-between mb-5">
         <h3
           id="domain-performance-heading"
-          className="text-xs font-bold text-slate-500 uppercase tracking-widest"
+          className="text-sm font-bold text-slate-700 uppercase tracking-wider px-3 mb-2 border-l-2 border-slate-200 pl-2.5"
         >
           Domain Performance
         </h3>
-        <span className="text-[10px] font-medium text-slate-500 bg-slate-800 px-2 py-0.5 rounded-full">
+        <span className="text-[10px] font-medium text-slate-500 bg-white border border-slate-200 px-2.5 py-1 rounded-md">
           Live backend values
         </span>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-        {(modules ?? []).map((mod) => {
+        {(modules ?? []).filter((mod) => mod.id !== "utilities").map((mod) => {
           const Icon = ICONS[mod.id] ?? Sparkles;
-          const accent = accentFor(mod.id);
-          // Status and metric are independent facts. The backend only supplies
-          // a KPI when a real measurement exists, so show whichever one it gave
+          // Status and metric are independent facts. The backend only supplies a
+          // KPI when a real measurement exists, so show whichever one it gave
           // us: water, for example, has a genuine potable-sales reading while
           // its risk assessment is unavailable. Suppressing the metric whenever
           // status is "unavailable" threw away a real number and made the card
@@ -79,7 +82,7 @@ export default function DomainKpiGrid({
               data-testid="domain-kpi-card"
               data-module={mod.id}
               data-status={mod.status}
-              className={`block ${accent.bg} rounded-2xl p-5 shadow-lg ${accent.ring} transition-all duration-200 hover:-translate-y-1 hover:shadow-xl group relative overflow-hidden`}
+              className={solidCardClass(mod.id, "block p-5 group")}
             >
               <div className="absolute inset-0 card-pattern opacity-30" aria-hidden="true" />
               <div
@@ -112,60 +115,38 @@ export default function DomainKpiGrid({
                     }}
                     className={`w-7 h-7 rounded-full flex items-center justify-center transition-colors shrink-0 ${
                       domainsWithFindings.has(mod.id)
-                        ? "bg-white/20 text-yellow-200 hover:bg-white/30"
-                        : "bg-white/10 text-white/50 hover:bg-white/20 hover:text-white"
+                        ? "bg-white text-slate-900 hover:bg-white/90"
+                        : "bg-white/10 text-white/90 hover:bg-white/25 hover:text-white"
                     }`}
                   >
                     <Sparkles size={12} />
                   </button>
                 </div>
 
+                <p className="text-sm text-white/90 mb-1 font-medium">
+                  {kpiText ? mod.kpi?.label : mod.kpi?.label ?? "No supported metric"}
+                </p>
+
                 {kpiText ? (
-                  <>
-                    <p className="text-sm text-white/80 mb-1 font-medium">
-                      {mod.kpi?.label}
+                  <div className="flex items-baseline gap-2 mb-3">
+                    <p data-testid="kpi-value" className="text-3xl font-bold text-white tracking-tight">
+                      {kpiText}
                     </p>
-                    <div className="flex items-baseline gap-2 mb-3">
-                      <p
-                        data-testid="kpi-value"
-                        className="text-3xl font-bold text-white tracking-tight"
-                      >
-                        {kpiText}
-                      </p>
-                    </div>
-                    <div className="inline-flex items-center px-2.5 py-1 rounded-lg bg-black/25 backdrop-blur-sm border border-white/10">
-                      <p
-                        data-testid="kpi-status"
-                        className={`text-[11px] font-semibold text-white ${statusTextClass(
-                          mod.status
-                        )}`}
-                      >
-                        {statusLabel(mod.status)}
-                      </p>
-                    </div>
-                  </>
+                  </div>
                 ) : (
-                  <>
-                    <p className="text-sm text-white/80 mb-1 font-medium">
-                      {mod.kpi?.label ?? "No supported metric"}
-                    </p>
-                    <p
-                      data-testid="kpi-value-unavailable"
-                      className="text-xl font-bold text-white/60 tracking-tight mb-3"
-                    >
-                      Unavailable
-                    </p>
-                    <div className="inline-flex items-center px-2.5 py-1 rounded-lg bg-black/25 backdrop-blur-sm border border-white/10">
-                      <p
-                        data-testid="kpi-status"
-                        className={`text-[11px] font-semibold text-white ${statusTextClass(
-                          mod.status
-                        )}`}
-                      >
-                        {statusLabel(mod.status)}
-                      </p>
-                    </div>
-                  </>
+                  <p data-testid="kpi-value-unavailable" className="text-xl font-bold text-white/90 tracking-tight mb-3">
+                    Unavailable
+                  </p>
+                )}
+
+                <span data-testid="kpi-status" className={statusBadgeClass(mod.status)}>
+                  {statusLabel(mod.status)}
+                </span>
+
+                {mod.updated_at && (
+                  <p className="mt-3 text-[11px] text-white/90">
+                    Updated {formatTimestamp(mod.updated_at)}
+                  </p>
                 )}
               </div>
             </Link>
@@ -174,7 +155,7 @@ export default function DomainKpiGrid({
       </div>
 
       {!modules || modules.length === 0 ? (
-        <p data-testid="kpi-grid-empty" className="text-sm text-slate-400">
+        <p data-testid="kpi-grid-empty" className="text-sm text-slate-500">
           No domain data available.
         </p>
       ) : null}

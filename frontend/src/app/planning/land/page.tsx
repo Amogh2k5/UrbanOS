@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { AlertTriangle, Building2, Factory, Info, Layers, MapPin, RefreshCw, ShieldAlert } from "lucide-react";
+import { domainCardClass } from "@/components/city/presentation";
 import { GroupBars, GroupShareBar, YearBars } from "./LandCharts";
 import { DATA_KIND_STYLE, GROUP_COLOR, GROUP_LABEL, SOURCE_STATUS_STYLE } from "./landConstants";
 import {
@@ -28,14 +29,23 @@ import {
 const LandMap = dynamic(() => import("./LandMap"), {
   ssr: false,
   loading: () => (
-    <div className="h-full min-h-[460px] flex items-center justify-center text-xs text-gray-600">Loading map…</div>
+    <div className="h-full min-h-[460px] flex items-center justify-center text-xs text-slate-600">Loading map…</div>
   ),
 });
 
-function KindBadge({ kind }: { kind: LandDataKind }) {
+const SOLID_KIND_STYLE: Record<LandDataKind, string> = {
+  live: "bg-white text-green-900 border-white/80",
+  latest_available: "bg-white text-cyan-900 border-white/80",
+  historical: "bg-white text-violet-900 border-white/80",
+  forecast: "bg-white text-amber-900 border-white/80",
+  unavailable: "bg-white text-slate-700 border-white/80",
+};
+
+function KindBadge({ kind, onSolidCard = false }: { kind: LandDataKind; onSolidCard?: boolean }) {
   const s = DATA_KIND_STYLE[kind] ?? DATA_KIND_STYLE.unavailable;
+  const cls = onSolidCard ? SOLID_KIND_STYLE[kind] : s.cls;
   return (
-    <span className={`text-[9px] font-bold tracking-[0.14em] px-2 py-0.5 rounded border ${s.cls}`}>
+    <span className={`text-[9px] font-bold tracking-[0.14em] px-2 py-0.5 rounded border ${cls}`}>
       {s.label}
     </span>
   );
@@ -72,8 +82,30 @@ function fmtMoney(v?: number | null): string {
   return `$${fmtNum(v)}`;
 }
 
-function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`glass-panel rounded-xl border border-gray-800/60 p-4 ${className}`}>{children}</div>;
+/**
+ * Neutral by default, because most of this page is dense numeric content where
+ * a colour wash would hurt readability. Pass `tint` for the headline card only.
+ */
+function Card({
+  children,
+  className = "",
+  tint = false,
+}: {
+  children: ReactNode;
+  className?: string;
+  tint?: boolean;
+}) {
+  return (
+    <div
+      className={
+        tint
+          ? `${domainCardClass("land", "rounded-xl p-4")} ${className}`
+          : `glass-panel rounded-xl border border-slate-200 p-4 ${className}`
+      }
+    >
+      {children}
+    </div>
+  );
 }
 
 function Section({
@@ -93,7 +125,7 @@ function Section({
     <section id={id} className="mb-8 scroll-mt-4">
       <div className="flex items-center gap-2 mb-3">
         {icon}
-        <h2 className="text-sm font-bold tracking-[0.2em] text-gray-200">{title}</h2>
+        <h2 className="text-sm font-bold tracking-[0.2em] text-slate-700">{title}</h2>
         {kind && <KindBadge kind={kind} />}
       </div>
       {children}
@@ -104,10 +136,10 @@ function Section({
 function Notice({ tone = "info", children }: { tone?: "info" | "warn" | "error"; children: ReactNode }) {
   const cls =
     tone === "error"
-      ? "border-red-500/25 bg-red-950/20 text-red-300"
+      ? "border-red-500/25 bg-red-50 text-red-800"
       : tone === "warn"
-        ? "border-yellow-500/25 bg-yellow-950/10 text-yellow-200/80"
-        : "border-gray-700 bg-gray-900/40 text-gray-400";
+        ? "border-yellow-500/25 bg-yellow-50 text-yellow-800/80"
+        : "border-slate-200 bg-slate-50 text-slate-500";
   return (
     <div className={`rounded-lg border p-3 text-xs leading-5 flex gap-2 ${cls}`}>
       <Info size={14} className="shrink-0 mt-0.5" />
@@ -137,16 +169,16 @@ function Metric({
 }) {
   const has = value !== null && value !== undefined && Number.isFinite(value);
   return (
-    <Card>
+    <Card tint>
       <div className="flex items-center justify-between gap-2">
-        <div className="text-[10px] font-bold tracking-[0.16em] text-gray-400">{label.toUpperCase()}</div>
-        {kind && <KindBadge kind={has ? kind : "unavailable"} />}
+        <div className="text-[10px] font-bold tracking-[0.16em] text-white/90">{label.toUpperCase()}</div>
+        {kind && <KindBadge kind={has ? kind : "unavailable"} onSolidCard />}
       </div>
-      <div className={`text-2xl font-mono font-bold mt-2 ${has ? "text-white" : "text-gray-600"}`}>
+      <div className={`text-2xl font-mono font-bold mt-2 ${has ? "text-white" : "text-white/90"}`}>
         {has ? `${fmtNum(value, Number.isInteger(value) ? 0 : 1)} ` : "— "}
-        <span className="text-xs text-gray-500 font-normal">{unit}</span>
+        <span className="text-xs text-white/90 font-normal">{unit}</span>
       </div>
-      <div className="text-[10px] text-gray-500 mt-1">{has ? (hint ?? "") : "Not reported by the source"}</div>
+      <div className="text-[10px] text-white/90 mt-1">{has ? (hint ?? "") : "Not reported by the source"}</div>
     </Card>
   );
 }
@@ -252,18 +284,19 @@ export default function LandPage() {
   }, [allAreas, regionFilter, sortKey]);
 
   const status = overview?.source_status ?? use?.source_status ?? "unavailable";
+  const degradedComponentCount = sources?.sources.filter((item) => item.status !== "ok").length;
   const statusStyle = SOURCE_STATUS_STYLE[status];
 
   if (loading) {
     return (
       <div className="p-6 space-y-4">
-        <div className="animate-pulse bg-slate-800 h-8 w-64 rounded" />
+        <div className="animate-pulse bg-slate-200 h-8 w-64 rounded" />
         <div className="grid gap-4 md:grid-cols-4">
           {[1, 2, 3, 4].map((k) => (
-            <div key={k} className="animate-pulse bg-slate-800 h-24 rounded-lg" />
+            <div key={k} className="animate-pulse bg-slate-200 h-24 rounded-lg" />
           ))}
         </div>
-        <div className="animate-pulse bg-slate-800 h-72 rounded-lg" />
+        <div className="animate-pulse bg-slate-200 h-72 rounded-lg" />
       </div>
     );
   }
@@ -281,30 +314,29 @@ export default function LandPage() {
         {/* ------------------------------------------------------- header */}
         <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-5">
           <div>
-            <div className="text-[10px] uppercase tracking-[0.25em] text-cyan-400 font-bold">
+            <div className="text-[10px] uppercase tracking-[0.25em] text-cyan-700 font-bold">
               Planning domain
             </div>
-            <h1 className="text-2xl md:text-3xl font-heading font-bold text-white mt-1">
+            <h1 className="text-2xl md:text-3xl font-heading font-bold text-slate-900 mt-1">
               Singapore land-use, planning &amp; development intelligence
             </h1>
-            <p className="text-sm text-gray-500 mt-1">
+            <p className="text-sm text-slate-500 mt-1">
               Master Plan 2025 zoning, planning areas, cadastral parcels and Government Land Sales.
             </p>
           </div>
           <div className="flex items-center gap-3 self-start lg:self-auto">
-            <nav className="hidden md:flex gap-3 text-xs text-gray-400">
-              <a href="#use" className="hover:text-white">Land use</a>
-              <a href="#planning" className="hover:text-white">Planning</a>
-              <a href="#gls" className="hover:text-white">GLS</a>
-              <a href="#industrial" className="hover:text-white">Industrial</a>
-              <a href="#map" className="hover:text-white">Map</a>
-              <a href="#sources" className="hover:text-white">Sources</a>
+            <nav className="hidden md:flex gap-3 text-xs text-slate-500">
+              <a href="#use" className="text-slate-600 hover:text-slate-900">Land use</a>
+              <a href="#planning" className="text-slate-600 hover:text-slate-900">Planning</a>
+              <a href="#gls" className="text-slate-600 hover:text-slate-900">GLS</a>
+              <a href="#industrial" className="text-slate-600 hover:text-slate-900">Industrial</a>
+              <a href="#map" className="text-slate-600 hover:text-slate-900">Map</a>
             </nav>
             <button
               type="button"
               onClick={() => void load(true)}
               disabled={refreshing}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-700 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-50"
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-50"
             >
               <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} /> Refresh
             </button>
@@ -312,19 +344,19 @@ export default function LandPage() {
         </div>
 
         {error && (
-          <div className="mb-5 glass-panel p-4 rounded-xl border border-red-500/30 bg-red-950/20 text-red-300 text-sm flex gap-3">
+          <div className="mb-5 glass-panel p-4 rounded-xl border border-red-500/30 bg-red-50 text-red-800 text-sm flex gap-3">
             <ShieldAlert size={18} className="shrink-0" />
             <div>
               <div className="font-semibold">Some Land data could not be loaded</div>
-              <div className="text-xs text-red-300/70 mt-1 break-words">{error}</div>
+              <div className="text-xs text-red-800/70 mt-1 break-words">{error}</div>
             </div>
           </div>
         )}
 
         {nothingLoaded && (
           <Card>
-            <div className="text-sm text-gray-400">
-              Land data is temporarily unavailable. The official sources could not be reached and no cached copy
+            <div className="text-sm text-slate-500">
+              Land data is temporarily unavailable. The data services could not be reached and no cached copy
               is available, so nothing is shown rather than reporting zeros.
             </div>
           </Card>
@@ -333,22 +365,15 @@ export default function LandPage() {
         {/* --------------------------------------------------- status bar */}
         {!nothingLoaded && (
           <>
-            <div className="mb-5 glass-panel p-3 rounded-xl border border-gray-800/60 text-xs text-gray-400 flex flex-wrap items-center gap-x-5 gap-y-2">
+            <div className="mb-5 glass-panel p-3 rounded-xl border border-slate-200 text-xs text-slate-500 flex flex-wrap items-center gap-x-5 gap-y-2">
               <span className={`px-2 py-0.5 rounded border text-[10px] font-bold tracking-[0.14em] ${statusStyle.cls}`}>
                 {statusStyle.label}
               </span>
               <span>Generated {fmtTime(overview?.generated_at)}</span>
               <span>
-                Confidence: <strong className="text-gray-200">{overview?.confidence ?? "—"}</strong>
+                Confidence: <strong className="text-slate-700">{overview?.confidence ?? "—"}</strong>
               </span>
-              <span>
-                Sources OK:{" "}
-                <strong className="text-gray-200">
-                  {(sources?.sources ?? []).filter((s) => s.status === "ok").length}/
-                  {sources?.sources.length ?? 0}
-                </strong>
-              </span>
-              <span className="text-gray-600">ML: not used</span>
+              <span className="text-slate-600">ML: not used</span>
             </div>
 
             {status !== "available" && (
@@ -356,12 +381,12 @@ export default function LandPage() {
                 <Notice tone={status === "partial" ? "warn" : "error"}>
                   {status === "partial" ? (
                     <>
-                      <strong>Partial data.</strong> Some official sources could not be retrieved. Missing
+                      <strong>Partial data.</strong> {degradedComponentCount != null ? `${degradedComponentCount} data component(s) are unavailable or stale. ` : "Some data components could not be retrieved. "}Missing
                       datasets are left blank throughout this page — they are never shown as a zero value.
                     </>
                   ) : (
                     <>
-                      <strong>Land data is temporarily unavailable.</strong> None of the official datasets could be
+                      <strong>Land data is temporarily unavailable.</strong> None of the configured datasets could be
                       retrieved and no cached copy is available.
                     </>
                   )}
@@ -382,7 +407,7 @@ export default function LandPage() {
                 label="Land-use categories"
                 value={lu?.distinct_categories ?? null}
                 kind="latest_available"
-                hint="official URA designations"
+                hint="Planning designations"
               />
               <Metric
                 label="Planning areas"
@@ -408,12 +433,12 @@ export default function LandPage() {
             <Section
               id="use"
               title="LAND-USE DISTRIBUTION"
-              icon={<Layers size={16} className="text-cyan-400" />}
+              icon={<Layers size={16} className="text-cyan-700" />}
               kind={lu?.data_kind}
             >
               {!lu || lu.data_kind === "unavailable" ? (
                 <Card>
-                  <div className="text-sm text-gray-500">
+                  <div className="text-sm text-slate-500">
                     Master Plan land-use layer unavailable. No zoning figures can be shown.
                   </div>
                 </Card>
@@ -422,28 +447,28 @@ export default function LandPage() {
                   <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                     <Card>
                       <div className="flex items-center justify-between mb-3">
-                        <h3 className="text-xs font-bold tracking-[0.18em] text-gray-300">AREA BY GROUP</h3>
+                        <h3 className="text-xs font-bold tracking-[0.18em] text-slate-600">AREA BY GROUP</h3>
                         <KindBadge kind={lu.data_kind} />
                       </div>
                       <GroupBars byGroup={lu.by_group} />
                     </Card>
                     <Card>
                       <div className="flex items-center justify-between mb-3">
-                        <h3 className="text-xs font-bold tracking-[0.18em] text-gray-300">COMPOSITION</h3>
-                        <span className="text-[10px] text-gray-600">{lu.source_layer}</span>
+                        <h3 className="text-xs font-bold tracking-[0.18em] text-slate-600">COMPOSITION</h3>
+                        <span className="text-[10px] text-slate-600">{lu.source_layer}</span>
                       </div>
                       <GroupShareBar byGroup={lu.by_group} />
                     </Card>
                   </div>
 
                   <Card className="mt-4">
-                    <div className="text-xs font-bold tracking-[0.18em] text-gray-300 mb-2">
+                    <div className="text-xs font-bold tracking-[0.18em] text-slate-600 mb-2">
                       OFFICIAL DESIGNATIONS
                     </div>
                     <div className="overflow-x-auto max-h-[320px] overflow-y-auto">
                       <table className="w-full text-xs">
-                        <thead className="sticky top-0 bg-slate-900/95 backdrop-blur">
-                          <tr className="text-left text-[10px] tracking-[0.14em] text-gray-500">
+                        <thead className="sticky top-0 bg-white backdrop-blur">
+                          <tr className="text-left text-[10px] tracking-[0.14em] text-slate-500">
                             <th className="py-2 pr-4">DESIGNATION</th>
                             <th className="pr-4">GROUP</th>
                             <th className="pr-4 text-right">AREA (km²)</th>
@@ -453,9 +478,9 @@ export default function LandPage() {
                         </thead>
                         <tbody>
                           {lu.categories.map((c) => (
-                            <tr key={c.code} className="border-b border-gray-900 text-gray-300">
+                            <tr key={c.code} className="border-b border-slate-200 text-slate-600">
                               <td className="py-1.5 pr-4">{c.label}</td>
-                              <td className="pr-4 text-gray-500">{groupLabel(c.group)}</td>
+                              <td className="pr-4 text-slate-500">{groupLabel(c.group)}</td>
                               <td className="pr-4 text-right font-mono">
                                 {c.area_sqm === null ? "—" : (c.area_sqm / 1e6).toFixed(2)}
                               </td>
@@ -473,11 +498,11 @@ export default function LandPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
                     <Card>
                       <div className="flex items-center justify-between mb-2">
-                        <h3 className="text-xs font-bold tracking-[0.18em] text-gray-300">GROSS PLOT RATIO</h3>
+                        <h3 className="text-xs font-bold tracking-[0.18em] text-slate-600">GROSS PLOT RATIO</h3>
                         <KindBadge kind={lu.gpr.data_kind} />
                       </div>
                       {lu.gpr.data_kind === "unavailable" ? (
-                        <div className="text-sm text-gray-600">No numeric GPR reported.</div>
+                        <div className="text-sm text-slate-600">No numeric GPR reported.</div>
                       ) : (
                         <>
                           <div className="grid grid-cols-4 gap-3 text-center">
@@ -490,18 +515,18 @@ export default function LandPage() {
                               ] as [string, number | null][]
                             ).map(([label, v]) => (
                               <div key={String(label)}>
-                                <div className="text-[9px] tracking-[0.12em] text-gray-500">{label}</div>
-                                <div className="text-lg font-mono font-bold text-white">
+                                <div className="text-[9px] tracking-[0.12em] text-slate-500">{label}</div>
+                                <div className="text-lg font-mono font-bold text-slate-900">
                                   {v === null ? "—" : v.toFixed(2)}
                                 </div>
                               </div>
                             ))}
                           </div>
-                          <div className="text-[11px] text-gray-500 mt-3">
+                          <div className="text-[11px] text-slate-500 mt-3">
                             {fmtNum(lu.gpr.reported_numeric?.zone_count ?? null)} zones report a numeric GPR.
                             {Object.keys(lu.gpr.special_codes).length > 0 && (
                               <>
-                                {" "}Non-numeric official codes:{" "}
+                                {" "}Non-numeric planning codes:{" "}
                                 {Object.entries(lu.gpr.special_codes)
                                   .filter(([, n]) => (n ?? 0) > 0)
                                   .map(([code, n]) => `${code} × ${n}`)
@@ -514,28 +539,28 @@ export default function LandPage() {
                       )}
                       <div className="mt-3 space-y-1">
                         {lu.gpr.limitations.map((l) => (
-                          <div key={l} className="text-[10px] text-gray-600 leading-4">{l}</div>
+                          <div key={l} className="text-[10px] text-slate-600 leading-4">{l}</div>
                         ))}
                       </div>
                     </Card>
 
                     <Card>
-                      <div className="text-xs font-bold tracking-[0.18em] text-gray-300 mb-2">
+                      <div className="text-xs font-bold tracking-[0.18em] text-slate-600 mb-2">
                         DATA VALIDATION
                       </div>
                       <div className="grid grid-cols-2 gap-3 text-center">
                         <div>
-                          <div className="text-[9px] tracking-[0.12em] text-gray-500">FEATURES INSPECTED</div>
-                          <div className="text-lg font-mono font-bold text-white">{fmtNum(lu.zones_inspected)}</div>
+                          <div className="text-[9px] tracking-[0.12em] text-slate-500">FEATURES INSPECTED</div>
+                          <div className="text-lg font-mono font-bold text-slate-900">{fmtNum(lu.zones_inspected)}</div>
                         </div>
                         <div>
-                          <div className="text-[9px] tracking-[0.12em] text-gray-500">REJECTED</div>
-                          <div className="text-lg font-mono font-bold text-white">{fmtNum(lu.invalid_zones)}</div>
+                          <div className="text-[9px] tracking-[0.12em] text-slate-500">REJECTED</div>
+                          <div className="text-lg font-mono font-bold text-slate-900">{fmtNum(lu.invalid_zones)}</div>
                         </div>
                       </div>
                       <div className="mt-3 space-y-1">
                         {lu.limitations.map((l) => (
-                          <div key={l} className="text-[10px] text-gray-600 leading-4">{l}</div>
+                          <div key={l} className="text-[10px] text-slate-600 leading-4">{l}</div>
                         ))}
                       </div>
                     </Card>
@@ -548,20 +573,20 @@ export default function LandPage() {
             <Section
               id="planning"
               title="PLANNING STRUCTURE"
-              icon={<MapPin size={16} className="text-cyan-400" />}
+              icon={<MapPin size={16} className="text-cyan-700" />}
               kind={pl?.data_kind}
             >
               {!pl || pl.data_kind === "unavailable" ? (
-                <Card><div className="text-sm text-gray-500">Planning-area boundaries unavailable.</div></Card>
+                <Card><div className="text-sm text-slate-500">Planning-area boundaries unavailable.</div></Card>
               ) : (
                 <>
                   <div className="grid gap-4 mb-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
                     {regions.map((r) => (
                       <Card key={r.name} className="!p-3">
-                        <div className="text-[10px] font-bold tracking-[0.14em] text-gray-400">{r.name}</div>
-                        <div className="text-lg font-mono font-bold text-white mt-1">
+                        <div className="text-[10px] font-bold tracking-[0.14em] text-slate-500">{r.name}</div>
+                        <div className="text-lg font-mono font-bold text-slate-900 mt-1">
                           {r.area_sqm === null ? "—" : (r.area_sqm / 1e6).toFixed(1)}
-                          <span className="text-[10px] text-gray-500 ml-1">km²</span>
+                          <span className="text-[10px] text-slate-500 ml-1">km²</span>
                         </div>
                       </Card>
                     ))}
@@ -569,12 +594,12 @@ export default function LandPage() {
 
                   <Card>
                     <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-                      <h3 className="text-xs font-bold tracking-[0.18em] text-gray-300">LAND USE BY PLANNING AREA</h3>
+                      <h3 className="text-xs font-bold tracking-[0.18em] text-slate-600">LAND USE BY PLANNING AREA</h3>
                       <div className="flex items-center gap-2">
                         <select
                           value={regionFilter}
                           onChange={(e) => setRegionFilter(e.target.value)}
-                          className="bg-slate-800 border border-gray-700 text-xs text-gray-200 rounded px-2 py-1"
+                          className="bg-slate-200 border border-slate-200 text-xs text-slate-700 rounded px-2 py-1"
                         >
                           <option value="all">All regions</option>
                           {regions.map((r) => (
@@ -584,7 +609,7 @@ export default function LandPage() {
                         <select
                           value={sortKey}
                           onChange={(e) => setSortKey(e.target.value as typeof sortKey)}
-                          className="bg-slate-800 border border-gray-700 text-xs text-gray-200 rounded px-2 py-1"
+                          className="bg-slate-200 border border-slate-200 text-xs text-slate-700 rounded px-2 py-1"
                         >
                           <option value="land_use_area_sqm">Sort: land-use area</option>
                           <option value="dominant_category_pct">Sort: dominant share</option>
@@ -593,12 +618,12 @@ export default function LandPage() {
                       </div>
                     </div>
 
-                    <p className="text-[10px] text-gray-600 mb-3">{pl.method}</p>
+                    <p className="text-[10px] text-slate-600 mb-3">{pl.method}</p>
 
                     <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
                       <table className="w-full text-xs">
-                        <thead className="sticky top-0 bg-slate-900/95 backdrop-blur">
-                          <tr className="text-left text-[10px] tracking-[0.12em] text-gray-500">
+                        <thead className="sticky top-0 bg-white backdrop-blur">
+                          <tr className="text-left text-[10px] tracking-[0.12em] text-slate-500">
                             <th className="py-2 pr-3">PLANNING AREA</th>
                             <th className="pr-3">REGION</th>
                             <th className="pr-3 text-right">LAND USE (km²)</th>
@@ -612,22 +637,22 @@ export default function LandPage() {
                             <tr
                               key={p.name}
                               onClick={() => setSelected(p)}
-                              className={`border-b border-gray-900 text-gray-300 cursor-pointer hover:bg-slate-900/60 ${
-                                selected?.name === p.name ? "bg-slate-900/80" : ""
+                              className={`border-b border-slate-200 text-slate-600 cursor-pointer hover:bg-slate-50 ${
+                                selected?.name === p.name ? "bg-white" : ""
                               }`}
                             >
                               <td className="py-1.5 pr-3">{p.name}</td>
-                              <td className="pr-3 text-gray-500">{p.region ?? "—"}</td>
+                              <td className="pr-3 text-slate-500">{p.region ?? "—"}</td>
                               <td className="pr-3 text-right font-mono">
                                 {p.land_use_area_sqm === null ? "—" : (p.land_use_area_sqm / 1e6).toFixed(2)}
                               </td>
                               <td className="pr-3 text-right font-mono">
                                 {p.land_use_coverage_pct === null ? "—" : `${p.land_use_coverage_pct.toFixed(1)}%`}
                               </td>
-                              <td className="pr-3 text-gray-400">
+                              <td className="pr-3 text-slate-500">
                                 {p.dominant_category ?? "—"}
                                 {p.dominant_category_pct !== null && (
-                                  <span className="text-gray-600"> {p.dominant_category_pct.toFixed(0)}%</span>
+                                  <span className="text-slate-600"> {p.dominant_category_pct.toFixed(0)}%</span>
                                 )}
                               </td>
                               <td className="text-right font-mono">{fmtNum(p.zone_count)}</td>
@@ -636,7 +661,7 @@ export default function LandPage() {
                         </tbody>
                       </table>
                     </div>
-                    <div className="text-[10px] text-gray-600 mt-2">
+                    <div className="text-[10px] text-slate-600 mt-2">
                       Showing {visibleAreas.length} of {allAreas.length} planning areas with attributed land-use zones.
                     </div>
                   </Card>
@@ -644,8 +669,8 @@ export default function LandPage() {
                   {selected && (
                     <Card className="mt-4">
                       <div className="flex items-center gap-2 mb-2">
-                        <MapPin size={15} className="text-cyan-400" />
-                        <h3 className="text-xs font-bold tracking-[0.18em] text-gray-300">
+                        <MapPin size={15} className="text-cyan-700" />
+                        <h3 className="text-xs font-bold tracking-[0.18em] text-slate-600">
                           {selected.name.toUpperCase()} — LAND USE BREAKDOWN
                         </h3>
                       </div>
@@ -659,14 +684,14 @@ export default function LandPage() {
                                 className="w-2.5 h-2.5 inline-block rounded-sm"
                                 style={{ background: GROUP_COLOR[g as keyof typeof GROUP_COLOR] ?? "#64748b" }}
                               />
-                              <span className="text-gray-400">{groupLabel(g)}</span>
-                              <span className="ml-auto font-mono text-white">
+                              <span className="text-slate-500">{groupLabel(g)}</span>
+                              <span className="ml-auto font-mono text-slate-900">
                                 {((v as number) / 1e6).toFixed(2)} km²
                               </span>
                             </div>
                           ))}
                         {Object.keys(selected.group_area_sqm ?? {}).length === 0 && (
-                          <div className="text-xs text-gray-600">No land-use zone attributed to this area.</div>
+                          <div className="text-xs text-slate-600">No land-use zone attributed to this area.</div>
                         )}
                       </div>
                     </Card>
@@ -675,15 +700,15 @@ export default function LandPage() {
               )}
               <div className="mt-3 space-y-1">
                 {(pl?.limitations ?? []).map((l) => (
-                  <div key={l} className="text-[11px] text-gray-600">{l}</div>
+                  <div key={l} className="text-[11px] text-slate-600">{l}</div>
                 ))}
               </div>
             </Section>
 
             {/* ------------------------------------------------------ GLS */}
-            <Section id="gls" title="GOVERNMENT LAND SALES" icon={<Building2 size={16} className="text-cyan-400" />} kind={g?.data_kind}>
+            <Section id="gls" title="GOVERNMENT LAND SALES" icon={<Building2 size={16} className="text-cyan-700" />} kind={g?.data_kind}>
               {!g || g.data_kind === "unavailable" ? (
-                <Card><div className="text-sm text-gray-500">GLS site records unavailable.</div></Card>
+                <Card><div className="text-sm text-slate-500">GLS site records unavailable.</div></Card>
               ) : (
                 <>
                   <div className="mb-4">
@@ -698,19 +723,19 @@ export default function LandPage() {
 
                   <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                     <Card>
-                      <h3 className="text-xs font-bold tracking-[0.18em] text-gray-300 mb-2">SITES AWARDED PER YEAR</h3>
+                      <h3 className="text-xs font-bold tracking-[0.18em] text-slate-600 mb-2">SITES AWARDED PER YEAR</h3>
                       <YearBars byYear={g.by_year} />
                     </Card>
                     <Card>
-                      <h3 className="text-xs font-bold tracking-[0.18em] text-gray-300 mb-2">BY DEVELOPMENT CODE</h3>
+                      <h3 className="text-xs font-bold tracking-[0.18em] text-slate-600 mb-2">BY DEVELOPMENT CODE</h3>
                       <div className="overflow-y-auto max-h-[190px] space-y-1 pr-1">
                         {Object.entries(g.by_development_code)
                           .filter(([, n]) => (n ?? 0) > 0)
                           .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
                           .map(([code, n]) => (
                             <div key={code} className="flex items-center justify-between text-xs gap-3">
-                              <span className="text-gray-400 truncate">{code}</span>
-                              <span className="font-mono text-white">{fmtNum(n)}</span>
+                              <span className="text-slate-500 truncate">{code}</span>
+                              <span className="font-mono text-slate-900">{fmtNum(n)}</span>
                             </div>
                           ))}
                       </div>
@@ -718,13 +743,13 @@ export default function LandPage() {
                   </div>
 
                   <Card className="mt-4">
-                    <h3 className="text-xs font-bold tracking-[0.18em] text-gray-300 mb-2">
+                    <h3 className="text-xs font-bold tracking-[0.18em] text-slate-600 mb-2">
                       MOST RECENTLY AWARDED SITES
                     </h3>
                     <div className="overflow-x-auto max-h-[360px] overflow-y-auto">
                       <table className="w-full text-xs">
-                        <thead className="sticky top-0 bg-slate-900/95 backdrop-blur">
-                          <tr className="text-left text-[10px] tracking-[0.12em] text-gray-500">
+                        <thead className="sticky top-0 bg-white backdrop-blur">
+                          <tr className="text-left text-[10px] tracking-[0.12em] text-slate-500">
                             <th className="py-2 pr-3">AWARDED</th>
                             <th className="pr-3">LOCATION</th>
                             <th className="pr-3">USE</th>
@@ -737,11 +762,11 @@ export default function LandPage() {
                         </thead>
                         <tbody>
                           {g.latest_sites.map((s, i) => (
-                            <tr key={`${s.location}-${i}`} className="border-b border-gray-900 text-gray-300">
+                            <tr key={`${s.location}-${i}`} className="border-b border-slate-200 text-slate-600">
                               <td className="py-1.5 pr-3 font-mono">{s.award_year ?? "—"}</td>
                               <td className="pr-3">{s.location ?? "—"}</td>
-                              <td className="pr-3 text-gray-500">{s.development_code ?? "—"}</td>
-                              <td className="pr-3 text-gray-500">{s.planning_area ?? "—"}</td>
+                              <td className="pr-3 text-slate-500">{s.development_code ?? "—"}</td>
+                              <td className="pr-3 text-slate-500">{s.planning_area ?? "—"}</td>
                               <td className="pr-3 text-right font-mono">{fmtNum(s.site_area_sqm)}</td>
                               <td className="pr-3 text-right font-mono">{s.gross_plot_ratio ?? "—"}</td>
                               <td className="pr-3 text-right font-mono">{fmtNum(s.housing_units)}</td>
@@ -751,7 +776,7 @@ export default function LandPage() {
                         </tbody>
                       </table>
                     </div>
-                    <div className="text-[10px] text-gray-600 mt-2">
+                    <div className="text-[10px] text-slate-600 mt-2">
                       {g.scope} Showing the {g.latest_sites.length} most recent awards in the source.
                     </div>
                   </Card>
@@ -759,39 +784,39 @@ export default function LandPage() {
                   {cad && (
                     <Card className="mt-4">
                       <div className="flex items-center justify-between mb-2">
-                        <h3 className="text-xs font-bold tracking-[0.18em] text-gray-300">CADASTRAL PARCELS</h3>
+                        <h3 className="text-xs font-bold tracking-[0.18em] text-slate-600">CADASTRAL PARCELS</h3>
                         <KindBadge kind={cad.data_kind} />
                       </div>
                       <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
                         <div>
-                          <div className="text-[9px] tracking-[0.12em] text-gray-500">PARCELS</div>
-                          <div className="text-lg font-mono font-bold text-white">{fmtNum(cad.parcel_count)}</div>
+                          <div className="text-[9px] tracking-[0.12em] text-slate-500">PARCELS</div>
+                          <div className="text-lg font-mono font-bold text-slate-900">{fmtNum(cad.parcel_count)}</div>
                         </div>
                         <div>
-                          <div className="text-[9px] tracking-[0.12em] text-gray-500">TOTAL AREA</div>
-                          <div className="text-lg font-mono font-bold text-white">
+                          <div className="text-[9px] tracking-[0.12em] text-slate-500">TOTAL AREA</div>
+                          <div className="text-lg font-mono font-bold text-slate-900">
                             {cad.total_area_sqm === null ? "—" : (cad.total_area_sqm / 1e6).toFixed(1)}
-                            <span className="text-[10px] text-gray-500 ml-1">km²</span>
+                            <span className="text-[10px] text-slate-500 ml-1">km²</span>
                           </div>
                         </div>
                         <div>
-                          <div className="text-[9px] tracking-[0.12em] text-gray-500">MEDIAN PARCEL</div>
-                          <div className="text-lg font-mono font-bold text-white">
+                          <div className="text-[9px] tracking-[0.12em] text-slate-500">MEDIAN PARCEL</div>
+                          <div className="text-lg font-mono font-bold text-slate-900">
                             {cad.median_area_sqm === null ? "—" : (cad.median_area_sqm / 1e3).toFixed(1)}
-                            <span className="text-[10px] text-gray-500 ml-1">k m²</span>
+                            <span className="text-[10px] text-slate-500 ml-1">k m²</span>
                           </div>
                         </div>
                         <div>
-                          <div className="text-[9px] tracking-[0.12em] text-gray-500">REJECTED / DUPES</div>
-                          <div className="text-lg font-mono font-bold text-white">
+                          <div className="text-[9px] tracking-[0.12em] text-slate-500">REJECTED / DUPES</div>
+                          <div className="text-lg font-mono font-bold text-slate-900">
                             {fmtNum(cad.invalid_features)} / {fmtNum(cad.duplicate_lot_keys)}
                           </div>
                         </div>
                       </div>
-                      <div className="text-[10px] text-gray-600 mt-3">{cad.ownership_note}</div>
+                      <div className="text-[10px] text-slate-600 mt-3">{cad.ownership_note}</div>
                       <div className="mt-2 space-y-1">
                         {cad.limitations.map((l) => (
-                          <div key={l} className="text-[10px] text-gray-600 leading-4">{l}</div>
+                          <div key={l} className="text-[10px] text-slate-600 leading-4">{l}</div>
                         ))}
                       </div>
                     </Card>
@@ -801,9 +826,9 @@ export default function LandPage() {
             </Section>
 
             {/* ------------------------------------------------ industrial */}
-            <Section id="industrial" title="INDUSTRIAL LAND" icon={<Factory size={16} className="text-cyan-400" />} kind={ind?.data_kind}>
+            <Section id="industrial" title="INDUSTRIAL LAND" icon={<Factory size={16} className="text-cyan-700" />} kind={ind?.data_kind}>
               {!ind || ind.data_kind === "unavailable" ? (
-                <Card><div className="text-sm text-gray-500">Industrial land data unavailable.</div></Card>
+                <Card><div className="text-sm text-slate-500">Industrial land data unavailable.</div></Card>
               ) : (
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                   <div className="grid gap-4">
@@ -821,27 +846,27 @@ export default function LandPage() {
                       hint={ind.total_estate_area_km2 === null ? undefined : `${ind.total_estate_area_km2} km² combined`}
                     />
                     {ind.source_data_date && (
-                      <div className="text-[10px] text-gray-600">
+                      <div className="text-[10px] text-slate-600">
                         JTC estate layer revision date: {ind.source_data_date}
                       </div>
                     )}
                     <div className="space-y-1">
                       {ind.limitations.map((l) => (
-                        <div key={l} className="text-[10px] text-gray-600 leading-4">{l}</div>
+                        <div key={l} className="text-[10px] text-slate-600 leading-4">{l}</div>
                       ))}
                     </div>
                   </div>
                   <Card>
-                    <h3 className="text-xs font-bold tracking-[0.18em] text-gray-300 mb-2">LARGEST JTC ESTATES</h3>
+                    <h3 className="text-xs font-bold tracking-[0.18em] text-slate-600 mb-2">LARGEST JTC ESTATES</h3>
                     <div className="overflow-y-auto max-h-[320px] space-y-1 pr-1">
                       {ind.largest_estates.map((e, idx) => (
                         <div key={`${e.estate_name}-${idx}`} className="flex items-center justify-between text-xs gap-3">
-                          <span className="text-gray-400 truncate">{e.estate_name}</span>
-                          <span className="font-mono text-white shrink-0">{e.area_km2} km²</span>
+                          <span className="text-slate-500 truncate">{e.estate_name}</span>
+                          <span className="font-mono text-slate-900 shrink-0">{e.area_km2} km²</span>
                         </div>
                       ))}
                       {ind.largest_estates.length === 0 && (
-                        <div className="text-xs text-gray-600">No estate geometries reported.</div>
+                        <div className="text-xs text-slate-600">No estate geometries reported.</div>
                       )}
                     </div>
                   </Card>
@@ -850,9 +875,9 @@ export default function LandPage() {
             </Section>
 
             {/* ------------------------------------------------------ map */}
-            <Section id="map" title="LAND INTELLIGENCE MAP" icon={<MapPin size={16} className="text-cyan-400" />}>
+            <Section id="map" title="LAND INTELLIGENCE MAP" icon={<MapPin size={16} className="text-cyan-700" />}>
               <div className="grid grid-cols-1 xl:grid-cols-[1.7fr_0.9fr] gap-6">
-                <div className="glass-panel rounded-xl border border-gray-800/60 overflow-hidden min-h-[480px]">
+                <div className="glass-panel rounded-xl border border-slate-200 overflow-hidden min-h-[480px]">
                   <LandMap
                     layers={map?.layers ?? []}
                     planningAreas={pl?.planning_areas ?? []}
@@ -862,41 +887,41 @@ export default function LandPage() {
                   />
                 </div>
                 <Card>
-                  <h3 className="text-xs font-bold tracking-[0.18em] text-gray-300 mb-2">LAYERS</h3>
+                  <h3 className="text-xs font-bold tracking-[0.18em] text-slate-600 mb-2">LAYERS</h3>
                   <div className="space-y-2 text-xs">
                     {(map?.layers ?? []).map((l) => (
                       <div key={l.id} className="flex items-center justify-between gap-2">
-                        <span className="text-gray-400">{l.label}</span>
+                        <span className="text-slate-500">{l.label}</span>
                         <span className="flex items-center gap-2">
-                          <span className="font-mono text-white">{l.data.features.length}</span>
+                          <span className="font-mono text-slate-900">{l.data.features.length}</span>
                           <KindBadge kind={l.data_kind} />
                         </span>
                       </div>
                     ))}
                     {(map?.layers ?? []).length === 0 && (
-                      <div className="text-gray-600">No map layers returned.</div>
+                      <div className="text-slate-600">No map layers returned.</div>
                     )}
                   </div>
                   {map && Object.keys(map.layers_unavailable).length > 0 && (
-                    <div className="mt-4 border-t border-gray-800 pt-3 space-y-2">
-                      <div className="text-[10px] font-bold tracking-[0.14em] text-gray-500">
+                    <div className="mt-4 border-t border-slate-200 pt-3 space-y-2">
+                      <div className="text-[10px] font-bold tracking-[0.14em] text-slate-500">
                         NOT SERVED AS MAP LAYERS
                       </div>
                       {Object.entries(map.layers_unavailable).map(([k, v]) => (
-                        <div key={k} className="text-[10px] text-gray-600 leading-4">
-                          <span className="text-gray-500">{k}:</span> {v}
+                        <div key={k} className="text-[10px] text-slate-600 leading-4">
+                          <span className="text-slate-500">{k}:</span> {v}
                         </div>
                       ))}
                     </div>
                   )}
                   {selected && (
-                    <div className="mt-4 border-t border-gray-800 pt-3">
-                      <div className="text-[10px] font-bold tracking-[0.14em] text-gray-500">SELECTED AREA</div>
-                      <div className="text-sm font-semibold text-white mt-1">{selected.name}</div>
-                      <div className="text-xs text-gray-400 mt-1">
+                    <div className="mt-4 border-t border-slate-200 pt-3">
+                      <div className="text-[10px] font-bold tracking-[0.14em] text-slate-500">SELECTED AREA</div>
+                      <div className="text-sm font-semibold text-slate-800 mt-1">{selected.name}</div>
+                      <div className="text-xs text-slate-500 mt-1">
                         {selected.region ?? "—"} · {fmtKm2(selected.area_sqm)}
                       </div>
-                      <div className="text-xs text-gray-400">
+                      <div className="text-xs text-slate-500">
                         Dominant: {selected.dominant_category ?? "—"}
                       </div>
                     </div>
@@ -906,18 +931,18 @@ export default function LandPage() {
             </Section>
 
             {/* ---------------------------------------- land intelligence */}
-            <Section id="insight" title="LAND INTELLIGENCE" icon={<Info size={16} className="text-cyan-400" />}>
+            <Section id="insight" title="LAND INTELLIGENCE" icon={<Info size={16} className="text-cyan-700" />}>
               {(overview?.insights ?? []).length === 0 ? (
-                <Card><div className="text-sm text-gray-500">No land insights available.</div></Card>
+                <Card><div className="text-sm text-slate-500">No land insights available.</div></Card>
               ) : (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                   {overview?.insights.map((i) => (
                     <Card key={i.question}>
                       <div className="flex items-start justify-between gap-2">
-                        <div className="text-xs font-semibold text-gray-200">{i.question}</div>
+                        <div className="text-xs font-semibold text-slate-700">{i.question}</div>
                         <KindBadge kind={i.data_kind} />
                       </div>
-                      <div className="text-xs text-gray-400 mt-2 leading-5">{i.answer}</div>
+                      <div className="text-xs text-slate-500 mt-2 leading-5">{i.answer}</div>
                     </Card>
                   ))}
                 </div>
@@ -930,10 +955,10 @@ export default function LandPage() {
                       key={a.id}
                       className={`rounded-lg border p-3 text-xs flex gap-2 ${
                         a.severity === "HIGH"
-                          ? "border-red-500/30 bg-red-950/20 text-red-300"
+                          ? "border-red-500/30 bg-red-50 text-red-800"
                           : a.severity === "MODERATE"
-                            ? "border-yellow-500/30 bg-yellow-950/10 text-yellow-200"
-                            : "border-gray-700 bg-gray-900/40 text-gray-300"
+                            ? "border-yellow-500/30 bg-yellow-50 text-yellow-800"
+                            : "border-slate-200 bg-slate-50 text-slate-600"
                       }`}
                     >
                       <AlertTriangle size={14} className="shrink-0 mt-0.5" />
@@ -952,7 +977,7 @@ export default function LandPage() {
               {overview && overview.limitations.length > 0 && (
                 <div className="mt-4">
                   <Notice>
-                    <div className="font-semibold text-gray-300 mb-1">How to read this page</div>
+                    <div className="font-semibold text-slate-600 mb-1">How to read this page</div>
                     <ul className="list-disc list-inside space-y-0.5">
                       {overview.limitations.map((l) => (
                         <li key={l}>{l}</li>
@@ -963,54 +988,7 @@ export default function LandPage() {
               )}
             </Section>
 
-            {/* --------------------------------------------------- sources */}
-            <Section id="sources" title="DATA SOURCES" icon={<Info size={16} className="text-cyan-400" />}>
-              <Card className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-left text-[10px] tracking-[0.14em] text-gray-500 border-b border-gray-800">
-                      <th className="py-2 pr-4">SOURCE</th>
-                      <th className="pr-4">CRS</th>
-                      <th className="pr-4">FREQUENCY</th>
-                      <th className="pr-4 text-right">RECORDS</th>
-                      <th>STATUS</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(sources?.sources ?? []).map((s) => (
-                      <tr key={s.key} className="border-b border-gray-900 text-gray-300 align-top">
-                        <td className="py-2 pr-4">
-                          <a href={s.url} target="_blank" rel="noreferrer" className="text-cyan-400 hover:text-cyan-300">
-                            {s.name}
-                          </a>
-                          <div className="text-[10px] text-gray-600">
-                            {s.organization} · {s.identifier} · {s.layer_name}
-                          </div>
-                        </td>
-                        <td className="pr-4 text-[10px] text-gray-500">{s.crs}</td>
-                        <td className="pr-4 text-[10px] text-gray-500">{s.update_frequency}</td>
-                        <td className="pr-4 text-right font-mono">{s.record_count === null || s.record_count === undefined ? "—" : fmtNum(s.record_count)}</td>
-                        <td
-                          className={
-                            s.status === "ok" ? "text-green-400" : s.status === "stale_cache" ? "text-yellow-400" : "text-red-400"
-                          }
-                        >
-                          {s.status.replace("_", " ")}
-                          {s.error && <div className="text-[10px] text-gray-600 max-w-[280px] break-words">{s.error}</div>}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </Card>
-              {(sources?.warnings ?? []).length > 0 && (
-                <div className="mt-3 space-y-1">
-                  {sources?.warnings.map((w) => (
-                    <div key={w} className="text-[11px] text-gray-600">{w}</div>
-                  ))}
-                </div>
-              )}
-            </Section>
+
           </>
         )}
       </div>

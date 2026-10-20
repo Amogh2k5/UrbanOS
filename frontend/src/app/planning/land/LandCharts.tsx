@@ -17,13 +17,13 @@ const PAD = { l: 120, r: 40, t: 10, b: 24 };
 export function GroupBars({ byGroup }: { byGroup: Record<string, number | null> }) {
   const groups = GROUP_ORDER.filter((g) => byGroup[g] !== undefined);
   if (!groups.length) {
-    return <div className="text-xs text-gray-600 py-8 text-center">Land-use area unavailable.</div>;
+    return <div className="text-xs text-slate-600 py-8 text-center">Land-use area unavailable.</div>;
   }
 
   const values = groups.map((g) => byGroup[g]);
   const reported = values.filter((v): v is number => typeof v === 'number' && v > 0);
   if (!reported.length) {
-    return <div className="text-xs text-gray-600 py-8 text-center">No land-use area reported by the source.</div>;
+    return <div className="text-xs text-slate-600 py-8 text-center">No land-use area reported by the source.</div>;
   }
   const max = Math.max(...reported);
   const total = reported.reduce((a, b) => a + b, 0);
@@ -40,7 +40,7 @@ export function GroupBars({ byGroup }: { byGroup: Record<string, number | null> 
           const unavailable = typeof v !== 'number';
           return (
             <g key={g}>
-              <text x={PAD.l - 8} y={y + barH / 2 + 3} textAnchor="end" fontSize={10} fill="#9ca3af">
+              <text x={PAD.l - 8} y={y + barH / 2 + 3} textAnchor="end" fontSize={10} fill="#64748b">
                 {GROUP_LABEL[g]}
               </text>
               {unavailable ? (
@@ -50,7 +50,7 @@ export function GroupBars({ byGroup }: { byGroup: Record<string, number | null> 
               ) : (
                 <>
                   <rect x={PAD.l} y={y} width={w} height={barH} fill={GROUP_COLOR[g as LandGroup]} opacity={0.85} />
-                  <text x={PAD.l + w + 6} y={y + barH / 2 + 3} fontSize={9} fill="#d1d5db">
+                  <text x={PAD.l + w + 6} y={y + barH / 2 + 3} fontSize={9} fill="#64748b">
                     {(v / 1e6).toFixed(1)} km²
                   </text>
                 </>
@@ -59,7 +59,7 @@ export function GroupBars({ byGroup }: { byGroup: Record<string, number | null> 
           );
         })}
       </svg>
-      <div className="text-[10px] text-gray-500 mt-1">
+      <div className="text-[10px] text-slate-500 mt-1">
         Sum of the Master Plan land-use zones carrying a published SHAPE.AREA ({total / 1e6 < 0 ? 0 : (total / 1e6).toFixed(1)} km²
         across groups). Zones with overlapping designations can be counted in more than one group.
       </div>
@@ -76,7 +76,7 @@ export function GroupShareBar({ byGroup }: { byGroup: Record<string, number | nu
     .map((g) => ({ g, v: byGroup[g] }))
     .filter((e): e is { g: LandGroup; v: number } => typeof e.v === 'number' && e.v > 0);
   if (!entries.length) {
-    return <div className="text-xs text-gray-600 py-8 text-center">Land-use composition unavailable.</div>;
+    return <div className="text-xs text-slate-600 py-8 text-center">Land-use composition unavailable.</div>;
   }
   const total = entries.reduce((a, e) => a + e.v, 0);
   const WIDE = 560;
@@ -100,7 +100,7 @@ export function GroupShareBar({ byGroup }: { byGroup: Record<string, number | nu
           </rect>
         ))}
       </svg>
-      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[10px] text-gray-400">
+      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[10px] text-slate-500">
         {entries.map((e) => (
           <span key={e.g} className="flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 inline-block" style={{ background: GROUP_COLOR[e.g] }} />
@@ -121,7 +121,7 @@ export function YearBars({ byYear }: { byYear: Record<string, number | null> }) 
     .map(([year, v]) => ({ year, v }))
     .filter((e): e is { year: string; v: number } => typeof e.v === 'number');
   if (!entries.length) {
-    return <div className="text-xs text-gray-600 py-8 text-center">GLS award history unavailable.</div>;
+    return <div className="text-xs text-slate-600 py-8 text-center">GLS award history unavailable.</div>;
   }
   const max = Math.max(...entries.map((e) => e.v));
   const cw = (W - PAD.l - PAD.r) / entries.length;
@@ -157,7 +157,7 @@ export function YearBars({ byYear }: { byYear: Record<string, number | null> }) 
           );
         })}
       </svg>
-      <div className="text-[10px] text-gray-500 mt-1">
+      <div className="text-[10px] text-slate-500 mt-1">
         Awarded Government Land Sales sites per year of award. Years with no recorded award are not plotted.
       </div>
     </div>

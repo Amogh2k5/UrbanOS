@@ -17,7 +17,7 @@ function scale(values: number[], pad = 0.08) {
 export function LineChart({ series, colors }: { series: WaterSeries[]; colors: string[] }) {
   const all = series.flatMap((s) => s.points.filter((p) => p.value != null).map((p) => ({ y: p.year, v: p.value as number })));
   if (all.length < 2) {
-    return <div className="text-xs text-gray-600 py-8 text-center">Not enough data to chart.</div>;
+    return <div className="text-xs text-slate-600 py-8 text-center">Not enough data to chart.</div>;
   }
   const years = all.map((p) => p.y);
   const x0 = Math.min(...years);
@@ -59,7 +59,7 @@ export function LineChart({ series, colors }: { series: WaterSeries[]; colors: s
           );
         })}
       </svg>
-      <div className="flex flex-wrap gap-4 mt-1 text-[10px] text-gray-400">
+      <div className="flex flex-wrap gap-4 mt-1 text-[10px] text-slate-500">
         {series.map((s, i) => (
           <span key={s.key} className="flex items-center gap-1.5">
             <span className="w-3 h-0.5 inline-block" style={{ background: colors[i % colors.length] }} />
@@ -78,7 +78,7 @@ export function StackedBars({ domestic, nonDomestic }: { domestic: WaterSeries; 
     .filter((p) => p.value != null && nd.has(p.year))
     .map((p) => ({ year: p.year, dom: p.value as number, non: nd.get(p.year) as number }));
   if (rows.length === 0) {
-    return <div className="text-xs text-gray-600 py-8 text-center">Not enough data to chart.</div>;
+    return <div className="text-xs text-slate-600 py-8 text-center">Not enough data to chart.</div>;
   }
   const max = Math.max(...rows.map((r) => r.dom + r.non));
   const bw = (W - PAD.l - PAD.r) / rows.length;
@@ -110,7 +110,7 @@ export function StackedBars({ domestic, nonDomestic }: { domestic: WaterSeries; 
           );
         })}
       </svg>
-      <div className="flex gap-4 mt-1 text-[10px] text-gray-400">
+      <div className="flex gap-4 mt-1 text-[10px] text-slate-500">
         <span className="flex items-center gap-1.5"><span className="w-3 h-2 inline-block bg-cyan-400" />Domestic (million m³)</span>
         <span className="flex items-center gap-1.5"><span className="w-3 h-2 inline-block bg-violet-400" />Non-domestic (million m³)</span>
       </div>

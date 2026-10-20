@@ -4,6 +4,7 @@ import { useMemo, useState, useRef, useEffect } from 'react';
 import Map, { Source, Layer, Marker, NavigationControl } from 'react-map-gl/maplibre';
 import type { FillLayerSpecification, LineLayerSpecification, StyleSpecification } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { formatSingaporeTime } from '@/services/time';
 
 const MAP_STYLE: StyleSpecification = {
   version: 8,
@@ -33,6 +34,7 @@ interface Incident {
   longitude?: number;
   zone_name?: string;
   status?: string;
+  timestamp?: string;
 }
 
 interface TrafficMapProps {
@@ -42,7 +44,7 @@ interface TrafficMapProps {
 }
 
 interface HoverInfo {
-  feature: { properties: { name?: string } };
+  feature: { properties: { name?: string; zone_name?: string } };
   x: number;
   y: number;
 }
@@ -51,6 +53,7 @@ export default function TrafficMap({ incidents, onIncidentClick, selectedInciden
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
   const [overlayPos, setOverlayPos] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
+  const [tileError, setTileError] = useState(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const overlayRef = useRef<HTMLDivElement>(null);
 
@@ -94,8 +97,8 @@ export default function TrafficMap({ incidents, onIncidentClick, selectedInciden
       'fill-opacity': [
         'case',
         ['boolean', ['feature-state', 'hover'], false],
-        0.2,
-        0.1,
+        0.45,
+        0.25,
       ],
     },
   }), []);
@@ -105,13 +108,16 @@ export default function TrafficMap({ incidents, onIncidentClick, selectedInciden
     type: 'line',
     source: 'zones',
     paint: {
-      'line-color': '#00e5ff',
-      'line-width': 1,
-      'line-opacity': 0.3,
+      /* Was #00e5ff at 0.3 opacity - a neon cyan that was effectively invisible
+         once the theme moved to a light basemap. Now a readable domain blue at
+         a weight you can actually see. */
+      'line-color': '#1d4ed8',
+      'line-width': 1.5,
+      'line-opacity': 0.75,
     },
   };
 
-  const onHover = (event: { features?: { properties: { name?: string } }[]; point: { x: number; y: number } }) => {
+  const onHover = (event: { features?: { properties: { name?: string; zone_name?: string } }[]; point: { x: number; y: number } }) => {
     const { features, point: { x, y } } = event;
     const hoveredFeature = features && features[0];
     setHoverInfo(hoveredFeature ? { feature: hoveredFeature, x, y } : null);
@@ -135,13 +141,22 @@ export default function TrafficMap({ incidents, onIncidentClick, selectedInciden
   };
 
   return (
-    <div className="relative w-full h-full min-h-[500px] glass-panel rounded-xl overflow-hidden border border-gray-800 traffic-map-container" style={{ touchAction: 'pan-y' }}>
+    <div className="relative w-full h-full min-h-[500px] glass-panel rounded-xl overflow-hidden border border-slate-200 traffic-map-container" style={{ touchAction: 'pan-y' }}>
       <Map
         initialViewState={{
           longitude: 103.8198,
           latitude: 1.3521,
           zoom: 10.5,
         }}
+        /* The map container is given an explicit min-height. react-map-gl
+           renders its container as height:100%, and a percentage resolves
+           against the parent's `height` property - never against `min-height`.
+           The wrapper sits in an auto-height flex chain, so that percentage was
+           resolving to `auto`, MapLibre sized its canvas to 0px, and the whole
+           map rendered as an invisible blank box. Keeping height:100% means it
+           still fills correctly whenever an ancestor does have a definite
+           height; the min-height guarantees a non-zero box when none does. */
+        style={{ width: '100%', height: '100%', minHeight: 500 }}
         maxBounds={[103.5, 1.1, 104.2, 1.5] as [number, number, number, number]}
         dragPan={true}
         dragRotate={false}
@@ -154,6 +169,11 @@ export default function TrafficMap({ incidents, onIncidentClick, selectedInciden
         mapStyle={MAP_STYLE as StyleSpecification}
         interactiveLayerIds={['zones-fill']}
         onMouseMove={onHover}
+        onError={(e) => {
+          // Tile / source failures must not present as an invisible map.
+          const msg = String((e as { error?: Error })?.error?.message ?? '');
+          if (/tile|source|404|403|network|fetch/i.test(msg)) setTileError(true);
+        }}
         onClick={() => {
           // clicking empty map can close overlay (handled by parent)
         }}
@@ -186,13 +206,42 @@ export default function TrafficMap({ incidents, onIncidentClick, selectedInciden
         })}
       </Map>
 
+      {/* If the basemap tiles cannot be reached the canvas is otherwise a blank
+          grey box with no explanation, which is indistinguishable from "the map
+          is broken". Say so explicitly instead. */}
+      {tileError && (
+        <div
+          data-testid="traffic-map-tile-error"
+          className="absolute z-20 top-3 left-1/2 -translate-x-1/2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-800 shadow-sm"
+        >
+          Base map unavailable — traffic zones and incidents are still shown.
+        </div>
+      )}
+
+      {incidents.length === 0 && (
+        <div
+          data-testid="traffic-map-no-incidents"
+          className="absolute z-10 bottom-3 left-3 rounded-lg border border-slate-200 bg-white/95 px-3 py-2 text-[11px] font-medium text-slate-600 shadow-sm"
+        >
+          No live traffic incidents reported.
+        </div>
+      )}
+
       {hoverInfo && (
         <div
-          className="absolute z-20 glass-panel-glow p-2 rounded pointer-events-none text-xs bg-gray-900/90 text-white"
+          className="absolute z-20 card-panel p-2 rounded pointer-events-none text-xs"
           style={{ left: hoverInfo.x + 15, top: hoverInfo.y + 15 }}
         >
-          <div className="font-heading font-bold text-[var(--color-primary)] capitalize">
-            {hoverInfo.feature.properties.name?.replace('SG_', '').replace('_', ' ')}
+          {/* The zone GeoJSON exposes `zone_name`, not `name`; reading `name`
+              always yielded undefined, so the tooltip rendered empty. */}
+          <div className="font-heading font-bold text-slate-900 capitalize">
+            {String(
+              hoverInfo.feature.properties.zone_name ??
+                hoverInfo.feature.properties.name ??
+                ''
+            )
+              .replace('SG_', '')
+              .replace(/_/g, ' ')}
           </div>
         </div>
       )}
@@ -201,7 +250,7 @@ export default function TrafficMap({ incidents, onIncidentClick, selectedInciden
       {selectedIncident && (
         <div
           ref={overlayRef}
-          className="absolute z-30 glass-panel-glow p-0 rounded-lg shadow-xl border border-gray-700 min-w-[300px] max-w-[360px] pointer-events-auto"
+          className="absolute z-30 glass-panel-glow p-0 rounded-lg shadow-xl border border-slate-200 min-w-[300px] max-w-[360px] pointer-events-auto"
           style={{
             left: overlayPos.x,
             top: overlayPos.y,
@@ -210,13 +259,13 @@ export default function TrafficMap({ incidents, onIncidentClick, selectedInciden
           onMouseDown={handleOverlayMouseDown}
         >
           <div
-            className="overlay-header flex items-center justify-between p-3 bg-gray-900/80 border-b border-gray-700 cursor-move"
+            className="overlay-header flex items-center justify-between p-3 bg-slate-50/80 border-b border-slate-200 cursor-move"
             style={{ userSelect: 'none' }}
           >
-            <h4 className="font-bold text-white">Traffic Incident</h4>
+            <h4 className="font-bold text-slate-900">Traffic Incident</h4>
             <button
               onClick={() => onIncidentClick?.(null)}
-              className="text-gray-400 hover:text-white p-1"
+              className="text-slate-500 hover:text-slate-900 p-1"
               aria-label="Close"
             >
               ✕
@@ -224,25 +273,25 @@ export default function TrafficMap({ incidents, onIncidentClick, selectedInciden
           </div>
           <div className="p-3 space-y-2 text-sm">
             <div>
-              <span className="text-gray-400">Type:</span>
-              <span className="ml-2 font-medium text-white capitalize">{selectedIncident.type || 'Unknown'}</span>
+              <span className="text-slate-500">Type:</span>
+              <span className="ml-2 font-medium text-slate-800 capitalize">{selectedIncident.type || 'Unknown'}</span>
             </div>
             <div>
-              <span className="text-gray-400">Location:</span>
-              <span className="ml-2 text-white">{selectedIncident.message || 'Unknown'}</span>
+              <span className="text-slate-500">Location:</span>
+              <span className="ml-2 text-slate-700">{selectedIncident.message || 'Unknown'}</span>
             </div>
             <div>
-              <span className="text-gray-400">Zone:</span>
-              <span className="ml-2 text-white">{selectedIncident.zone_name || 'N/A'}</span>
+              <span className="text-slate-500">Zone:</span>
+              <span className="ml-2 text-slate-700">{selectedIncident.zone_name || 'N/A'}</span>
             </div>
             <div>
-              <span className="text-gray-400">Status:</span>
-              <span className="ml-2 text-white">{selectedIncident.status || 'Active'}</span>
+              <span className="text-slate-500">Status:</span>
+              <span className="ml-2 text-slate-700">{selectedIncident.status || 'Active'}</span>
             </div>
-            <div>
-              <span className="text-gray-400">Time:</span>
-              <span className="ml-2 text-white">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-            </div>
+            {selectedIncident.timestamp && <div>
+              <span className="text-slate-500">Reported:</span>
+              <span className="ml-2 text-slate-700">{formatSingaporeTime(selectedIncident.timestamp)} SGT</span>
+            </div>}
           </div>
         </div>
       )}
