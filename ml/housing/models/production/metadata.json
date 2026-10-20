@@ -1,0 +1,36 @@
+{
+  "model_type": "persistence",
+  "target": "median_resale_price_sgd",
+  "frequency": "quarterly",
+  "horizon": "1_quarter",
+  "unit": "SGD",
+  "feature_cols": [
+    "lag_1",
+    "lag_2",
+    "lag_3",
+    "lag_4",
+    "rolling_mean_3",
+    "rolling_std_3",
+    "quarter_sin",
+    "quarter_cos",
+    "trend"
+  ],
+  "eval_results": {
+    "persistence_mae_mean": 21480.071737980976,
+    "persistence_mae_median": 15131.578947368422,
+    "seasonal_mae_mean": 47597.97556432312,
+    "seasonal_mae_median": 32943.83561643836,
+    "series_count": 91
+  },
+  "best_method": "persistence",
+  "best_mae": 15131.578947368422,
+  "trained_at": "2026-10-21T03:43:39.078304+08:00",
+  "data_range": {
+    "start": "2007-Q2",
+    "end": "2026-Q2"
+  },
+  "series_count": 91,
+  "min_quarters_per_series": 8,
+  "test_quarters": 4,
+  "model_version": "housing_resale_v1_20261021"
+}

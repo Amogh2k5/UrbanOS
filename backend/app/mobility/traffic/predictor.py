@@ -22,8 +22,10 @@ from backend.app.mobility.traffic.data import TrafficObservationStore
 log = logging.getLogger(__name__)
 
 SG_OFFSET = "Asia/Singapore"
-MODEL_PATH = Path("ml/traffic/models/production/traffic_xgboost_model.json")
-CONFIG_PATH = Path("ml/traffic/models/production/traffic_xgboost_feature_config.json")
+REPO_ROOT = Path(__file__).resolve().parents[4]
+PRODUCTION_MODELS_DIR = REPO_ROOT / "ml" / "traffic" / "models" / "production"
+MODEL_PATH = PRODUCTION_MODELS_DIR / "traffic_xgboost_model.json"
+CONFIG_PATH = PRODUCTION_MODELS_DIR / "traffic_xgboost_feature_config.json"
 
 
 @dataclass

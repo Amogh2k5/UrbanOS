@@ -23,6 +23,34 @@ class HousingInsight(BaseModel):
     data_kind: str
 
 
+# --- Forecast models ---
+class ForecastPoint(BaseModel):
+    """Single forecast point for a town/flat-type combination."""
+    town: str
+    flat_type: str
+    forecast_period: str
+    predicted_price: float
+    unit: str = "SGD"
+    method: str
+    baseline_comparison: dict[str, Any] = Field(default_factory=dict)
+
+
+class HousingForecast(BaseModel):
+    """Next-quarter resale price forecast report."""
+    generated_at: datetime
+    domain: str = "planning"
+    subdomain: str = "housing"
+    target_period: str
+    forecast_horizon: str = "1_quarter"
+    forecasts: list[ForecastPoint]
+    method: str
+    evaluation: dict[str, Any] = Field(default_factory=dict)
+    model_version: str
+    data_freshness: str
+    limitations: list[str] = Field(default_factory=list)
+    is_ml_prediction: bool = False
+
+
 class HousingReport(BaseModel):
     generated_at: datetime
     domain: str = "planning"

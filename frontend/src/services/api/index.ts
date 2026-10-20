@@ -1234,10 +1234,56 @@ export interface HousingReport {
   is_ml_prediction: boolean;
 }
 
+// --- Forecast types ---
+export interface HousingForecastPoint {
+  town: string;
+  flat_type: string;
+  forecast_period: string;
+  predicted_price: number;
+  unit: string;
+  method: string;
+  baseline_comparison: Record<string, unknown>;
+}
+
+export interface HousingForecast {
+  generated_at: string;
+  domain: string;
+  subdomain: string;
+  target_period: string;
+  forecast_horizon: string;
+  forecasts: HousingForecastPoint[];
+  method: string;
+  evaluation: Record<string, unknown>;
+  model_version: string;
+  data_freshness: string;
+  limitations: string[];
+  is_ml_prediction: boolean;
+}
+
 export async function fetchHousingReport(refresh = false): Promise<HousingReport> {
   const response = await fetch(`${API_BASE}/api/planning/housing/report${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
   if (!response.ok) {
     throw new Error(`Failed to fetch housing report: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchHousingForecast(refresh = false, targetPeriod?: string): Promise<HousingForecast> {
+  const params = new URLSearchParams();
+  if (refresh) params.set('refresh', 'true');
+  if (targetPeriod) params.set('target_period', targetPeriod);
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const response = await fetch(`${API_BASE}/api/planning/housing/forecast${query}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch housing forecast: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchHousingModel(): Promise<any> {
+  const response = await fetch(`${API_BASE}/api/planning/housing/model`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch housing model metadata: ${response.statusText}`);
   }
   return response.json();
 }

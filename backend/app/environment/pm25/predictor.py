@@ -33,7 +33,7 @@ from backend.app.environment.selectors import (
 )
 from backend.app.environment.result import RegionPrediction
 from backend.app.environment.weather.data import WeatherForecastStore
-from ml.pm25.config import REPO_ROOT
+from ml.pm25.config import PRODUCTION_MODELS_DIR, REPO_ROOT
 from ml.pm25.features import build_modelling_dataset
 from ml.pm25.ingest_pm25 import ingest_pm25
 from ml.pm25.ingest_weather import ingest_weather as _ingest_weather_raw
@@ -68,7 +68,7 @@ class PM25Predictor:
         self.run_id = run_id
         self.run_dir = self.runs_dir / run_id
         # Use production models directory by default
-        self.models_dir = models_dir or Path("ml/pm25/models/production")
+        self.models_dir = Path(models_dir) if models_dir is not None else PRODUCTION_MODELS_DIR
         # Selections file: prefer production models dir, then run dir
         self.selections_csv = self.models_dir / "selections.csv"
         if not self.selections_csv.exists():

@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw, Home, Building2, TrendingUp, Database, AlertCircle } from "lucide-react";
-import { fetchHousingReport, type HousingSource } from "@/services/api";
+import { RefreshCw, Home, Building2, TrendingUp, Database, AlertCircle, Zap, ArrowRight } from "lucide-react";
+import { fetchHousingReport, fetchHousingForecast, type HousingSource, type HousingForecast, type HousingForecastPoint } from "@/services/api";
 
 type TownPrice = { town: string; [key: string]: string | number | null };
 type HousingBlock = { block: string; street: string; town: string | null; year_completed: number | null; total_dwelling_units: number | null };
@@ -28,27 +28,32 @@ const integer = (value: unknown) => typeof value === "number" && Number.isFinite
 
 export default function HousingPage() {
   const [report, setReport] = useState<Report | null>(null);
+  const [forecast, setForecast] = useState<HousingForecast | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [forecastLoading, setForecastLoading] = useState(false);
   const [error, setError] = useState("");
   const [townSearch, setTownSearch] = useState("");
   const load = useCallback(async (refresh = false) => {
-    if (refresh) setRefreshing(true);
+    if (refresh) setRefreshing(true); else setLoading(true);
     setError("");
     try { setReport(await fetchHousingReport(refresh) as unknown as Report); }
     catch (e) { setError(e instanceof Error ? e.message : "Unable to load housing data."); }
     finally { setLoading(false); setRefreshing(false); }
   }, []);
-  useEffect(() => {
-    let cancelled = false;
-    fetchHousingReport().then((data) => { if (!cancelled) setReport(data as unknown as Report); })
-      .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : "Unable to load housing data."); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+  const loadForecast = useCallback(async (refresh = false) => {
+    setForecastLoading(true);
+    try { setForecast(await fetchHousingForecast(refresh) as unknown as HousingForecast); }
+    catch (e) { console.error("Failed to load forecast:", e); setForecast(null); }
+    finally { setForecastLoading(false); }
   }, []);
+  useEffect(() => { void load(); void loadForecast(); }, [load, loadForecast]);
   const towns = useMemo(() => (report?.town_prices || []).filter((r) => String(r.town).toLowerCase().includes(townSearch.toLowerCase())), [report, townSearch]);
   const trend = report?.resale_trend || [];
   const maxTrend = Math.max(1, ...trend.map((r) => r.mean_of_town_flat_medians || 0));
+  const forecastPoints = forecast?.forecasts || [];
+  const forecastMethod = forecast?.method || "—";
+  const forecastPeriod = forecast?.target_period || "—";
 
   return <main className="min-h-screen bg-slate-50 px-4 py-6 text-slate-900 md:px-8">
     <div className="mx-auto max-w-[1600px] space-y-6">
@@ -126,6 +131,60 @@ export default function HousingPage() {
             </div>
           </section>
         </div>
+
+        {/* Resale Price Forecast Section */}
+        <section className="card-panel rounded-xl p-5">
+          <header className="card-panel-header">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold text-slate-900">Resale Price Forecast</h2>
+              <span className="rounded-full px-2.5 py-1 text-xs font-medium bg-amber-100 text-amber-700">
+                {forecastMethod === "persistence" ? "Last-Quarter Persistence" : 
+                 forecastMethod === "seasonal_persistence" ? "Seasonal Persistence" : 
+                 "Statistical Baseline"}
+              </span>
+            </div>
+          </header>
+          <p className="mt-3 mb-4 text-xs text-slate-500">
+            Next-quarter median resale price forecast by town and flat type. Target period: <strong>{forecastPeriod}</strong>.
+            Method: <strong>{forecastMethod === "persistence" ? "Last-quarter persistence (baseline)" : 
+              forecastMethod === "seasonal_persistence" ? "Same-quarter-last-year persistence (baseline)" : 
+              "Statistical baseline"}</strong>. Not an official HDB price index.
+          </p>
+
+          {forecastLoading ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-8 text-slate-500 text-center">
+              Loading forecast…
+            </div>
+          ) : forecastPoints.length > 0 ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {forecastPoints.map((fp: HousingForecastPoint) => (
+                  <div key={`${fp.town}|${fp.flat_type}`} className="rounded-xl border border-slate-200 bg-white p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-purple-600">{fp.town}</span>
+                      <span className="text-xs text-slate-500">{fp.flat_type}</span>
+                    </div>
+                    <div className="text-2xl font-bold text-slate-900">{money(fp.predicted_price)}</div>
+                    <div className="mt-1 text-xs text-slate-500">Forecast for {fp.forecast_period}</div>
+<div className="mt-2 text-[10px] text-slate-600">
+                      Method: {fp.method} � MAE: {fp.baseline_comparison?.mae ? `${integer(fp.baseline_comparison.mae)} SGD` : "-"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 p-3 rounded-lg bg-amber-50 border border-amber-200">
+                <p className="text-xs text-amber-800"><strong>Limitations:</strong></p>
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-xs text-amber-700">
+                  {forecast?.limitations.map((lim, i) => <li key={i}>{lim}</li>)}
+                </ul>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+              Forecast unavailable. Insufficient historical data for the selected period.
+            </div>
+          )}
+        </section>
 
         <section className="card-panel rounded-xl p-5">
           <header className="card-panel-header"><h2 className="font-semibold text-slate-900">Resale median prices by town and flat type</h2></header>

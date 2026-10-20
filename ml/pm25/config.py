@@ -23,6 +23,7 @@ RAW_WEATHER_DIR = REPO_ROOT / "ml" / "datasets" / "raw" / "weather_24h" / "extra
 # Processed artefacts (intermediate tables + final experiment run dirs)
 PROCESSED_DIR = REPO_ROOT / "ml" / "datasets" / "processed" / "phase1_pm25"
 RUNS_DIR = PROCESSED_DIR / "runs"
+PRODUCTION_MODELS_DIR = REPO_ROOT / "ml" / "pm25" / "models" / "production"
 
 # --- Constants from the spec --------------------------------------------
 REGIONS = ("north", "south", "east", "west", "central")
