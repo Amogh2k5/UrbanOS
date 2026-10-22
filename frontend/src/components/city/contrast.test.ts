@@ -328,10 +328,10 @@ describe("map components cannot collapse to zero height", () => {
   });
 });
 
-describe("Construction frontend removal", () => {
-  it("does not expose a Construction route or navigation entry", () => {
-    expect(existsSync(join(SRC, "app/planning/construction/page.tsx"))).toBe(false);
+describe("Construction frontend integration", () => {
+  it("exposes a Construction route and navigation entry", () => {
+    expect(existsSync(join(SRC, "app/planning/construction/page.tsx"))).toBe(true);
     const navigation = readFileSync(join(SRC, "components/common/TopNav.tsx"), "utf8");
-    expect(navigation).not.toMatch(/\/planning\/construction|label:\s*["']Construction["']/i);
+    expect(navigation).toMatch(/\/planning\/construction|label:\s*["']Construction["']/i);
   });
 });

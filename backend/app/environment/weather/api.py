@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
@@ -32,6 +33,12 @@ _ENDPOINT = "/twenty-four-hr-forecast"
 _AIR_TEMP_ENDPOINT = "/air-temperature"
 _TIMEOUT = 8.0
 _AIR_TEMP_TIMEOUT = 8.0
+
+# Retry configuration for rate-limited requests
+MAX_RETRIES = 3
+BASE_BACKOFF_SECONDS = 2.0
+MAX_BACKOFF_SECONDS = 30.0
+
 
 # Fallback fixture derived from the spec's example values
 # (24hourWeatherForecast.json lines 102-229). Used for offline/testing and as a
@@ -268,7 +275,7 @@ class AirTemperatureApiClient:
         timeout: float = _AIR_TEMP_TIMEOUT,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key or os.getenv("NEA_API_KEY")
+        self.api_key = api_key or os.getenv("DATA_GOV_SG_API_KEY")
         self.offline = offline
         self.allow_fallback_fixture = allow_fallback_fixture
         self.timeout = timeout
@@ -287,17 +294,45 @@ class AirTemperatureApiClient:
         if self.api_key:
             headers["x-api-key"] = self.api_key
         url = f"{self.base_url}{_AIR_TEMP_ENDPOINT}"
-        try:
-            with httpx.Client(timeout=self.timeout) as client:
-                resp = client.get(url, headers=headers)
-                resp.raise_for_status()
-                return resp.json(), True
-        except Exception as e:
-            log.warning("Air Temperature live fetch failed: %s", e)
-            if self.allow_fallback_fixture:
-                log.warning("Air Temperature falling back to deterministic fixture (KPI only).")
-                return _AIR_TEMP_FALLBACK_FIXTURE, False
-            raise
+        
+        last_exception = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                with httpx.Client(timeout=self.timeout) as client:
+                    resp = client.get(url, headers=headers)
+                    if resp.status_code == 429:
+                        if attempt < MAX_RETRIES - 1:
+                            backoff = min(BASE_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
+                            log.warning("Rate limited (HTTP 429) on attempt %d/%d, backing off %.1fs",
+                                       attempt + 1, MAX_RETRIES, backoff)
+                            time.sleep(backoff)
+                            continue
+                        log.warning("Air Temperature live fetch failed after retries: HTTP 429 rate limit exceeded")
+                    resp.raise_for_status()
+                    return resp.json(), True
+            except httpx.HTTPStatusError as e:
+                last_exception = e
+                if e.response.status_code == 429 and attempt < MAX_RETRIES - 1:
+                    backoff = min(BASE_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
+                    log.warning("Rate limited (HTTP 429) on attempt %d/%d, backing off %.1fs",
+                               attempt + 1, MAX_RETRIES, backoff)
+                    time.sleep(backoff)
+                    continue
+                log.warning("Air Temperature live fetch failed: %s", e)
+            except Exception as e:
+                last_exception = e
+                if attempt < MAX_RETRIES - 1:
+                    backoff = min(BASE_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
+                    log.warning("Air Temperature fetch failed on attempt %d/%d: %s, backing off %.1fs",
+                               attempt + 1, MAX_RETRIES, e, backoff)
+                    time.sleep(backoff)
+                    continue
+                log.warning("Air Temperature live fetch failed: %s", e)
+        
+        if self.allow_fallback_fixture:
+            log.warning("Air Temperature falling back to deterministic fixture (KPI only).")
+            return _AIR_TEMP_FALLBACK_FIXTURE, False
+        raise last_exception
 
     def _normalize(self, payload: dict, is_live: bool) -> "AirTemperatureSnapshot":
         data = payload.get("data") or {}
@@ -640,7 +675,7 @@ class WeatherApiClient:
         air_temperature_client: Optional[AirTemperatureApiClient] = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key or os.getenv("NEA_API_KEY")
+        self.api_key = api_key or os.getenv("DATA_GOV_SG_API_KEY")
         self.offline = offline
         self.allow_fallback_fixture = allow_fallback_fixture
         self.timeout = timeout
@@ -681,17 +716,45 @@ class WeatherApiClient:
         if date:
             params["date"] = date
         url = f"{self.base_url}{_ENDPOINT}"
-        try:
-            with httpx.Client(timeout=self.timeout) as client:
-                resp = client.get(url, headers=headers, params=params)
-                resp.raise_for_status()
-                return resp.json(), True
-        except Exception as e:
-            log.warning("Weather live fetch failed: %s", e)
-            if self.allow_fallback_fixture:
-                log.warning("Weather falling back to deterministic fixture (KPI only).")
-                return _FALLBACK_FIXTURE, False
-            raise
+        
+        last_exception = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                with httpx.Client(timeout=self.timeout) as client:
+                    resp = client.get(url, headers=headers, params=params)
+                    if resp.status_code == 429:
+                        if attempt < MAX_RETRIES - 1:
+                            backoff = min(BASE_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
+                            log.warning("Rate limited (HTTP 429) on attempt %d/%d, backing off %.1fs",
+                                       attempt + 1, MAX_RETRIES, backoff)
+                            time.sleep(backoff)
+                            continue
+                        log.warning("Weather live fetch failed after retries: HTTP 429 rate limit exceeded")
+                    resp.raise_for_status()
+                    return resp.json(), True
+            except httpx.HTTPStatusError as e:
+                last_exception = e
+                if e.response.status_code == 429 and attempt < MAX_RETRIES - 1:
+                    backoff = min(BASE_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
+                    log.warning("Rate limited (HTTP 429) on attempt %d/%d, backing off %.1fs",
+                               attempt + 1, MAX_RETRIES, backoff)
+                    time.sleep(backoff)
+                    continue
+                log.warning("Weather live fetch failed: %s", e)
+            except Exception as e:
+                last_exception = e
+                if attempt < MAX_RETRIES - 1:
+                    backoff = min(BASE_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
+                    log.warning("Weather fetch failed on attempt %d/%d: %s, backing off %.1fs",
+                               attempt + 1, MAX_RETRIES, e, backoff)
+                    time.sleep(backoff)
+                    continue
+                log.warning("Weather live fetch failed: %s", e)
+        
+        if self.allow_fallback_fixture:
+            log.warning("Weather falling back to deterministic fixture (KPI only).")
+            return _FALLBACK_FIXTURE, False
+        raise last_exception
 
     def _normalize(self, payload: dict, is_live: bool) -> WeatherLiveSnapshot:
         data = payload.get("data") or {}

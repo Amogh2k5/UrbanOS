@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -49,6 +50,12 @@ SCAM_TYPES_2025 = [
 ]
 
 
+# Retry configuration for rate-limited requests
+MAX_RETRIES = 3
+BASE_BACKOFF_SECONDS = 2.0
+MAX_BACKOFF_SECONDS = 30.0
+
+
 @dataclass
 class CrimeDataSnapshot:
     generated_at: str
@@ -56,6 +63,43 @@ class CrimeDataSnapshot:
     datasets: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+
+
+def _fetch_with_retry(client: httpx.Client, params: dict, headers: dict, timeout: float) -> dict:
+    """Fetch URL with exponential backoff retry on rate limit (HTTP 429)."""
+    last_exception = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = client.get(DATASTORE_URL, params=params, headers=headers)
+            if response.status_code == 429:
+                if attempt < MAX_RETRIES - 1:
+                    backoff = min(BASE_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
+                    log.warning("Rate limited (HTTP 429) on attempt %d/%d, backing off %.1fs",
+                               attempt + 1, MAX_RETRIES, backoff)
+                    time.sleep(backoff)
+                    continue
+                raise RuntimeError("data.gov.sg rate limit exceeded (HTTP 429) after retries")
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as exc:
+            last_exception = exc
+            if exc.response.status_code == 429 and attempt < MAX_RETRIES - 1:
+                backoff = min(BASE_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
+                log.warning("Rate limited (HTTP 429) on attempt %d/%d, backing off %.1fs",
+                           attempt + 1, MAX_RETRIES, backoff)
+                time.sleep(backoff)
+                continue
+            raise
+        except Exception as exc:
+            last_exception = exc
+            if attempt < MAX_RETRIES - 1:
+                backoff = min(BASE_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
+                log.warning("Request failed on attempt %d/%d: %s, backing off %.1fs",
+                           attempt + 1, MAX_RETRIES, exc, backoff)
+                time.sleep(backoff)
+                continue
+            raise
+    raise last_exception
 
 
 class DataGovCrimeClient:
@@ -69,15 +113,8 @@ class DataGovCrimeClient:
         if self.api_key:
             headers["X-Api-Key"] = self.api_key
 
-        try:
-            with httpx.Client(timeout=self.timeout_s, follow_redirects=True) as client:
-                response = client.get(DATASTORE_URL, params=params, headers=headers)
-            if response.status_code == 429:
-                raise RuntimeError("data.gov.sg rate limit exceeded (HTTP 429)")
-            response.raise_for_status()
-            payload = response.json()
-        except Exception as exc:
-            raise RuntimeError(f"data.gov.sg dataset {dataset_id} request failed: {exc}") from exc
+        with httpx.Client(timeout=self.timeout_s, follow_redirects=True) as client:
+            payload = _fetch_with_retry(client, params, headers, self.timeout_s)
 
         if payload.get("success") is not True:
             raise RuntimeError(

@@ -217,7 +217,7 @@ CALIBRATION_METADATA = {
         "Obtain complete NEA historical dataset (paid API) for 2015-2025",
         "Catalogue non-flood heavy rainfall events to estimate false positive rate",
         "Integrate PUB drain water level sensors when available",
-        "Validate regional API access for Malaysia/Johor and Sumatra/BMKG",
+        "Validate regional API access for Sumatra/BMKG",
     ],
 }
 

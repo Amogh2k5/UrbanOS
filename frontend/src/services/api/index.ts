@@ -1633,3 +1633,166 @@ export const fetchLandSources = (refresh = false) =>
 
 export const fetchLandMap = (refresh = false) =>
   fetchLand<LandMapResponse>('/api/planning/land/map', refresh);
+
+// ---------------------------------------------------------------------------
+// Construction (Planning) domain — mirrors backend/app/planning/construction/models.py
+// ---------------------------------------------------------------------------
+export type ConstructionDataKind = 'live' | 'latest_available' | 'historical' | 'forecast' | 'unavailable';
+export type ConstructionSourceStatus = 'available' | 'partial' | 'unavailable';
+
+export interface ConstructionMeta {
+  generated_at: string;
+  status: ConstructionSourceStatus;
+  data_timestamps: Record<string, unknown>;
+  warnings: string[];
+  errors: string[];
+  limitations: string[];
+}
+
+export interface ConstructionSource {
+  key: string;
+  name: string;
+  agency: string;
+  url: string;
+  status: string;
+  retrieved_at: string | null;
+  error: string | null;
+  record_count: number;
+  fields: string[];
+  total_count: number | null;
+  coverage_start: string | null;
+  coverage_end: string | null;
+  last_updated_at: string | null;
+}
+
+export interface GreenMarkBuilding {
+  vault_id: string | null;
+  reference_no: string | null;
+  project_name: string | null;
+  actual_project_name: string | null;
+  postal_code: string | null;
+  rating: string | null;
+  sle_ze_pe: string | null;
+  project_type: string | null;
+  gfa: string | null;
+  re_certification: string | null;
+  previous_gm_cert_reference_no: string | null;
+  gm_version: string | null;
+  e_cert: string | null;
+  expiry: string | null;
+  developer: string | null;
+  architect: string | null;
+  me_engineer: string | null;
+  cs_engineer: string | null;
+  facility_manager: string | null;
+  esd_consultant: string | null;
+  geometry: Record<string, unknown> | null;
+}
+
+export interface PipelineRecord {
+  year: number | null;
+  provisional_permission: number | null;
+  written_permission: number | null;
+  building_plan_approval: number | null;
+  building_commencement: number | null;
+  building_completion: number | null;
+}
+
+export interface ConstructionReport {
+  generated_at: string;
+  domain: string;
+  subdomain: string;
+  status: ConstructionSourceStatus;
+  kpis: Record<string, unknown>;
+  greenmark_summary: Record<string, unknown>;
+  pipeline_trend: Array<Record<string, unknown>>;
+  greenmark_by_rating: Array<Record<string, unknown>>;
+  greenmark_by_type: Array<Record<string, unknown>>;
+  greenmark_buildings: GreenMarkBuilding[];
+  pipeline_records: PipelineRecord[];
+  map_data: Record<string, unknown>;
+  sources: ConstructionSource[];
+  errors: string[];
+  warnings: string[];
+  limitations: string[];
+  insights: Array<{ question: string; answer: string; data_kind: ConstructionDataKind }>;
+  confidence: 'high' | 'medium' | 'low';
+  data_timestamps: Record<string, unknown>;
+  is_ml_prediction: boolean;
+}
+
+export async function fetchConstructionReport(refresh = false): Promise<ConstructionReport> {
+  const response = await fetch(`${API_BASE}/api/planning/construction/report${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch construction report: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchConstructionGreenmark(
+  rating?: string,
+  projectType?: string,
+  search?: string,
+  limit = 50,
+  offset = 0
+): Promise<{ total: number; limit: number; offset: number; buildings: GreenMarkBuilding[] }> {
+  const params = new URLSearchParams();
+  if (rating) params.set('rating', rating);
+  if (projectType) params.set('project_type', projectType);
+  if (search) params.set('search', search);
+  params.set('limit', limit.toString());
+  params.set('offset', offset.toString());
+  const response = await fetch(`${API_BASE}/api/planning/construction/greenmark?${params.toString()}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch greenmark buildings: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchConstructionPipeline(year?: number): Promise<{ records: PipelineRecord[]; count: number }> {
+  const params = new URLSearchParams();
+  if (year !== undefined) params.set('year', year.toString());
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const response = await fetch(`${API_BASE}/api/planning/construction/pipeline${query}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch construction pipeline: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchConstructionMap(): Promise<Record<string, unknown>> {
+  const response = await fetch(`${API_BASE}/api/planning/construction/map`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch construction map: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchConstructionKpis(refresh = false): Promise<{
+  generated_at: string;
+  kpis: Record<string, unknown>;
+  greenmark_summary: Record<string, unknown>;
+  pipeline_trend: Array<Record<string, unknown>>;
+  greenmark_by_rating: Array<Record<string, unknown>>;
+  greenmark_by_type: Array<Record<string, unknown>>;
+}> {
+  const response = await fetch(`${API_BASE}/api/planning/construction/kpis${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch construction KPIs: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchConstructionSources(refresh = false): Promise<{
+  generated_at: string;
+  sources: ConstructionSource[];
+  errors: string[];
+  warnings: string[];
+  limitations: string[];
+}> {
+  const response = await fetch(`${API_BASE}/api/planning/construction/sources${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch construction sources: ${response.statusText}`);
+  }
+  return response.json();
+}

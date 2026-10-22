@@ -59,6 +59,7 @@ const divisions = [
     modules: [
       { key: "housing", label: "Housing", href: "/planning/housing" },
       { key: "land", label: "Land", href: "/planning/land" },
+      { key: "construction", label: "Construction", href: "/planning/construction" },
     ],
   },
 ];

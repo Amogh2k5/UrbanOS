@@ -1,7 +1,7 @@
 """Flood Agent V3 — Live Regional API + Manual Rules.
 
 Core Principle:
-LIVE WEATHER OBSERVATIONS (Singapore, Malaysia/Johor, Sumatra) → CURRENT FLOOD RISK
+LIVE WEATHER OBSERVATIONS (Singapore, Sumatra) → CURRENT FLOOD RISK
 
 Historical data is used OFFLINE only to derive manual risk thresholds.
 Live inference uses ONLY current API observations.
@@ -10,9 +10,9 @@ Architecture:
 1. Fetch live Singapore rainfall (NEA 5-min API)
 2. Fetch live Sumatra rainfall (BMKG API)
 3. Fetch PUB flood alerts
-5. Fetch NEA 24h forecast for regional weather systems
-6. Apply manual risk rules (flood/config/risk_rules.py)
-7. Produce FloodReport with clear provenance
+4. Fetch NEA 24h forecast for regional weather systems
+5. Apply manual risk rules (flood/config/risk_rules.py)
+6. Produce FloodReport with clear provenance
 """
 
 from __future__ import annotations
@@ -554,9 +554,6 @@ def build_report(state: FloodAgentState) -> FloodAgentState:
                 stations_with_rain=se.get("stations_with_rain", 0),
             )
         
-        # Malaysia excluded from flood risk assessment
-        my_evidence = None
-        
         # Build Sumatra evidence
         su_evidence = None
         if state.sumatra_rainfall and state.sumatra_rainfall.is_live:
@@ -600,15 +597,14 @@ def build_report(state: FloodAgentState) -> FloodAgentState:
         if state.regional_weather_status:
             rws_data = state.regional_weather_status
             rws = RegionalWeatherStatus(
-                singapore_forecast_code=rws_data.get("forecast_code"),
-                singapore_forecast_text=rws_data.get("forecast_text"),
-                singapore_wind_direction=rws_data.get("wind_direction"),
-                singapore_temperature_high=rws_data.get("temperature_high"),
-                singapore_temperature_low=rws_data.get("temperature_low"),
-                malaysia_available=False,
-                sumatra_available=state.sumatra_rainfall.is_live if state.sumatra_rainfall else False,
-                regional_systems=[],
-            )
+singapore_forecast_code=rws_data.get("forecast_code"),
+            singapore_forecast_text=rws_data.get("forecast_text"),
+            singapore_wind_direction=rws_data.get("wind_direction"),
+            singapore_temperature_high=rws_data.get("temperature_high"),
+            singapore_temperature_low=rws_data.get("temperature_low"),
+            sumatra_available=state.sumatra_rainfall.is_live if state.sumatra_rainfall else False,
+            regional_systems=[],
+        )
         
         # Generate recommendations
         recommendations = _generate_recommendations(state.risk_level, state.primary_risk_factors)

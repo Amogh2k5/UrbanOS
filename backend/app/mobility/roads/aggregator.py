@@ -67,7 +67,15 @@ _last_good_at: float = 0.0
 def _fetch_works() -> Dict[str, Any]:
     from backend.app.mobility.roads.data import RoadDataProcessor, RoadWorksApiClient
 
-    works = RoadDataProcessor.process_road_works(list(RoadWorksApiClient().fetch_all()))
+    # Limit to first 5 pages (~2500 records) to stay within 8s budget
+    # Road works has ~8000 records across ~17 pages; fetching all exceeds budget
+    client = RoadWorksApiClient()
+    works_raw = []
+    for i, item in enumerate(client.fetch_all()):
+        works_raw.append(item)
+        if i >= 2499:  # 5 pages * 500 = 2500 records
+            break
+    works = RoadDataProcessor.process_road_works(works_raw)
     active = [w for w in works if w.is_active]
     upcoming = [w for w in works if w.is_upcoming]
     return {

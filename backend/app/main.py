@@ -62,6 +62,8 @@ from backend.app.planning.land.api import router as land_router
 from backend.app.planning.land.api import start_land_warmup
 from backend.app.planning.housing.api import router as housing_router
 from backend.app.planning.housing.api import start_housing_warmup
+from backend.app.planning.construction.api import router as construction_router
+from backend.app.planning.construction.api import start_construction_warmup
 from backend.app.infrastructure.energy.api import router as energy_router
 from backend.app.infrastructure.energy.api import start_energy_warmup
 from backend.app.overview.api import router as overview_router
@@ -709,23 +711,22 @@ def _build_app() -> FastAPI:
     def flood_report(offline: bool = Query(False, description="Use offline mode for live alerts")) -> Dict[str, Any]:
         """Generate full Flood Report V3 via LangGraph Flood Agent.
     
-        Live Evidence (determines current risk):
-        - Singapore rainfall (NEA 5-min API) ├óΓé¼ΓÇ¥ PRIMARY signal
-        - Malaysia/Johor rainfall (MetMalaysia API) ├óΓé¼ΓÇ¥ SUPPORTING
-        - Sumatra rainfall (BMKG API) ├óΓé¼ΓÇ¥ SUPPORTING
-        - Regional weather systems (NEA 24h forecast) ├óΓé¼ΓÇ¥ SUPPORTING
-        - PUB Flood Alerts ├óΓé¼ΓÇ¥ CONFIRMATION
-    
+Live Evidence (determines current risk):
+        - Singapore rainfall (NEA 5-min API) - PRIMARY signal
+        - Sumatra rainfall (BMKG API) - SUPPORTING
+        - Regional weather systems (NEA 24h forecast) - SUPPORTING
+        - PUB Flood Alerts - CONFIRMATION
+        
         Reference Only:
         - Past flood events catalogue (78 events)
-    
+        
         Returns structured FloodReport V3 with:
         - risk_level (LOW/MODERATE/HIGH/CRITICAL/UNKNOWN)
         - risk_score (0.0-2.0)
         - active_alert_count / active_alerts
         - affected_zones
         - primary_risk_factors
-        - singapore_rainfall / malaysia_rainfall / sumatra_rainfall evidence
+        - singapore_rainfall / sumatra_rainfall evidence
         - regional_weather status
         - past_flood_events (REFERENCE ONLY)
         - recommendations / confidence / limitations
@@ -1014,6 +1015,7 @@ def _build_app() -> FastAPI:
     app.include_router(waste_router)
     app.include_router(energy_router)
     app.include_router(housing_router)
+    app.include_router(construction_router)
     app.include_router(land_router)
     app.include_router(overview_router)
 
@@ -1037,6 +1039,9 @@ def _build_app() -> FastAPI:
 
     # Housing warm-up (annual/quarterly datasets; avoids first-request latency)
     start_housing_warmup()
+
+    # Construction warm-up (historical datasets; avoids first-request latency)
+    start_construction_warmup()
 
     # Energy warm-up (historical datasets; avoids first-request latency)
     start_energy_warmup()

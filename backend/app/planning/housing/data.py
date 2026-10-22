@@ -16,6 +16,11 @@ log = logging.getLogger(__name__)
 SG = timezone(timedelta(hours=8))
 BASE = "https://data.gov.sg/api/action/datastore_search"
 
+# Retry configuration for rate-limited requests
+MAX_RETRIES = 3
+BASE_BACKOFF_SECONDS = 2.0
+MAX_BACKOFF_SECONDS = 30.0
+
 DATASETS = {
     "median_resale": {
         "id": "d_b51323a474ba789fb4cc3db58a3116d4",
@@ -40,6 +45,7 @@ DATASETS = {
     },
 }
 
+
 @dataclass
 class SourceResult:
     key: str
@@ -51,6 +57,34 @@ class SourceResult:
     retrieved_at: str | None = None
     error: str | None = None
     fields: list[str] = field(default_factory=list)
+
+
+def _fetch_with_retry(req: urllib.request.Request, timeout: int = 20) -> dict:
+    """Fetch URL with exponential backoff retry on rate limit (HTTP 429)."""
+    last_exception = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            last_exception = exc
+            if exc.code == 429 and attempt < MAX_RETRIES - 1:
+                backoff = min(BASE_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
+                log.warning("Rate limited (HTTP 429) on attempt %d/%d, backing off %.1fs",
+                           attempt + 1, MAX_RETRIES, backoff)
+                time.sleep(backoff)
+                continue
+            raise
+        except Exception as exc:
+            last_exception = exc
+            if attempt < MAX_RETRIES - 1:
+                backoff = min(BASE_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
+                log.warning("Request failed on attempt %d/%d: %s, backing off %.1fs",
+                           attempt + 1, MAX_RETRIES, exc, backoff)
+                time.sleep(backoff)
+                continue
+            raise
+    raise last_exception
 
 
 def _fetch_dataset(key: str, limit: int = 5000) -> SourceResult:
@@ -66,8 +100,7 @@ def _fetch_dataset(key: str, limit: int = 5000) -> SourceResult:
         params = urllib.parse.urlencode({"resource_id": spec["id"], "limit": limit, "offset": offset})
         req = urllib.request.Request(f"{BASE}?{params}", headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=20) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+            payload = _fetch_with_retry(req, timeout=20)
         except urllib.error.HTTPError as exc:
             msg = f"HTTP {exc.code}"
             if exc.code == 429:
