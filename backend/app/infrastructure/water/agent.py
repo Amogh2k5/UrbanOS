@@ -192,7 +192,19 @@ def create_water_agent() -> StateGraph:
     graph.add_edge("ingest_water_data", "analyze_water")
     graph.add_edge("analyze_water", "build_report")
     graph.add_edge("build_report", END)
-    return graph
+    return graph.compile()
+
+
+# Global compiled graph
+_water_agent_graph: Optional["CompiledStateGraph"] = None
+
+
+def get_water_agent():
+    """Get or create the compiled Water agent graph."""
+    global _water_agent_graph
+    if _water_agent_graph is None:
+        _water_agent_graph = create_water_agent()
+    return _water_agent_graph
 
 
 def run_water_agent(
@@ -203,5 +215,7 @@ def run_water_agent(
     state = WaterAgentState(reading_provider=reading_provider)
     if fetcher is not None:
         state.fetcher = fetcher
-    result = create_water_agent().compile().invoke(state)
+    # create_water_agent() returns the compiled graph; compile() is a builder
+    # operation and calling it on the compiled graph raises AttributeError.
+    result = get_water_agent().invoke(state)
     return result["report"]

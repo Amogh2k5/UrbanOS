@@ -283,7 +283,6 @@ def fetch_fire_snapshot() -> FireSnapshot:
 from fastapi import APIRouter, HTTPException
 from typing import Optional
 
-from backend.app.safety.fire.agent import run_fire_agent
 from backend.app.safety.fire.models import FireReport
 
 log = logging.getLogger(__name__)
@@ -295,6 +294,7 @@ router = APIRouter(prefix="/api/fire", tags=["safety", "fire"])
 async def get_fire_report() -> FireReport:
     """Get combined fire report with live incidents and historical statistics."""
     try:
+        from backend.app.safety.fire.agent import run_fire_agent
         report = run_fire_agent()
         return report
     except Exception as e:

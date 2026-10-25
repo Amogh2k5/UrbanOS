@@ -7,8 +7,12 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   ApiError,
+  clearDomainResponseCache,
   fetchCityReport,
   fetchOverviewCity,
+  fetchWeatherKpi,
+  fetchWaterReport,
+  preloadDomainSummaries,
 } from "./index";
 
 // Captured verbatim from the running API.
@@ -277,5 +281,68 @@ describe("fetchOverviewCity", () => {
       expect.stringContaining("/api/overview/city"),
       expect.objectContaining({ cache: "no-store" })
     );
+  });
+});
+
+describe("domain summary cache and preload", () => {
+  beforeEach(() => {
+    clearDomainResponseCache();
+    vi.restoreAllMocks();
+  });
+
+  it("reuses a cached summary and coalesces overlapping requests", async () => {
+    let release!: (value: any) => void;
+    const response = new Promise((resolve) => { release = resolve; });
+    const spy = vi.fn(() => response);
+    globalThis.fetch = spy as unknown as typeof fetch;
+    const first = fetchWeatherKpi();
+    const second = fetchWeatherKpi();
+    release({ ok: true, json: async () => ({ value: 21 }) });
+    await expect(first).resolves.toEqual({ value: 21 });
+    await expect(second).resolves.toEqual({ value: 21 });
+    await fetchWeatherKpi();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds concurrent preloads and continues after an endpoint failure", async () => {
+    let active = 0;
+    let maximum = 0;
+    let called = 0;
+    const spy = vi.fn(async () => {
+      const current = ++called;
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return { ok: current !== 1, statusText: "offline", json: async () => ({}) };
+    });
+    globalThis.fetch = spy as unknown as typeof fetch;
+    await expect(preloadDomainSummaries(2)).resolves.toBeUndefined();
+    expect(maximum).toBeLessThanOrEqual(2);
+    expect(spy).toHaveBeenCalledTimes(3);
+  });
+
+  it("refreshes the canonical cached resource", async () => {
+    const spy = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ version: 1 }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ version: 2 }) });
+    globalThis.fetch = spy as unknown as typeof fetch;
+    await fetchWaterReport();
+    await fetchWaterReport(true);
+    await fetchWaterReport();
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it("expires a lightweight summary after its domain TTL", async () => {
+    vi.useFakeTimers();
+    const spy = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ version: 1 }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ version: 2 }) });
+    globalThis.fetch = spy as unknown as typeof fetch;
+    await fetchWeatherKpi();
+    vi.advanceTimersByTime(15_001);
+    await fetchWeatherKpi();
+    expect(spy).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 });

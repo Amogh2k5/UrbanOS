@@ -5,6 +5,50 @@ export type { CitySituationReport, DomainStatus, Finding } from '@/types/intelli
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+// Small client cache for navigational domain responses. It keeps the latest
+// successful payload briefly and shares an in-flight request across pages.
+// Explicit refresh requests always bypass it; freshness fields remain sourced
+// from the API response itself.
+const domainResponseCache = new Map<string, { expiresAt: number; value: unknown }>();
+const domainRequests = new Map<string, Promise<unknown>>();
+const domainRequestGeneration = new Map<string, number>();
+export function clearDomainResponseCache(): void {
+  domainResponseCache.clear();
+  domainRequests.clear();
+  domainRequestGeneration.clear();
+}
+function canonicalDomainUrl(url: string): string {
+  const parsed = new URL(url, API_BASE);
+  parsed.searchParams.delete('refresh');
+  parsed.searchParams.sort();
+  return parsed.toString();
+}
+async function fetchDomainJson<T>(url: string, ttlMs = 30_000): Promise<T> {
+  const refresh = new URL(url, API_BASE).searchParams.get('refresh') === 'true';
+  const cacheKey = canonicalDomainUrl(url);
+  const cached = domainResponseCache.get(cacheKey);
+  if (!refresh && cached && cached.expiresAt > Date.now()) return cached.value as T;
+  const pending = domainRequests.get(cacheKey);
+  if (!refresh && pending) return pending as Promise<T>;
+  if (refresh) domainRequestGeneration.set(cacheKey, (domainRequestGeneration.get(cacheKey) || 0) + 1);
+  const generation = domainRequestGeneration.get(cacheKey) || 0;
+  const request = (async () => {
+    const response = await fetch(url, { cache: 'no-store' });
+    if (!response.ok) throw new ApiError(`Domain request failed: ${response.statusText}`, response.status);
+    const value = await response.json();
+    if ((domainRequestGeneration.get(cacheKey) || 0) === generation) {
+      domainResponseCache.set(cacheKey, { value, expiresAt: Date.now() + ttlMs });
+    }
+    return value as T;
+  })();
+  domainRequests.set(cacheKey, request);
+  try {
+    return await request;
+  } finally {
+    if (domainRequests.get(cacheKey) === request) domainRequests.delete(cacheKey);
+  }
+}
+
 /** Thrown when the API is reachable but returned a non-2xx response. */
 export class ApiError extends Error {
   readonly status: number;
@@ -24,9 +68,7 @@ export class ApiError extends Error {
  */
 export async function fetchCityReport(): Promise<CitySituationReport> {
   const response = await fetch(`${API_BASE}/api/city/report`, { cache: 'no-store' });
-  if (!response.ok) {
-    throw new ApiError(`Failed to fetch city report: ${response.statusText}`, response.status);
-  }
+  if (!response.ok) throw new ApiError(`Failed to fetch city report: ${response.statusText}`, response.status);
   return response.json();
 }
 
@@ -89,41 +131,38 @@ export async function fetchTrafficPrediction(): Promise<any> {
 }
 
 export async function fetchFloodReport(): Promise<any> {
-  const response = await fetch(`${API_BASE}/api/flood/report`, { cache: 'no-store' });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch flood report: ${response.statusText}`);
-  }
-  return response.json();
+  return fetchDomainJson(`${API_BASE}/api/flood/report`);
 }
 
 export async function fetchWeatherKpi(): Promise<any> {
-  const response = await fetch(`${API_BASE}/kpi/live/weather`, { cache: 'no-store' });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch weather KPI: ${response.statusText}`);
-  }
-  return response.json();
+  return fetchDomainJson(`${API_BASE}/kpi/live/weather`, 15_000);
 }
 
 export async function fetchPm25Kpi(): Promise<any> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 30_000);
   try {
-    const response = await fetch(`${API_BASE}/kpi/live/pm25`, {
-      cache: 'no-store',
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to fetch PM2.5 KPI: ${response.statusText}`);
-    }
-    return response.json();
+    return await fetchDomainJson(`${API_BASE}/kpi/live/pm25`, 15_000);
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error("PM2.5 KPI request timed out");
-    }
+    if (error instanceof Error && error.name === 'AbortError') throw new Error('PM2.5 KPI request timed out');
     throw error;
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+/** Warm only small summary endpoints after Overview is usable. Each failure is
+ * isolated and the worker pool bounds concurrent upstream work. */
+export async function preloadDomainSummaries(concurrency = 2): Promise<void> {
+  const jobs = [fetchWeatherKpi, fetchPm25Kpi, () => fetchTransitStatus(20)];
+  const width = Math.max(1, Math.min(jobs.length, Math.floor(concurrency) || 1));
+  let cursor = 0;
+  await Promise.all(Array.from({ length: width }, async () => {
+    while (cursor < jobs.length) {
+      const job = jobs[cursor++];
+      try { await job(); } catch { /* navigation and sibling preloads continue */ }
+    }
+  }));
 }
 
 export interface Pm25PredictionRegion {
@@ -252,11 +291,7 @@ export interface TransitStatus {
 }
 
 export async function fetchTransitStatus(limitAlerts = 20): Promise<any> {
-  const response = await fetch(`${API_BASE}/api/mobility/transit/status?limit_alerts=${limitAlerts}`, { cache: 'no-store' });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch transit status: ${response.statusText}`);
-  }
-  return response.json();
+  return fetchDomainJson(`${API_BASE}/api/mobility/transit/status?limit_alerts=${limitAlerts}`, 15_000);
 }
 
 export async function fetchBusServices(limit = 1000, serviceNo?: string, operator?: string): Promise<any[]> {
@@ -603,13 +638,31 @@ export interface ModuleKPI {
   unit: string;
 }
 
+/**
+ * One Overview card metric. `value` is null exactly when this metric could
+ * not be obtained - render an explicit unavailable placeholder for THIS
+ * metric; it never hides its sibling metrics. An explicit 0 is a real
+ * reading and must render as 0.
+ */
+export interface ModuleMetric {
+  key: string;
+  label: string;
+  value: any;
+  unit: string;
+}
+
 export interface ModuleSummary {
   id: string;
   name: string;
-  status: 'normal' | 'elevated' | 'critical' | 'unavailable';
+  status: 'normal' | 'elevated' | 'high' | 'critical' | 'unavailable';
   kpi: ModuleKPI | null;
+  /** All intended card metrics, each independently available or unavailable. */
+  metrics?: ModuleMetric[];
   updated_at: string | null;
   detail_route: string;
+  /** Measurement availability/freshness is independent from risk status. */
+  data_state?: 'available' | 'partial' | 'stale' | 'unavailable';
+  age_seconds?: number | null;
 }
 
 export interface AlertItem {
@@ -679,9 +732,7 @@ export type CityNarrative = {
 
 export async function fetchOverviewCity(): Promise<OverviewCityResponse> {
   const response = await fetch(`${API_BASE}/api/overview/city`, { cache: 'no-store' });
-  if (!response.ok) {
-    throw new ApiError(`Failed to fetch overview city: ${response.statusText}`, response.status);
-  }
+  if (!response.ok) throw new ApiError(`Failed to fetch overview city: ${response.statusText}`, response.status);
   return response.json();
 }
 
@@ -699,11 +750,7 @@ export async function fetchCityNarrative(): Promise<CityNarrative> {
 }
 
 export async function fetchOverviewModule(moduleId: string): Promise<any> {
-  const response = await fetch(`${API_BASE}/api/overview/module/${moduleId}`, { cache: 'no-store' });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch overview module ${moduleId}: ${response.statusText}`);
-  }
-  return response.json();
+  return fetchDomainJson(`${API_BASE}/api/overview/module/${moduleId}`);
 }
 
 /** One turn of conversation history, forwarded to the grounded Copilot. */
@@ -908,11 +955,7 @@ export interface WaterReport {
 }
 
 export async function fetchWaterReport(refresh = false): Promise<WaterReport> {
-  const response = await fetch(`${API_BASE}/api/water/report${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch water report: ${response.statusText}`);
-  }
-  return response.json();
+  return fetchDomainJson(`${API_BASE}/api/water/report${refresh ? '?refresh=true' : ''}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1126,11 +1169,7 @@ export interface WasteReport {
 }
 
 export async function fetchWasteReport(refresh = false): Promise<WasteReport> {
-  const response = await fetch(`${API_BASE}/api/waste/report${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch waste report: ${response.statusText}`);
-  }
-  return response.json();
+  return fetchDomainJson(`${API_BASE}/api/waste/report${refresh ? '?refresh=true' : ''}`);
 }
 
 export async function fetchWasteOverview(refresh = false): Promise<any> {
@@ -1261,11 +1300,7 @@ export interface HousingForecast {
 }
 
 export async function fetchHousingReport(refresh = false): Promise<HousingReport> {
-  const response = await fetch(`${API_BASE}/api/planning/housing/report${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch housing report: ${response.statusText}`);
-  }
-  return response.json();
+  return fetchDomainJson(`${API_BASE}/api/planning/housing/report${refresh ? '?refresh=true' : ''}`);
 }
 
 export async function fetchHousingForecast(refresh = false, targetPeriod?: string): Promise<HousingForecast> {
@@ -1346,11 +1381,7 @@ export interface EnergyReport {
 }
 
 export async function fetchEnergyReport(refresh = false): Promise<EnergyReport> {
-  const response = await fetch(`${API_BASE}/api/infrastructure/energy/report${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch energy report: ${response.statusText}`);
-  }
-  return response.json();
+  return fetchDomainJson(`${API_BASE}/api/infrastructure/energy/report${refresh ? '?refresh=true' : ''}`);
 }
 
 export async function fetchEnergySources(refresh = false): Promise<any> {

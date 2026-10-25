@@ -250,23 +250,35 @@ def create_waste_agent() -> StateGraph:
     graph.add_edge("ingest_waste_data", "analyze_waste")
     graph.add_edge("analyze_waste", "build_report")
     graph.add_edge("build_report", END)
-    return graph
+    return graph.compile()
 
 
 class WasteManagementAgent:
-    """The single Waste Management domain agent."""
+    """Backward-compatible object facade over the domain-owned graph."""
 
-    def __init__(self, fetcher: Optional[Callable[[], WasteSnapshot]] = None) -> None:
-        self._fetcher = fetcher
+    def __init__(self, fetcher: Optional[Callable[[], WasteSnapshot]] = None):
+        self.fetcher = fetcher
 
     def run(self) -> WasteReport:
-        """Never raises for source failures - they become ``report.errors`` / unavailable sections."""
-        state = WasteAgentState()
-        if self._fetcher is not None:
-            state.fetcher = self._fetcher
-        result = create_waste_agent().compile().invoke(state)
-        return result["report"]
+        return run_waste_agent(fetcher=self.fetcher)
+
+
+# Global compiled graph
+_waste_agent_graph = None
+
+
+def get_waste_agent():
+    """Get or create the compiled Waste agent graph."""
+    global _waste_agent_graph
+    if _waste_agent_graph is None:
+        _waste_agent_graph = create_waste_agent()
+    return _waste_agent_graph
 
 
 def run_waste_agent(fetcher: Optional[Callable[[], WasteSnapshot]] = None) -> WasteReport:
-    return WasteManagementAgent(fetcher).run()
+    """Run the agent. Never raises for source failures - they become report.errors."""
+    state = WasteAgentState()
+    if fetcher is not None:
+        state.fetcher = fetcher
+    result = create_waste_agent().invoke(state)
+    return result["report"]

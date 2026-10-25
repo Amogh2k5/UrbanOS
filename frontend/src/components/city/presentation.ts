@@ -65,7 +65,8 @@ export const DOMAIN_FILLS: Record<string, string> = {
   // Planning / Administration
   land: "bg-dom-land",
   housing: "bg-dom-housing",
-};
+  construction: "bg-dom-construction",
+};;
 
 /** Matching darker shade, used for hover and for pressed states. */
 export const DOMAIN_FILLS_HOVER: Record<string, string> = {
@@ -82,6 +83,7 @@ export const DOMAIN_FILLS_HOVER: Record<string, string> = {
   waste: "hover:bg-teal-800",
   land: "hover:bg-violet-800",
   housing: "hover:bg-violet-900",
+  construction: "hover:bg-amber-950",
 };
 
 /** Matching coloured shadow, as in the reference. */
@@ -99,6 +101,7 @@ export const DOMAIN_FILLS_SHADOW: Record<string, string> = {
   waste: "shadow-teal-700/20 hover:shadow-teal-700/30",
   land: "shadow-violet-700/20 hover:shadow-violet-700/30",
   housing: "shadow-violet-800/20 hover:shadow-violet-800/30",
+  construction: "shadow-amber-900/20 hover:shadow-amber-900/30",
 };
 
 /** An unknown domain must not borrow a real domain's colour. */
@@ -171,12 +174,14 @@ export function severityBand(severity?: string | null): "critical" | "high" | "m
   }
 }
 
-export type ModuleStatus = "normal" | "elevated" | "critical" | "unavailable";
+export type ModuleStatus = "normal" | "elevated" | "high" | "critical" | "unavailable";
 
-export function moduleStatusBand(status?: string | null): "critical" | "elevated" | "unavailable" | "normal" {
+export function moduleStatusBand(status?: string | null): "critical" | "high" | "elevated" | "unavailable" | "normal" {
   switch ((status ?? "").toLowerCase()) {
     case "critical":
       return "critical";
+    case "high":
+      return "high";
     case "elevated":
       return "elevated";
     case "unavailable":

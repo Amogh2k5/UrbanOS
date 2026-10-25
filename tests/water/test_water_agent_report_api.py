@@ -106,6 +106,12 @@ def test_agent_graph_nodes():
     assert {"ingest_water_data", "analyze_water", "build_report"} <= set(g.nodes)
 
 
+def test_run_water_agent_invokes_the_factory_compiled_graph():
+    # Regression: create_water_agent() is already a CompiledStateGraph.
+    report = run_water_agent(fetcher=full_snapshot)
+    assert isinstance(report, WaterReport)
+
+
 # --------------------------------------------------------------------- API
 @pytest.fixture()
 def client():
@@ -173,6 +179,7 @@ def test_endpoint_returns_500_when_agent_crashes():
     with patch.object(water_api, "run_water_agent", side_effect=RuntimeError("boom")):
         r = TestClient(app).get("/api/water/report")
     assert r.status_code == 500 and "water agent error" in r.json()["detail"]
+    assert water_api._cache["report"] is None
 
 
 def test_routes_registered_on_real_app():
@@ -201,7 +208,11 @@ def test_coordinator_collects_water_report_and_keeps_other_domains_untouched():
         env.return_value.run.side_effect = RuntimeError("e")
         st = collect_reports(CityCoordinatorState())
     assert st.water_report is report and st.source_reports["water"]["subdomain"] == "water"
-    assert len(st.errors) == 3 and not any("Water" in e for e in st.errors)   # water never adds errors here
+    # Water never adds errors here. The other failures are the three this
+    # test injects (environment, traffic, flood) plus the two domains the
+    # session-wide offline fixtures stub out for the migrated coordinator
+    # (fire, crime) - their "test provider unavailable" errors are expected.
+    assert len(st.errors) == 5 and not any("Water" in e for e in st.errors)
 
 
 def test_coordinator_water_failure_is_a_warning_not_an_error():
@@ -289,3 +300,20 @@ def test_warmup_is_disabled_under_pytest_and_by_env(monkeypatch):
     monkeypatch.setenv("URBANOS_WATER_WARMUP", "0")
     water_api.start_water_warmup()
     assert "water-warmup" not in {t.name for t in threading.enumerate()} - before
+
+
+def test_failed_water_warmup_does_not_cache_failure_and_can_retry():
+    water_api._cache.update({"report": None, "expires_at": 0.0})
+    try:
+        with patch.object(water_api, "run_water_agent", side_effect=[RuntimeError("temporary"), run_water_agent(fetcher=full_snapshot)]):
+            try:
+                water_api.get_water_report(refresh=True)
+                assert False, "expected transient failure"
+            except RuntimeError as exc:
+                assert "temporary" in str(exc)
+            assert water_api._cache["report"] is None
+            report = water_api.get_water_report(refresh=True)
+            assert isinstance(report, WaterReport)
+            assert water_api._cache["report"] is report
+    finally:
+        water_api._cache.update({"report": None, "expires_at": 0.0})

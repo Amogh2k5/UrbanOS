@@ -99,7 +99,7 @@ class TestCachedReportIsUnpacked:
     def test_a_warm_cache_still_produces_a_city_assessment(self):
         report = _report()
         service = _FakeAIService()
-        with patch.object(api, "city_report_cached", return_value=(report, {})), \
+        with patch.object(api, "peek_city_report_cached", return_value=(report, {})), \
              patch.object(api, "get_ai_service", return_value=service):
             narrative, ready, _ = _run(api._coordinator_assessment())
 
@@ -110,7 +110,7 @@ class TestCachedReportIsUnpacked:
     def test_a_bare_report_object_is_still_accepted(self):
         """Defensive: tolerate an accessor that returns the report directly."""
         service = _FakeAIService()
-        with patch.object(api, "city_report_cached", return_value=_report()), \
+        with patch.object(api, "peek_city_report_cached", return_value=_report()), \
              patch.object(api, "get_ai_service", return_value=service):
             narrative, ready, _ = _run(api._coordinator_assessment())
 
@@ -124,7 +124,7 @@ class TestReadinessSignal:
         """The dashboard must be able to tell a pending brief from a real one
         without parsing prose."""
         service = _FakeAIService()
-        with patch.object(api, "city_report_cached", return_value=None), \
+        with patch.object(api, "peek_city_report_cached", return_value=None), \
              patch.object(api, "get_ai_service", return_value=service):
             narrative, ready, _ = _run(api._coordinator_assessment())
 
@@ -135,7 +135,7 @@ class TestReadinessSignal:
     def test_available_report_is_reported_as_ready(self):
         report = _report()
         service = _FakeAIService()
-        with patch.object(api, "city_report_cached", return_value=(report, {})), \
+        with patch.object(api, "peek_city_report_cached", return_value=(report, {})), \
              patch.object(api, "get_ai_service", return_value=service):
             narrative, ready, generated_at = _run(api._coordinator_assessment())
 
@@ -154,7 +154,7 @@ class TestReadinessSignal:
         assert build_narrative_input(empty) is None
 
         service = _FakeAIService()
-        with patch.object(api, "city_report_cached", return_value=(empty, {})), \
+        with patch.object(api, "peek_city_report_cached", return_value=(empty, {})), \
              patch.object(api, "get_ai_service", return_value=service):
             narrative, ready, _ = _run(api._coordinator_assessment())
 
@@ -164,7 +164,7 @@ class TestReadinessSignal:
 
     def test_a_failing_accessor_is_reported_as_not_ready(self):
         service = _FakeAIService()
-        with patch.object(api, "city_report_cached",
+        with patch.object(api, "peek_city_report_cached",
                           side_effect=RuntimeError("coordinator exploded")), \
              patch.object(api, "get_ai_service", return_value=service):
             narrative, ready, _ = _run(api._coordinator_assessment())
@@ -178,7 +178,7 @@ class TestCityNarrativeEndpoint:
     def test_serves_the_assessment_from_the_cached_report(self):
         report = _report()
         service = _FakeAIService()
-        with patch.object(api, "city_report_cached", return_value=(report, {})), \
+        with patch.object(api, "peek_city_report_cached", return_value=(report, {})), \
              patch.object(api, "get_ai_service", return_value=service):
             result = _run(api.get_city_narrative())
 
@@ -187,22 +187,22 @@ class TestCityNarrativeEndpoint:
         assert result.report_generated_at == report.generated_at
 
     def test_does_not_block_on_a_cold_cache(self):
-        """block=False: reconciliation must never wait for a coordinator run."""
+        """A cold narrative read must not start or wait for a coordinator run."""
         seen: Dict[str, Any] = {}
 
         def _capture(*args: Any, **kwargs: Any) -> None:
-            seen["block"] = kwargs.get("block")
+            seen["called"] = True
             return None
 
-        with patch.object(api, "city_report_cached", _capture):
+        with patch.object(api, "peek_city_report_cached", _capture):
             result = _run(api.get_city_narrative())
 
-        assert seen["block"] is False
+        assert seen["called"] is True
         assert result.city_assessment_ready is False
         assert result.ai_brief is None
 
     def test_pending_report_returns_an_honest_empty_state(self):
-        with patch.object(api, "city_report_cached", return_value=None):
+        with patch.object(api, "peek_city_report_cached", return_value=None):
             result = _run(api.get_city_narrative())
 
         assert result.city_assessment_ready is False
@@ -218,7 +218,7 @@ class TestCityNarrativeEndpoint:
         import backend.app.environment.flood.agent as flood_agent
         import backend.app.safety.crime.agent as crime_agent
 
-        with patch.object(api, "city_report_cached",
+        with patch.object(api, "peek_city_report_cached",
                           return_value=(_report(), {})), \
              patch.object(api, "get_ai_service", return_value=_FakeAIService()), \
              patch.object(flood_agent, "run_flood_agent_v3") as flood_run, \
@@ -233,7 +233,7 @@ class TestCityNarrativeEndpoint:
         with the same report must not spend quota again."""
         report = _report()
         service = _FakeAIService()
-        with patch.object(api, "city_report_cached", return_value=(report, {})), \
+        with patch.object(api, "peek_city_report_cached", return_value=(report, {})), \
              patch.object(api, "get_ai_service", return_value=service):
             _run(api.get_city_narrative())
             _run(api.get_city_narrative())
@@ -254,7 +254,7 @@ class TestCityNarrativeEndpoint:
             async def generate_city_narrative(self, _report: Any):
                 raise RuntimeError("provider exploded")
 
-        with patch.object(api, "city_report_cached", return_value=(report, {})), \
+        with patch.object(api, "peek_city_report_cached", return_value=(report, {})), \
              patch.object(api, "get_ai_service", return_value=_Failing()):
             result = _run(api.get_city_narrative())
 
@@ -277,7 +277,7 @@ class TestCityNarrativeEndpoint:
             async def generate_city_narrative(self, _report: Any):
                 raise asyncio.TimeoutError()
 
-        with patch.object(api, "city_report_cached", return_value=(report, {})), \
+        with patch.object(api, "peek_city_report_cached", return_value=(report, {})), \
              patch.object(api, "get_ai_service", return_value=_Slow()):
             result = _run(api.get_city_narrative())
 
@@ -292,7 +292,7 @@ class TestCityNarrativeEndpoint:
             def is_available(self) -> bool:
                 return False
 
-        with patch.object(api, "city_report_cached", return_value=(report, {})), \
+        with patch.object(api, "peek_city_report_cached", return_value=(report, {})), \
              patch.object(api, "get_ai_service", return_value=_Absent()):
             result = _run(api.get_city_narrative())
 
@@ -355,12 +355,12 @@ class TestCoordinatorWarmup:
 # --------------------------------------------------- no duplicate work
 class TestNoDuplicateCoordinatorRuns:
     def test_the_narrative_endpoint_does_not_start_a_second_run(self):
-        """It reads the cache with block=False; the report route already owns
-        the run, so reconciliation must never launch its own."""
-        with patch.object(api, "city_report_cached",
-                          side_effect=AssertionError("must not run")) as run:
+        """Narrative lookup is cache-only; only the full report route runs graphs."""
+        with patch.object(api, "peek_city_report_cached", return_value=None), \
+             patch.object(api, "city_report_cached",
+                          side_effect=AssertionError("must not start a report")) as run:
             result = _run(api.get_city_narrative())
 
-        run.assert_called_once_with(block=False)
+        run.assert_not_called()
         assert result.city_assessment_ready is False
         assert not access.coordinator_run_in_flight()

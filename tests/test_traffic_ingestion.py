@@ -44,6 +44,17 @@ from backend.app.mobility.traffic.geo_zones import get_zone, ZoneLookup
 
 SG_OFFSET = timezone(timedelta(hours=8))
 
+
+@pytest.fixture(autouse=True)
+def _clear_speed_band_source_cache():
+    # Adapter tests deliberately vary mocked upstream responses while sharing
+    # a dummy API key; isolate each case from the production short-TTL cache.
+    from backend.app.mobility.traffic import api as traffic_api
+
+    traffic_api._SPEED_BANDS_CACHE.clear()
+    yield
+    traffic_api._SPEED_BANDS_CACHE.clear()
+
 # Mock LTA v2 API response
 MOCK_LTA_RESPONSE = {
     "odata.metadata": "http://datamall2.mytransport.sg/ltaodataservice/$metadata#TrafficSpeedBandsv2",

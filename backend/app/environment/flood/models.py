@@ -69,8 +69,8 @@ class SumatraRainfallEvidence(BaseModel):
     """Current Sumatra rainfall evidence from BMKG API."""
     available: bool = False
     source: str = ""
-    max_1h_mm: float = 0.0
-    stations_reporting: int = 0
+    max_1h_mm: Optional[float] = None
+    stations_reporting: Optional[int] = None
     weather_systems: List[str] = Field(default_factory=list)
     groups: Dict[str, Any] = Field(default_factory=dict)
 

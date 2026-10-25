@@ -46,3 +46,15 @@ def run_crime_agent() -> CrimeReport:
     if report is None:
         raise RuntimeError("Crime Agent did not produce a CrimeReport")
     return report
+
+
+# Global compiled graph
+_crime_agent_graph = None
+
+
+def get_crime_agent():
+    """Get or create the compiled Crime agent graph."""
+    global _crime_agent_graph
+    if _crime_agent_graph is None:
+        _crime_agent_graph = create_crime_agent()
+    return _crime_agent_graph

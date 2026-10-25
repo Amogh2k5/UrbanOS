@@ -202,7 +202,8 @@ class TestTrafficAgentNodes:
         assert "Network error" in result.errors[0] or "live incidents" in result.errors[0].lower()
     
     def test_analyze_traffic(self):
-        """Test traffic analysis combines predictions and incidents."""
+        """Analysis covers the full real zone roster, ML-backed zones keep
+        their predictions and the remaining zones degrade to unknown."""
         state = TrafficAgentState(
             zone_predictions={
                 "SG_CENTRAL_SOUTH": {
@@ -235,10 +236,35 @@ class TestTrafficAgentNodes:
         
         result = analyze_traffic(state)
         
-        assert len(result.zone_reports) == 2
+        # One report per real zone from the GeoJSON roster (not only the
+        # zones that had ML predictions).
+        assert len(result.zone_reports) == len(get_all_zones())
+        by_id = {z.zone_id: z for z in result.zone_reports}
+        assert by_id["SG_CENTRAL_SOUTH"].predicted_average_speed == 48.0
+        assert by_id["SG_EAST"].predicted_average_speed == 58.0
         assert result.overall_stats["total_incidents"] == 1
         assert result.overall_stats["overall_average_speed"] is not None
-    
+
+    def test_analyze_traffic_live_speeds_only(self):
+        """Without ML predictions, live zone speeds still produce zone reports."""
+        from backend.app.mobility.traffic.geo_zones import get_all_zones
+
+        state = TrafficAgentState()
+        state.live_zone_speeds = {
+            z["zone_id"]: 55.0 for z in get_all_zones()
+        }
+
+        result = analyze_traffic(state)
+
+        assert len(result.zone_reports) == len(get_all_zones())
+        for zone in result.zone_reports:
+            assert zone.current_average_speed == 55.0
+            assert zone.predicted_average_speed is None
+            assert zone.congestion_level == "moderate"
+            assert zone.is_demo_zone is False
+        assert result.overall_stats["overall_average_speed"] == 55.0
+        assert result.overall_stats["overall_status"] == "elevated"
+
     def test_build_report(self):
         """Test building final TrafficReport."""
         
@@ -377,26 +403,58 @@ class TestTrafficAgentIntegration:
             assert len(result.get("errors", [])) > 0
     
     def test_missing_ml_prediction_data_handled(self):
-        """Test that a missing prediction bundle degrades without crashing."""
+        """Test that a missing prediction bundle degrades without crashing.
+
+        The report must still be produced for the full zone roster with
+        predicted speeds omitted (unknown congestion when no live speed is
+        available either), and the failure recorded in errors/limitations —
+        never fabricated away.
+        """
         mock_client = MagicMock()
         mock_snapshot = MagicMock()
         mock_snapshot.to_dict.return_value = {"incidents": [], "is_live": False}
         mock_client.fetch.return_value = mock_snapshot
 
         with _patch_bundle(None), \
-             patch("backend.app.mobility.traffic.api.TrafficIncidentsApiClient", return_value=mock_client):
+             patch("backend.app.mobility.traffic.api.TrafficIncidentsApiClient", return_value=mock_client), \
+             patch("backend.app.mobility.traffic.agent.load_live_speeds",
+                   side_effect=lambda state: state):
 
             graph = create_traffic_agent()
             result = graph.invoke(TrafficAgentState())
             report = result["report"]
 
-        # Invariant: the graph completes and the failure is recorded, not hidden.
-        # build_report deliberately emits no report when no zone data exists,
-        # rather than fabricating one.
-        assert report is None
+        # Invariant: the graph completes with an honest report, not a crash.
+        assert report is not None
+        assert isinstance(report, TrafficReport)
+        assert len(report.zones) == len(get_all_zones())
+        for zone in report.zones:
+            assert zone.predicted_average_speed is None
+            assert zone.congestion_level == "unknown"
+            assert zone.is_demo_zone is False
         assert result["errors"], "missing prediction data must be recorded"
         assert any("prediction" in e.lower() or "zone" in e.lower()
                    for e in result["errors"] + result["warnings"])
+        limitations_text = " ".join(report.limitations)
+        assert "ML speed predictions are unavailable" in limitations_text
+        assert any("no traffic observations" in e.lower() for e in result["errors"])
+
+    def test_load_predictions_starts_service_on_demand(self):
+        """The load_predictions node must initialize the prediction service
+        on demand (idempotent start) before reading the shared bundle."""
+        bundle = _bundle([_link("0", "SG_NORTH", "North", 50.0, 52.0)])
+        service = MagicMock()
+        service.get_bundle.return_value = bundle
+
+        with patch(
+            "backend.app.mobility.traffic.prediction_service.get_traffic_prediction_service",
+            return_value=service,
+        ):
+            state = TrafficAgentState()
+            result = load_predictions(state)
+
+        service.start.assert_called_once()
+        assert result.predictions_df is not None
 
     def test_zone_lookup_works(self):
         """Test that zone lookup works for known coordinates."""

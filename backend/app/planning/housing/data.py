@@ -11,6 +11,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Any
+from backend.app.upstream import SingleFlightTTLCache, retry_429_delay
 
 log = logging.getLogger(__name__)
 SG = timezone(timedelta(hours=8))
@@ -20,6 +21,9 @@ BASE = "https://data.gov.sg/api/action/datastore_search"
 MAX_RETRIES = 3
 BASE_BACKOFF_SECONDS = 2.0
 MAX_BACKOFF_SECONDS = 30.0
+_SOURCE_CACHE = SingleFlightTTLCache()
+_SOURCE_TTL_SECONDS = 1800.0
+_SOURCE_ERROR_TTL_SECONDS = 30.0
 
 DATASETS = {
     "median_resale": {
@@ -68,8 +72,9 @@ def _fetch_with_retry(req: urllib.request.Request, timeout: int = 20) -> dict:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             last_exception = exc
-            if exc.code == 429 and attempt < MAX_RETRIES - 1:
-                backoff = min(BASE_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
+            backoff = retry_429_delay(exc, attempt, base_seconds=BASE_BACKOFF_SECONDS,
+                                       max_seconds=MAX_BACKOFF_SECONDS)
+            if backoff is not None and attempt < MAX_RETRIES - 1:
                 log.warning("Rate limited (HTTP 429) on attempt %d/%d, backing off %.1fs",
                            attempt + 1, MAX_RETRIES, backoff)
                 time.sleep(backoff)
@@ -87,7 +92,7 @@ def _fetch_with_retry(req: urllib.request.Request, timeout: int = 20) -> dict:
     raise last_exception
 
 
-def _fetch_dataset(key: str, limit: int = 5000) -> SourceResult:
+def _fetch_dataset_uncached(key: str, limit: int = 5000) -> SourceResult:
     spec = DATASETS[key]
     all_records: list[dict[str, Any]] = []
     offset = 0
@@ -131,6 +136,21 @@ def _fetch_dataset(key: str, limit: int = 5000) -> SourceResult:
         retrieved_at=datetime.now(SG).isoformat(),
         fields=sorted({str(k) for row in all_records[:5] for k in row.keys()}),
     )
+
+
+def _fetch_dataset(key: str, limit: int = 5000) -> SourceResult:
+    cache_key = ("housing", key, limit)
+    return _SOURCE_CACHE.get_or_fetch(
+        cache_key,
+        lambda: _fetch_dataset_uncached(key, limit),
+        ttl_seconds=_SOURCE_TTL_SECONDS,
+        error_ttl_seconds=_SOURCE_ERROR_TTL_SECONDS,
+        cache_result=lambda result: result.status == "available",
+    )
+
+
+def clear_housing_source_cache() -> None:
+    _SOURCE_CACHE.clear(preserve_errors=True)
 
 
 def fetch_housing_snapshot() -> dict[str, Any]:

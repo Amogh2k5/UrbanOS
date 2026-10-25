@@ -99,10 +99,17 @@ def load_predictions(state: TrafficAgentState) -> TrafficAgentState:
         # Consume the shared PredictionBundle from TrafficPredictionService:
         # one XGBoost computation per new snapshot, computed in the background
         # by the service — this node never runs predict_latest() itself.
+        # start() is the on-demand initializer required by the no-startup-work
+        # policy: the first Traffic request seeds rolling history from the
+        # existing SQLite store and computes the first bundle in the
+        # background; it is idempotent and race-free, so it is safe to call
+        # on every request.
         from backend.app.mobility.traffic.prediction_service import (
             get_traffic_prediction_service,
         )
-        bundle = get_traffic_prediction_service().get_bundle()
+        service = get_traffic_prediction_service()
+        service.start()
+        bundle = service.get_bundle()
         if bundle is None or not bundle.link_preds:
             # Preserve the historical no-data behaviour (fallback below).
             raise ValueError("No traffic observations available (prediction bundle not found)")
@@ -342,14 +349,25 @@ def load_live_speeds(state: TrafficAgentState) -> TrafficAgentState:
 # NODE 4: ANALYZE_TRAFFIC
 # ============================================================
 def analyze_traffic(state: TrafficAgentState) -> TrafficAgentState:
-    """Analyze traffic combining zone predictions, live incidents, and live speeds."""
+    """Analyze traffic combining zone predictions, live incidents, and live speeds.
+
+    Zone reports are built for every real zone from the GeoJSON roster. When
+    ML predictions are unavailable the zone still appears with its live
+    observed speed (real LTA data) and predicted speeds omitted; when neither
+    source has data the zone is reported with None speeds and "unknown"
+    congestion. Nothing is fabricated either way.
+    """
     log.info("Analyzing traffic...")
     
     try:
-        # Build zone reports
+        # Build zone reports for ALL known zones so a missing prediction
+        # bundle degrades per-zone instead of sinking the whole report.
         zone_reports: List[ZoneReport] = []
         
-        for zone_id, zone_pred in state.zone_predictions.items():
+        for zone in get_all_zones():
+            zone_id = zone["zone_id"]
+            zone_name = zone["zone_name"]
+            zone_pred = state.zone_predictions.get(zone_id, {})
             incidents_in_zone = state.incidents_by_zone.get(zone_id, [])
             
             # Prefer live observed speed for current conditions
@@ -358,13 +376,13 @@ def analyze_traffic(state: TrafficAgentState) -> TrafficAgentState:
             
             zone_report = ZoneReport(
                 zone_id=zone_id,
-                zone_name=zone_pred["zone_name"],
-                is_demo_zone=zone_pred.get("is_demo_zone", True),
+                zone_name=zone_name,
+                is_demo_zone=False,
                 current_average_speed=current_speed,
                 predicted_average_speed=predicted_speed,
                 speed_change=zone_pred.get("speed_change"),
                 speed_change_percent=zone_pred.get("speed_change_percent"),
-                congestion_level=zone_pred.get("congestion_level", "unknown"),
+                congestion_level=classify_congestion(current_speed),
                 segment_count=zone_pred.get("segment_count", 0),
                 incident_count=len(incidents_in_zone),
             )
@@ -410,14 +428,16 @@ def analyze_traffic(state: TrafficAgentState) -> TrafficAgentState:
 # NODE 5: BUILD_REPORT
 # ============================================================
 def build_report(state: TrafficAgentState) -> TrafficAgentState:
-    """Build the final TrafficReport."""
+    """Build the final TrafficReport.
+
+    Always produces a report: when ML predictions are unavailable the zones
+    carry live-observed speeds (or explicit "unknown") and the limitations
+    record exactly what is missing. A missing input degrades the report;
+    it never turns the endpoint into a 500.
+    """
     log.info("Building traffic report...")
     
     try:
-        if not state.zone_reports:
-            state.errors.append("No zone reports available")
-            return state
-        
         # Build incident reports
         incident_reports: List[IncidentReport] = []
         for inc in state.live_incidents:
@@ -435,13 +455,27 @@ def build_report(state: TrafficAgentState) -> TrafficAgentState:
         limitations.extend([
             "Historical ML segments do not contain geographic coordinates; "
             "zone-level ML aggregation is currently limited.",
-            "Zone-level speed predictions use demo values with synthetic variation.",
             "Live incidents are sourced from LTA DataMall Traffic Incidents API.",
         ])
+        # The static-CSV fallback appends its own warning above; only claim
+        # demo values when that fallback is genuinely in use.
+        if any("Fell back to static CSV predictions" in w for w in state.warnings):
+            limitations.append(
+                "Zone-level speed predictions use demo values with synthetic variation."
+            )
+        if not state.zone_predictions:
+            limitations.append(
+                "Next-5-minute ML speed predictions are unavailable; "
+                "predicted speeds are omitted and only live-observed data is reported."
+            )
         
         # Add errors as limitations if any
         for err in state.errors:
             limitations.append(f"Error: {err}")
+        if not state.zone_reports:
+            # Zone roster itself failed to load (get_all_zones raised inside
+            # analyze_traffic): record it honestly, still emit the report.
+            limitations.append("Error: No zone reports available (zone roster could not be loaded)")
         
         report = TrafficReport(
             generated_at=datetime.now(),

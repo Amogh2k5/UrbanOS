@@ -282,3 +282,36 @@ class EnvironmentAgent:
 def build_agent() -> EnvironmentAgent:
     """Construct the default LangGraph Environment agent with repo-standard paths."""
     return EnvironmentAgent()
+
+
+def get_environment_agent() -> CompiledStateGraph:
+    """Get or create the compiled Environment agent graph."""
+    global _environment_agent_graph
+    if _environment_agent_graph is None:
+        _environment_agent_graph = build_agent()
+    return _environment_agent_graph
+
+
+def run_environment_agent(
+    fetcher: Optional[Callable[[], Dict[str, Any]]] = None,
+    prediction_timestamp: Optional[pd.Timestamp] = None,
+) -> "EnvironmentReport":
+    """Run the Environment Agent and return an EnvironmentReport.
+    
+    Args:
+        fetcher: Optional custom fetcher for the environment data.
+        prediction_timestamp: Optional timestamp for the prediction.
+        
+    Returns:
+        EnvironmentReport with weather and PM2.5 predictions.
+    """
+    agent = build_agent()
+    if fetcher is not None:
+        agent.fetcher = fetcher
+    if prediction_timestamp is not None:
+        return agent.invoke({"t0": prediction_timestamp}).get("report")
+    return agent.invoke({}).get("report")
+
+
+# Global compiled graph
+_environment_agent_graph: Optional[CompiledStateGraph] = None

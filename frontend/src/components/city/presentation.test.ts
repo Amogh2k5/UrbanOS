@@ -90,7 +90,7 @@ describe("domain fills are assigned by domain, never by status", () => {
     "pm25", "weather", "flood",
     "fire", "crime",
     "water", "energy", "waste",
-    "land", "housing",
+    "land", "housing", "construction",
   ];
 
   it("covers every domain in the app", () => {

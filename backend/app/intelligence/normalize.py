@@ -34,7 +34,11 @@ DOMAIN_NAMES: Dict[str, str] = {
     "fire": "Fire",
     "crime": "Crime",
     "water": "Water",
+    "waste": "Waste",
+    "energy": "Energy",
     "land": "Land Use",
+    "housing": "Housing",
+    "construction": "Construction",
 }
 
 DOMAIN_ROUTES: Dict[str, str] = {
@@ -47,8 +51,26 @@ DOMAIN_ROUTES: Dict[str, str] = {
     "fire": "/safety/fire",
     "crime": "/safety/crime",
     "water": "/infrastructure/water",
+    "waste": "/infrastructure/waste",
+    "energy": "/infrastructure/energy",
     "land": "/planning/land",
+    "housing": "/planning/housing",
+    "construction": "/planning/construction",
 }
+
+#: The canonical module roster, one entry per UrbanOS domain. The coordinator
+#: also owns a legacy ``environment`` umbrella identifier (pm25+weather); it is
+#: deliberately absent here so no surface ever renders two cards for the same
+#: domain. Every consumer that needs "all modules" must use this constant
+#: rather than its own hand-maintained list - the Overview card grid rendering
+#: only 10 of 14 modules came from exactly such a drifting list.
+CANONICAL_MODULES: tuple = (
+    "traffic", "roads", "transit",
+    "pm25", "weather", "flood",
+    "fire", "crime",
+    "water", "waste", "energy",
+    "land", "housing", "construction",
+)
 
 
 def _iso(value: Any) -> Optional[str]:
@@ -146,6 +168,22 @@ def _count_kpi(label: str, value: Any) -> Optional[Dict[str, Any]]:
     return {"label": label, "value": int(count), "unit": ""}
 
 
+def _construction_count(data: Dict[str, Any], list_key: str, source_key: str) -> Optional[int]:
+    """Count Construction records only when their source returned usable data."""
+    rows = data.get(list_key)
+    if not isinstance(rows, list):
+        return None
+    source_rows = data.get("sources")
+    if isinstance(source_rows, list):
+        source = next((item for item in source_rows
+                       if isinstance(item, dict) and item.get("key") == source_key), None)
+        if source is None or str(source.get("status") or "").lower() not in {"available", "empty"}:
+            return None
+    elif str(data.get("status") or "").upper() == "UNAVAILABLE":
+        return None
+    return len(rows)
+
+
 def build_kpi(module_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Single headline metric per module, or None when unsupported.
 
@@ -195,9 +233,12 @@ def build_kpi(module_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return _count_kpi("Active Incidents", data.get("active_incident_count"))
     elif module_id == "crime":
         total = _num(data.get("total_physical_crime_2025"))
+        if total is None:
+            total = _num(data.get("total_scams_cybercrime_2025", data.get("scams_cybercrime")))
         if total is not None:
             return {
-                "label": "Physical Crime",
+                "label": "Physical Crime" if data.get("total_physical_crime_2025") is not None
+                or data.get("physical_crime") is not None else "Scams & Cybercrime",
                 "value": int(total),
                 "unit": "",
             }
@@ -221,6 +262,33 @@ def build_kpi(module_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         count = (data.get("planning") or {}).get("planning_area_count")
         if count is not None:
             return {"label": "Planning Areas", "value": count, "unit": ""}
+    elif module_id == "waste":
+        # The report carries its own Indicator list (key/label/value/unit).
+        for ind in (data.get("kpis") or []):
+            if isinstance(ind, dict) and ind.get("key") == "total_generated":
+                value = _num(ind.get("value"))
+                if value is not None:
+                    return {
+                        "label": "Total Waste Generated",
+                        "value": value,
+                        "unit": ind.get("unit") or "tonnes",
+                    }
+        return None
+    elif module_id == "energy":
+        value = _num(data.get("latest_peak_demand_mw"))
+        if value is not None:
+            return {"label": "Peak Demand", "value": value, "unit": "MW"}
+        return None
+    elif module_id == "housing":
+        value = _num((data.get("kpis") or {}).get("resale_applications"))
+        if value is not None:
+            return {"label": "Resale Applications", "value": int(value), "unit": ""}
+        return None
+    elif module_id == "construction":
+        count = _construction_count(data, "greenmark_buildings", "greenmark_buildings")
+        if count is not None:
+            return _count_kpi("Green Mark Buildings", count)
+        return None
     return None
 
 
@@ -247,6 +315,8 @@ def determine_status(module_id: str, data: Dict[str, Any]) -> str:
 
     if module_id == "traffic":
         congestion = str(data.get("overall_congestion_level") or "")
+        if congestion in ("", "unknown"):
+            return "unavailable"
         if congestion in ("severe", "heavy"):
             return "critical"
         if congestion == "moderate":
@@ -355,7 +425,303 @@ def determine_status(module_id: str, data: Dict[str, Any]) -> str:
     if module_id == "land":
         return "normal"
 
+    if module_id == "waste":
+        # Waste publishes an explicit STATISTICS_AVAILABLE status; anything
+        # else (PARTIAL, unavailable, absent) cannot support a healthy claim.
+        return "normal" if str(data.get("status") or "").upper() == "STATISTICS_AVAILABLE" else "unavailable"
+
+    if module_id == "energy":
+        return "normal" if str(data.get("status") or "").upper() == "OK" else "unavailable"
+
+    if module_id == "housing":
+        return "normal" if str(data.get("status") or "").upper() == "AVAILABLE" else "unavailable"
+
+    if module_id == "construction":
+        # ConstructionReport publishes OK only when all sources are available;
+        # PARTIAL/UNAVAILABLE cannot support a fully available assessment.
+        return "normal" if str(data.get("status") or "").upper() in ("OK", "AVAILABLE", "EMPTY") else "unavailable"
+
     return "normal"
+
+
+# ------------------------------------------------------------- card metrics
+def _resolve_metric_path(source: Any, path: str) -> Any:
+    """Resolve one metric candidate path against a report dict.
+
+    Conventions:
+      ``a.b.c``    dotted lookup into nested dicts;
+      ``kpis@key`` indicator-list lookup - items of ``source["kpis"]`` whose
+                   ``key`` matches contribute their ``value`` (Waste reports);
+      ``len:a.b``  length of the list at the path. An empty list is a real
+                   zero (the dataset loaded with no records), not a gap.
+
+    Returns ``None`` when nothing usable is found. An explicit ``0`` is a
+    value and is preserved; only ``None`` means "cannot be obtained".
+    """
+    if not isinstance(source, dict):
+        return None
+
+    if path.startswith("len:"):
+        value = _resolve_metric_path(source, path[4:])
+        if isinstance(value, (list, tuple)):
+            return len(value)
+        return None
+
+    if path.startswith("kpis@"):
+        key = path[5:]
+        for item in (source.get("kpis") or []):
+            if isinstance(item, dict) and item.get("key") == key:
+                return item.get("value")
+        return None
+
+    node: Any = source
+    for part in path.split("."):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(part)
+        if node is None:
+            return None
+    return node
+
+
+def _metric_getter(*paths: str):
+    """Extractor that returns the first non-None candidate path."""
+    def get(source: Dict[str, Any]) -> Any:
+        for path in paths:
+            value = _resolve_metric_path(source, path)
+            if value is not None:
+                return value
+        return None
+    return get
+
+
+def _text_metric(get):
+    """Normalise enum-ish text (free_flow, LOW) for display; keep numbers."""
+    def get_value(source: Dict[str, Any]) -> Any:
+        value = get(source)
+        if isinstance(value, str):
+            return value.replace("_", " ").title()
+        return value
+    return get_value
+
+
+def _risk_metric():
+    """Flood-style risk: only a real band is a reading; UNKNOWN is a gap."""
+    def get(source: Dict[str, Any]) -> Any:
+        value = _resolve_metric_path(source, "risk_level")
+        if value is None:
+            return None
+        band = str(getattr(value, "value", value)).upper()
+        if band not in ("LOW", "MODERATE", "HIGH", "CRITICAL"):
+            return None
+        return band.title()
+    return get
+
+
+def _pm25_region_metric(reducer) -> Any:
+    """Mean/Max over the per-region readings (a regions dict of dicts)."""
+    def get(source: Dict[str, Any]) -> Any:
+        regions = source.get("regions")
+        if not isinstance(regions, dict) or not regions:
+            return None
+        values = [
+            _num(r.get("value")) for r in regions.values()
+            if isinstance(r, dict)
+        ]
+        values = [v for v in values if v is not None]
+        if not values:
+            return None
+        return round(reducer(values), 1)
+    return get
+
+
+def _water_potable_metric():
+    """Potable sales: the raw report carries {value, unit}; the coordinator
+    flattens it to a number, so both shapes resolve."""
+    def get(source: Dict[str, Any]) -> Any:
+        raw = _resolve_metric_path(source, "usage.potable_total")
+        if isinstance(raw, dict) and raw.get("value") is not None:
+            return raw
+        return _resolve_metric_path(source, "potable_sales_latest_mm3")
+    return get
+
+
+def _water_drain_metric():
+    """Drain sensors reporting, as ``reporting/total`` when either exists."""
+    def get(source: Dict[str, Any]) -> Any:
+        drain = source.get("drain")
+        if isinstance(drain, dict) and drain.get("readings_available") is not True:
+            return None
+        reporting = _resolve_metric_path(source, "drain.sensors_with_readings")
+        if reporting is None:
+            reporting = _resolve_metric_path(source, "drain_sensors_reporting")
+        total = _resolve_metric_path(source, "drain.sensor_count")
+        if total is None:
+            total = _resolve_metric_path(source, "drain_sensor_count")
+        if total == 0:
+            return None
+        if reporting is None and total is None:
+            return None
+        if reporting is None or total is None:
+            return str(reporting if reporting is not None else total)
+        return f"{reporting}/{total}"
+    return get
+
+
+#: One Overview card metric: key (stable id), label, unit, extractor.
+#: ``unit=""`` means the value may carry its own unit (dict {value, unit}).
+MetricSpec = Dict[str, Any]
+
+
+def _spec(key: str, label: str, unit: str, get) -> MetricSpec:
+    return {"key": key, "label": label, "unit": unit, "get": get}
+
+
+#: The intended Overview metrics per module and their source fields. Every
+#: extractor is independent: one missing field can never discard the group -
+#: the remaining metrics still render, and the missing one renders as an
+#: explicit unavailable placeholder (never a zero, never a guess). The
+#: headline :func:`build_kpi` chooses is always one of these metric labels
+#: (with the same value), so a card never shows two numbers for one metric.
+MODULE_METRICS: Dict[str, List[MetricSpec]] = {
+    "traffic": [
+        _spec("average_speed", "Average Speed", "km/h",
+              _metric_getter("overall_average_speed", "average_speed_kmh")),
+        _spec("congestion", "Congestion", "",
+              _text_metric(_metric_getter("overall_congestion_level", "congestion_level"))),
+        _spec("incidents", "Live Incidents", "",
+              _metric_getter("incident_count")),
+    ],
+    "roads": [
+        _spec("active_works", "Active Road Works", "",
+              _metric_getter("road_works.active")),
+        _spec("upcoming_works", "Upcoming Works", "",
+              _metric_getter("road_works.upcoming")),
+        _spec("openings", "Road Openings", "",
+              _metric_getter("road_openings.active")),
+    ],
+    "transit": [
+        _spec("train_alerts", "Train Alerts", "",
+              _metric_getter("active_train_alerts")),
+        _spec("bus_services", "Bus Services", "",
+              _metric_getter("bus_services_count")),
+        _spec("bus_stops", "Bus Stops", "",
+              _metric_getter("bus_stops_count")),
+    ],
+    "pm25": [
+        _spec("current_avg", "Current PM2.5", "µg/m³",
+              _pm25_region_metric(lambda vs: sum(vs) / len(vs))),
+        _spec("highest_region", "Highest Region", "µg/m³",
+              _pm25_region_metric(max)),
+    ],
+    "weather": [
+        _spec("temperature", "Temperature", "°C",
+              _metric_getter("general.temperature_c")),
+        _spec("forecast", "Forecast", "",
+              _metric_getter("general.forecast_text", "general.forecast_code")),
+        _spec("humidity", "Humidity", "%",
+              _metric_getter("general.relative_humidity_pct")),
+    ],
+    "flood": [
+        _spec("risk", "Flood Risk", "", _risk_metric()),
+        _spec("active_alerts", "Active Alerts", "",
+              _metric_getter("active_alert_count")),
+    ],
+    "fire": [
+        _spec("active_incidents", "Active Incidents", "",
+              _metric_getter("active_incident_count", "active_incidents")),
+        _spec("critical_incidents", "Critical Incidents", "",
+              _metric_getter("critical_incident_count", "critical_incidents")),
+    ],
+    "crime": [
+        _spec("physical_crime", "Physical Crime", "",
+              _metric_getter("total_physical_crime_2025", "physical_crime")),
+        _spec("scams", "Scams & Cybercrime", "",
+              _metric_getter("total_scams_cybercrime_2025", "scams_cybercrime")),
+    ],
+    "water": [
+        _spec("potable_sales", "Potable Sales", "million m³",
+              _water_potable_metric()),
+        _spec("drain_sensors", "Drain Sensors Reporting", "",
+              _water_drain_metric()),
+        _spec("newater", "NEWater Output", "million m³",
+              _metric_getter("usage.newater")),
+    ],
+    "waste": [
+        _spec("generated", "Total Waste Generated", "tonnes",
+              _metric_getter("waste_generated_tonnes", "kpis@total_generated")),
+        _spec("recycled", "Total Recycled", "tonnes",
+              _metric_getter("waste_recycled_tonnes", "kpis@total_recycled")),
+        _spec("recycling_rate", "Recycling Rate", "%",
+              _metric_getter("overall_recycling_rate_pct", "kpis@overall_recycling_rate")),
+    ],
+    "energy": [
+        _spec("peak_demand", "Peak Demand", "MW",
+              _metric_getter("latest_peak_demand_mw", "key_metrics.latest_peak_demand_mw")),
+        _spec("max_peak", "Peak on Record", "MW",
+              _metric_getter("max_peak_demand_mw", "key_metrics.max_peak_demand_mw")),
+        _spec("solar", "Solar Capacity", "MWp",
+              _metric_getter("latest_solar_capacity_mwp", "key_metrics.latest_solar_capacity_mwp")),
+    ],
+    "land": [
+        _spec("area", "Land-Use Area", "km²",
+              _metric_getter("land_use.total_area_km2", "land_use_area_km2")),
+        _spec("planning_areas", "Planning Areas", "",
+              _metric_getter("planning.planning_area_count", "zone_count")),
+        _spec("categories", "Use Categories", "",
+              _metric_getter("land_use.distinct_categories", "distinct_categories")),
+    ],
+    "housing": [
+        _spec("resale_apps", "Resale Applications", "",
+              _metric_getter("resale_applications", "kpis.resale_applications")),
+        _spec("property_records", "HDB Property Records", "",
+              _metric_getter("hdb_property_records", "kpis.hdb_property_records")),
+        _spec("dwelling_units", "Dwelling Units", "",
+              _metric_getter("hdb_total_dwelling_units_in_records",
+                             "kpis.hdb_total_dwelling_units_in_records")),
+    ],
+    "construction": [
+        _spec("greenmark", "Green Mark Buildings", "",
+              lambda data: _construction_count(data, "greenmark_buildings", "greenmark_buildings")),
+        _spec("pipeline", "Pipeline Projects", "",
+              lambda data: _construction_count(data, "pipeline_records", "ura_construction_pipeline")),
+    ],
+}
+
+
+def build_card_metrics(module_id: str, source: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The Overview card metric list for one module, from any source shape.
+
+    ``source`` is either a raw domain-report dict (peek/module-detail path) or
+    a coordinator ``DomainStatus.key_metrics`` mapping (coordinator-cache
+    path); each spec lists candidate fields for both, so one table serves the
+    two. Every metric is extracted independently:
+
+      * a field that resolves (including ``0``) is rendered;
+      * a field that cannot be obtained renders as an explicit unavailable
+        placeholder - it never discards its sibling metrics, and it is never
+        replaced by a zero or an invented value.
+    """
+    out: List[Dict[str, Any]] = []
+    for spec in MODULE_METRICS.get(module_id, []):
+        value = None
+        unit = spec["unit"] or ""
+        try:
+            value = spec["get"](source or {})
+        except Exception:
+            value = None
+        # A {value, unit} payload (e.g. water potable sales) carries its own
+        # unit; adopt it so the card shows the agency's own wording.
+        if isinstance(value, dict):
+            unit = str(value.get("unit") or unit)
+            value = value.get("value")
+        out.append({
+            "key": spec["key"],
+            "label": spec["label"],
+            "value": value,
+            "unit": unit,
+        })
+    return out
 
 
 # ----------------------------------------------------------------- findings
@@ -607,6 +973,10 @@ def normalize_domain_report(module_id: str, data: Dict[str, Any]) -> DomainStatu
                 "stale", "age_seconds", "partial", "unavailable_sources"):
         if data.get(key) is not None:
             key_metrics[key] = data[key]
+    # The full card metric list, extracted independently per metric so a
+    # single missing field cannot discard the group. Consumers that only
+    # need the headline keep reading key_metrics["headline"].
+    key_metrics["metrics"] = build_card_metrics(module_id, data)
 
     alerts = data.get("alerts") or []
     return DomainStatus(

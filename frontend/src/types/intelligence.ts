@@ -105,6 +105,9 @@ export interface CitySituationReport {
   evidence: CityEvidenceEntry[];
   confidence: "high" | "medium" | "low";
   limitations: string[];
+  data_gaps?: string[];
+  warnings?: string[];
+  errors?: string[];
   source_reports: Record<string, any>;
   is_ml_prediction: boolean;
 }

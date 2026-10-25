@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import logging
 import os
+import hashlib
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
+from backend.app.upstream import SingleFlightTTLCache
 
 from backend.app.mobility.traffic.agent import run_traffic_agent
 from backend.app.mobility.traffic.data import TrafficReport
@@ -23,6 +26,9 @@ _INCIDENTS_ENDPOINT = "/TrafficIncidents"
 _SPEED_BANDS_ENDPOINT = "/v4/TrafficSpeedBands"
 _TIMEOUT = 15.0
 _PAGE_SIZE = 500
+_SPEED_BANDS_CACHE = SingleFlightTTLCache()
+_SPEED_BANDS_TTL_S = 30.0
+_SPEED_BANDS_FAILURE_TTL_S = 10.0
 
 # ============================================================
 # TRAFFIC INCIDENTS ADAPTER (from incidents.py)
@@ -205,7 +211,7 @@ class TrafficSpeedBandV2:
     start_longitude: Optional[float]
     end_latitude: Optional[float]
     end_longitude: Optional[float]
-    speed_midpoint: float
+    speed_midpoint: Optional[float]
     zone_id: Optional[str]
     zone_name: Optional[str]
     observed_at: str
@@ -276,6 +282,15 @@ class TrafficSpeedBandsV2ApiClient:
 
     def fetch(self) -> TrafficSpeedBandsV2Snapshot:
         """Fetch latest Traffic Speed Bands v2 snapshot from live API."""
+        key_fingerprint = hashlib.sha256((self.api_key or "").encode()).hexdigest()[:16]
+        key = (self.base_url, _SPEED_BANDS_ENDPOINT, key_fingerprint, self.timeout)
+        return _SPEED_BANDS_CACHE.get_or_fetch(
+            key, self._fetch_uncached, ttl_seconds=_SPEED_BANDS_TTL_S,
+            error_ttl_seconds=_SPEED_BANDS_FAILURE_TTL_S,
+            cache_result=lambda snapshot: bool(snapshot.is_live),
+        )
+
+    def _fetch_uncached(self) -> TrafficSpeedBandsV2Snapshot:
         headers = {"AccountKey": self.api_key, "accept": "application/json"}
         url = f"{self.base_url}{_SPEED_BANDS_ENDPOINT}"
 
@@ -403,8 +418,10 @@ class TrafficSpeedBandsV2ApiClient:
             end_lon_f = _to_float(end_lon)
 
             # Calculate speed midpoint
-            speed_midpoint = 0.0
-            if min_speed is not None and max_speed is not None:
+            speed_midpoint = None
+            if (min_speed is not None and max_speed is not None
+                    and math.isfinite(min_speed) and math.isfinite(max_speed)
+                    and 0 <= min_speed <= max_speed):
                 speed_midpoint = (min_speed + max_speed) / 2.0
 
             # Zone mapping via midpoint

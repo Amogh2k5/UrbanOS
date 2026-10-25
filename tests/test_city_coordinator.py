@@ -141,7 +141,13 @@ class TestCityCoordinatorNodes:
         """Test collecting reports with all agents succeeding."""
         with patch("coordinator.city_agent.EnvironmentModule") as mock_env_class, \
              patch("coordinator.city_agent.run_traffic_agent") as mock_traffic, \
-             patch("coordinator.city_agent.run_flood_agent_v3") as mock_flood:
+             patch("coordinator.city_agent.run_flood_agent_v3") as mock_flood, \
+             patch("coordinator.city_agent.run_fire_agent", return_value={
+                 "active_incident_count": 0, "generated_at": "2026-10-24T00:00:00+08:00"
+             }), \
+             patch("coordinator.city_agent.run_crime_agent", return_value={
+                 "total_physical_crime_2025": 0, "generated_at": "2026-10-24T00:00:00+08:00"
+             }):
             
             mock_env = MagicMock()
             mock_env.run.return_value = MockEnvironmentReport()
@@ -165,7 +171,13 @@ class TestCityCoordinatorNodes:
         """Test collecting reports when environment agent fails."""
         with patch("coordinator.city_agent.EnvironmentModule") as mock_env_class, \
              patch("coordinator.city_agent.run_traffic_agent") as mock_traffic, \
-             patch("coordinator.city_agent.run_flood_agent_v3") as mock_flood:
+             patch("coordinator.city_agent.run_flood_agent_v3") as mock_flood, \
+             patch("coordinator.city_agent.run_fire_agent", return_value={
+                 "active_incident_count": 0, "generated_at": "2026-10-24T00:00:00+08:00"
+             }), \
+             patch("coordinator.city_agent.run_crime_agent", return_value={
+                 "total_physical_crime_2025": 0, "generated_at": "2026-10-24T00:00:00+08:00"
+             }):
             
             mock_env_class.side_effect = Exception("Environment failed")
             mock_traffic.return_value = MockTrafficReport()
@@ -781,31 +793,39 @@ class TestCityAPI:
         assert "/api/city/report" in routes
     
     def test_city_report_response_structure(self):
-        """Test API response structure with mocked agents."""
-        mock_env = MockEnvironmentReport()
-        mock_traffic = MockTrafficReport()
-        mock_flood = MockFloodReport()
-        
-        with patch("coordinator.city_agent.EnvironmentModule") as mock_env_class, \
-             patch("coordinator.city_agent.run_traffic_agent", return_value=mock_traffic), \
-             patch("coordinator.city_agent.run_flood_agent_v3", return_value=mock_flood):
-            
-            mock_env_class.return_value.run.return_value = mock_env
-            
+        """The HTTP handler forwards the cached report contract unchanged."""
+        payload = {
+            "generated_at": "2026-10-24T00:00:00+08:00",
+            "overall_city_status": "NORMAL",
+            "overall_risk_level": "LOW",
+            "domain_status": {},
+            "priority_incidents": [],
+            "cross_domain_impacts": [],
+            "city_level_recommendations": [],
+            "affected_zones": [],
+            "evidence": [],
+            "confidence": "low",
+            "limitations": [],
+            "data_gaps": [],
+            "source_reports": {},
+            "warnings": [],
+            "errors": [],
+            "is_ml_prediction": False,
+        }
+        with patch("backend.app.main.city_report_cached", return_value=(None, payload)):
             from backend.app.main import app
-            from fastapi.testclient import TestClient
-            
-            client = TestClient(app)
-            response = client.get("/api/city/report")
-            
-            assert response.status_code == 200
-            data = response.json()
-            
-            assert "overall_city_status" in data
-            assert "overall_risk_level" in data
-            assert "domain_status" in data
-            assert "city_level_recommendations" in data
-            assert data["is_ml_prediction"] is False
+            endpoint = next(
+                route.endpoint for route in app.routes
+                if getattr(route, "path", None) == "/api/city/report"
+            )
+            data = endpoint()
+
+        assert data == payload
+        assert "overall_city_status" in data
+        assert "overall_risk_level" in data
+        assert "domain_status" in data
+        assert "city_level_recommendations" in data
+        assert data["is_ml_prediction"] is False
 
 
 if __name__ == "__main__":

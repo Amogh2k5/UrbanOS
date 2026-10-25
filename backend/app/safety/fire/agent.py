@@ -106,3 +106,15 @@ def run_fire_agent() -> FireReport:
     state = FireAgentState()
     result = create_fire_agent().compile().invoke(state)
     return result["report"]
+
+
+# Global compiled graph
+_fire_agent_graph = None
+
+
+def get_fire_agent():
+    """Get or create the compiled Fire agent graph."""
+    global _fire_agent_graph
+    if _fire_agent_graph is None:
+        _fire_agent_graph = create_fire_agent()
+    return _fire_agent_graph

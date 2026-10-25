@@ -201,12 +201,17 @@ export default function FirePage() {
           )}
 
           {fireReport && !fireLoading && !fireError && (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              <KPICard label="Active Incidents" value={fireReport.active_incident_count ?? 0} icon={AlertTriangle} />
-              <KPICard label="Critical Incidents" value={fireReport.critical_incident_count ?? 0} icon={FireExtinguisher} />
-              <KPICard label="Incidents Today" value={fireReport.incidents_today ?? 0} icon={Clock} />
-              <KPICard label="Resolved Recent" value={fireReport.resolved_recent_count ?? 0} icon={Check} />
-            </div>
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                <KPICard label="Active Incidents" value={fireReport.active_incident_count ?? 'Unavailable'} icon={AlertTriangle} />
+                <KPICard label="Critical Incidents" value={fireReport.critical_incident_count ?? 'Unavailable'} icon={FireExtinguisher} />
+                <KPICard label="Incidents Today" value={fireReport.incidents_today ?? 'Unavailable'} icon={Clock} />
+                <KPICard label="Resolved Recent" value={fireReport.resolved_recent_count ?? 'Unavailable'} icon={Check} />
+              </div>
+              <p data-testid="fire-feed-limitation" className="mt-3 text-xs text-slate-600">
+                SCDF published incident reports may be incomplete or delayed; they are not a real-time dispatch feed. Annual fire statistics are historical.
+              </p>
+            </>
           )}
 
           {fireReport && !fireLoading && !fireError && (
@@ -215,7 +220,7 @@ export default function FirePage() {
               <div className="flex flex-wrap gap-2">
                 {Object.entries(fireReport.regional_counts).map(([region, count]) => (
                   <span key={region} className="px-2 py-1 text-xs bg-slate-100 rounded border border-slate-200">
-                    {region}: {count ?? 0}
+                    {region}: {count ?? 'Unavailable'}
                   </span>
                 ))}
               </div>

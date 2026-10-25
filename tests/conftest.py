@@ -21,10 +21,19 @@ Tests that genuinely need a background run enable it themselves - see
 """
 
 import os
+import sys
 
 os.environ["URBANOS_COORDINATOR_BACKGROUND"] = "0"
+os.environ["URBANOS_BACKGROUND_SERVICES"] = "0"
 
 import pytest  # noqa: E402
+
+# A few legacy tests import ``coordinator.city_agent`` after placing
+# ``backend/app`` on PYTHONPATH, while production and the offline fixtures use
+# ``backend.app.coordinator.city_agent``. Make both spellings resolve to one
+# module so provider stubs actually intercept the registered graph callbacks.
+from backend.app.coordinator import city_agent as _canonical_city_agent  # noqa: E402
+sys.modules["coordinator.city_agent"] = _canonical_city_agent
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +42,45 @@ def _coordinator_background_runs_disabled():
 
     access.set_background_runs_enabled(False)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _offline_new_coordinator_domains():
+    """Keep added domain-graph providers deterministic at the graph boundary."""
+    from unittest.mock import patch
+    from contextlib import ExitStack
+    from backend.app.coordinator import city_agent
+
+    with ExitStack() as stack:
+        for name in (
+            "run_transit_agent", "run_roads_agent", "run_weather_agent",
+            "run_pm25_agent", "run_construction_agent",
+        ):
+            stack.enter_context(patch.object(
+                city_agent, name,
+                return_value={"error": f"{name.removeprefix('run_').removesuffix('_agent')} test provider unavailable"},
+            ))
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _offline_remaining_coordinator_providers():
+    """Prevent coordinator endpoint tests from reaching unrelated live APIs."""
+    from unittest.mock import patch
+    from contextlib import ExitStack
+    from backend.app.coordinator import city_agent
+
+    names = (
+        "run_traffic_agent", "run_flood_agent_v3",
+        "run_water_agent", "run_land_agent", "run_fire_agent", "run_crime_agent",
+    )
+    with ExitStack() as stack:
+        for name in names:
+            stack.enter_context(patch.object(
+                city_agent, name,
+                return_value={"error": f"{name.removeprefix('run_').removesuffix('_agent')} test provider unavailable"},
+            ))
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -120,8 +168,8 @@ def _offline_waste_agent():
             services=ServicesSection(
                 licensee_count=15,
                 classes=[
-                    ServiceClass(label="General Waste", licensees=12),
-                    ServiceClass(label="Specialised", licensees=3),
+                    ServiceClass(key="A", label="General Waste", description="Test fixture class", licensees=12),
+                    ServiceClass(key="B", label="Specialised", description="Test fixture class", licensees=3),
                 ],
             ),
             infrastructure=InfrastructureSection(

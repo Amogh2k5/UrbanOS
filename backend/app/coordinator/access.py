@@ -86,6 +86,11 @@ def _fresh_cache_hit() -> Optional[Tuple[Any, Dict[str, Any]]]:
     return None
 
 
+def peek_city_report_cached() -> Optional[Tuple[Any, Dict[str, Any]]]:
+    """Return a fresh coordinator result without starting or waiting for a run."""
+    return _fresh_cache_hit()
+
+
 def city_report_cached(
     force_refresh: bool = False,
     *,

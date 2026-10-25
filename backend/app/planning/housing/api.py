@@ -5,22 +5,28 @@ import threading
 import time
 from fastapi import APIRouter, HTTPException, Query
 from .agent import run_housing_agent
+from .data import clear_housing_source_cache
 from .models import HousingReport, HousingForecast, ForecastPoint
 from .forecasting import generate_forecast, load_model_metadata
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/planning/housing", tags=["planning-housing"])
 _lock = threading.Lock()
-_cache: dict = {"report": None, "expires_at": 0.0}
+_cache: dict = {"report": None, "expires_at": 0.0, "cached_at": 0.0}
 _forecast_cache: dict = {"forecast": None, "expires_at": 0.0}
 
 def get_housing_report(refresh: bool = False) -> HousingReport:
     now = time.time()
+    request_started = time.monotonic()
     with _lock:
         report = _cache["report"]
+        if report is not None and refresh and _cache["cached_at"] > request_started:
+            return report
         if report is not None and not refresh and now < _cache["expires_at"]:
             return report
         try:
+            if refresh:
+                clear_housing_source_cache()
             report = run_housing_agent()
         except Exception as exc:
             log.exception("Housing report generation failed")
@@ -28,7 +34,20 @@ def get_housing_report(refresh: bool = False) -> HousingReport:
         _cache["report"] = report
         # Annual/quarterly sources don't need aggressive polling. Retry sooner for partial reports.
         _cache["expires_at"] = now + (300 if report.status == "UNAVAILABLE" else 1800)
+        _cache["cached_at"] = time.monotonic()
         return report
+
+
+def peek_housing_report():
+    """Return the cached report only while it is still fresh. Never runs the
+    agent and never blocks: ``get_housing_report`` holds ``_lock`` for the
+    whole run, so taking it here would make a cheap Overview card read wait
+    behind a full data fetch. A cold or expired cache reads as ``None``.
+    """
+    cached = _cache["report"]
+    if cached is not None and time.time() < _cache["expires_at"]:
+        return cached
+    return None
 
 def _to_housing_forecast(report) -> HousingForecast:
     """Convert ForecastReport dataclass to HousingForecast Pydantic model."""

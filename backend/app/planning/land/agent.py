@@ -300,6 +300,18 @@ def run_land_agent(fetcher: Optional[Callable[[], LandSnapshot]] = None) -> Land
     return report
 
 
+# Global compiled graph
+_land_agent_graph = None
+
+
+def get_land_agent():
+    """Get or create the compiled Land agent graph."""
+    global _land_agent_graph
+    if _land_agent_graph is None:
+        _land_agent_graph = create_land_agent()
+    return _land_agent_graph
+
+
 def agent_capabilities() -> Dict[str, Any]:
     """Static description used by the Overview module summary."""
     return {

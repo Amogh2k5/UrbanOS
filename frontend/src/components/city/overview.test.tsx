@@ -78,31 +78,32 @@ const REAL_MODULES: ModuleSummary[] = [
   },
 ];
 
+const ALL_CARD_IDS = ["traffic", "roads", "transit", "pm25", "weather", "flood", "fire", "crime", "water", "waste", "energy", "land", "housing", "construction"];
+
 // ======================================================== City Situation
 describe("CitySituationPanel", () => {
-  it("renders the backend narrative verbatim", () => {
+  it("renders a concise structured assessment instead of backend diagnostic narrative", () => {
     render(
       <CitySituationPanel
-        narrative="City operations are disrupted in Central South."
+        narrative="UNASSESSED UNKNOWN raw coordinator diagnostics"
         report={REAL_REPORT}
         assessmentReady
       />
     );
-    expect(screen.getByTestId("city-situation-narrative").textContent).toContain(
-      "City operations are disrupted in Central South."
-    );
+    expect(screen.getByTestId("city-situation-narrative").textContent).toContain("critical city status");
+    expect(screen.queryByText("UNASSESSED UNKNOWN raw coordinator diagnostics")).toBeNull();
   });
 
-  it("shows the coordinator status, risk and confidence", () => {
+  it("shows readable coordinator status and risk", () => {
     render(<CitySituationPanel narrative="x" report={REAL_REPORT} assessmentReady />);
-    expect(screen.getByTestId("city-status-badge").textContent).toBe("CRITICAL");
-    expect(screen.getByTestId("city-confidence").textContent).toContain("high");
+    expect(screen.getByTestId("city-status-badge").textContent).toBe("Critical");
+    expect(screen.getByTestId("city-risk").textContent).toContain("Critical risk");
   });
 
-  it("states plainly when no narrative is available rather than inventing one", () => {
+  it("uses structured report fields when narrative is unavailable", () => {
     render(<CitySituationPanel narrative={null} report={REAL_REPORT} assessmentReady />);
-    expect(screen.getByTestId("city-situation-unavailable")).toBeTruthy();
-    expect(screen.queryByTestId("city-situation-narrative")).toBeNull();
+    expect(screen.getByTestId("city-situation-narrative")).toBeTruthy();
+    expect(screen.queryByTestId("city-situation-unavailable")).toBeNull();
   });
 
   it("distinguishes an API error from a missing narrative", () => {
@@ -121,9 +122,8 @@ describe("CitySituationPanel", () => {
   it("surfaces affected zones and limitations as provenance", () => {
     render(<CitySituationPanel narrative="x" report={REAL_REPORT} assessmentReady />);
     expect(screen.getByTestId("city-affected-zones").textContent).toContain("Central South");
-    expect(screen.getByTestId("city-limitations").textContent).toContain(
-      "deterministic rule engine"
-    );
+    fireEvent.click(screen.getByText("Data coverage and limitations"));
+    expect(screen.getByTestId("city-data-coverage").textContent).toContain("deterministic rule engine");
   });
 
   it("renders with no report at all without crashing", () => {
@@ -160,8 +160,8 @@ describe("CitySituationPanel", () => {
       <CitySituationPanel narrative="Assessed." report={REAL_REPORT} assessmentReady />
     );
     expect(screen.queryByTestId("city-assessment-pending")).toBeNull();
-    expect(screen.getByTestId("city-status-badge").textContent).toBe("CRITICAL");
-    expect(screen.getByTestId("city-risk").textContent).toContain("CRITICAL");
+    expect(screen.getByTestId("city-status-badge").textContent).toBe("Critical");
+    expect(screen.getByTestId("city-risk").textContent).toContain("Critical risk");
   });
 
   it("renders no status block at all when there is no report", () => {
@@ -336,6 +336,22 @@ describe("DomainKpiGrid", () => {
     expect(cards[0].getAttribute("href")).toBe("/planning/land");
   });
 
+  it("renders exactly the 14 canonical card IDs without the legacy environment card", () => {
+    const modules: ModuleSummary[] = ALL_CARD_IDS.map((id) => ({ id, name: id, status: "unavailable", kpi: null, updated_at: null, detail_route: `/${id}` }));
+    render(<DomainKpiGrid modules={modules} domainsWithFindings={new Set()} onOpenInsight={vi.fn()} />);
+    expect(screen.getAllByTestId("domain-kpi-card").map((card) => card.getAttribute("data-module"))).toEqual(ALL_CARD_IDS);
+    expect(screen.queryByText("environment")).toBeNull();
+  });
+
+  it("labels Fire as SCDF published-feed data rather than a complete dispatch feed", () => {
+    const fire: ModuleSummary = {
+      id: "fire", name: "Fire", status: "unavailable", kpi: null,
+      updated_at: null, detail_route: "/safety/fire",
+    };
+    render(<DomainKpiGrid modules={[fire]} domainsWithFindings={new Set()} onOpenInsight={vi.fn()} />);
+    expect(screen.getByTestId("fire-card-limitation").textContent).toContain("not a complete real-time dispatch feed");
+  });
+
   it("renders the real KPI value and unit", () => {
     render(
       <DomainKpiGrid modules={REAL_MODULES} domainsWithFindings={new Set()} onOpenInsight={vi.fn()} />
@@ -377,6 +393,27 @@ describe("DomainKpiGrid", () => {
     // The honest status is still shown alongside the real metric.
     expect(screen.getByTestId("kpi-status").textContent).toBe("Unavailable");
     expect(screen.queryByTestId("kpi-value-unavailable")).toBeNull();
+  });
+
+  it("keeps Traffic headline, Crime sibling metrics, partial fields and zero values", () => {
+    const modules: ModuleSummary[] = [
+      { id: "traffic", name: "Traffic", status: "high", kpi: { label: "Average Speed", value: 34.2, unit: "km/h" }, metrics: [
+        { key: "average_speed_kmh", label: "Average Speed", value: 34.2, unit: "km/h" },
+        { key: "congestion_level", label: "Congestion", value: null, unit: "" },
+        { key: "incident_count", label: "Live Incidents", value: 0, unit: "" },
+      ], updated_at: null, detail_route: "/traffic", data_state: "partial" },
+      { id: "crime", name: "Crime", status: "normal", kpi: { label: "Scams & Cybercrime", value: 55244, unit: "" }, metrics: [
+        { key: "physical_crime", label: "Physical Crime", value: null, unit: "" },
+        { key: "scams_cybercrime", label: "Scams & Cybercrime", value: 55244, unit: "" },
+      ], updated_at: null, detail_route: "/crime", data_state: "partial" },
+    ];
+    render(<DomainKpiGrid modules={modules} domainsWithFindings={new Set()} onOpenInsight={vi.fn()} />);
+    expect(screen.getByText("34.2 km/h")).toBeTruthy();
+    expect(screen.getByTestId("kpi-metric-congestion_level").textContent).toContain("Unavailable");
+    expect(screen.getByTestId("kpi-metric-incident_count").textContent).toContain("0");
+    expect(screen.getByText("55244")).toBeTruthy();
+    expect(screen.getByTestId("kpi-metric-physical_crime").textContent).toContain("Unavailable");
+    expect(screen.getAllByTestId("kpi-data-state").every((el) => el.textContent === "Partial data")).toBe(true);
   });
 
   it("never renders a bare zero for a missing KPI", () => {

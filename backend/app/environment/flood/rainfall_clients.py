@@ -8,11 +8,14 @@ from __future__ import annotations
 import logging
 import os
 import time
+import hashlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 import httpx
+from backend.app.upstream import SingleFlightTTLCache, retry_429_delay
 
 log = logging.getLogger(__name__)
 
@@ -22,6 +25,13 @@ SG_OFFSET = timezone(timedelta(hours=8))
 MAX_RETRIES = 3
 BASE_BACKOFF_SECONDS = 2.0
 MAX_BACKOFF_SECONDS = 30.0
+_RAINFALL_CACHE = SingleFlightTTLCache()
+_RAINFALL_CACHE_TTL_S = 30.0
+_RAINFALL_FAILURE_TTL_S = 30.0
+_SUMATRA_CACHE = SingleFlightTTLCache()
+_SUMATRA_CACHE_TTL_S = 300.0
+_SUMATRA_FAILURE_TTL_S = 30.0
+_SUMATRA_MAX_WORKERS = 4
 
 
 # ---------- NEA Singapore 5-min rainfall ----------
@@ -125,6 +135,17 @@ class RainfallApiClient:
         self.timeout = timeout
 
     def fetch(self, date: Optional[str] = None) -> RainfallSnapshot:
+        api_key_fingerprint = hashlib.sha256((self.api_key or "").encode()).hexdigest()[:16]
+        key = (self.base_url, date, api_key_fingerprint, self.offline)
+        return _RAINFALL_CACHE.get_or_fetch(
+            key,
+            lambda: self._fetch_uncached(date),
+            ttl_seconds=_RAINFALL_CACHE_TTL_S,
+            error_ttl_seconds=_RAINFALL_FAILURE_TTL_S,
+            cache_result=lambda snapshot: snapshot.is_live or self.offline,
+        )
+
+    def _fetch_uncached(self, date: Optional[str]) -> RainfallSnapshot:
         payload, is_live = self._get_payload(date)
         return self._normalize(payload, is_live=is_live)
 
@@ -146,25 +167,25 @@ class RainfallApiClient:
             try:
                 with httpx.Client(timeout=self.timeout) as client:
                     resp = client.get(url, headers=headers, params=params)
-                    if resp.status_code == 429:
-                        if attempt < MAX_RETRIES - 1:
-                            backoff = min(BASE_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
-                            log.warning("Rate limited (HTTP 429) on attempt %d/%d, backing off %.1fs",
-                                       attempt + 1, MAX_RETRIES, backoff)
-                            time.sleep(backoff)
-                            continue
-                        log.warning("Rainfall live fetch failed after retries: HTTP 429 rate limit exceeded")
                     resp.raise_for_status()
                     return resp.json(), True
             except httpx.HTTPStatusError as e:
                 last_exception = e
                 if e.response.status_code == 429 and attempt < MAX_RETRIES - 1:
-                    backoff = min(BASE_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
+                    backoff = retry_429_delay(
+                        e, attempt, base_seconds=BASE_BACKOFF_SECONDS,
+                        max_seconds=MAX_BACKOFF_SECONDS,
+                    )
+                    backoff = backoff if backoff is not None else 0.0
                     log.warning("Rate limited (HTTP 429) on attempt %d/%d, backing off %.1fs",
                                attempt + 1, MAX_RETRIES, backoff)
                     time.sleep(backoff)
                     continue
                 log.warning("Rainfall live fetch failed: %s", e)
+                # 403 and other permanent HTTP errors are not transient; do
+                # not send the same rejected request again in this retry loop.
+                if e.response.status_code != 429:
+                    break
             except Exception as e:
                 last_exception = e
                 if attempt < MAX_RETRIES - 1:
@@ -175,7 +196,7 @@ class RainfallApiClient:
                     continue
                 log.warning("Rainfall live fetch failed: %s", e)
         
-        if self.allow_fallback_fixture:
+        if self.allow_fallback_fixture and self.offline:
             log.warning("Rainfall falling back to deterministic fixture (KPI only).")
             return _FALLBACK_FIXTURE, False
         raise last_exception
@@ -325,12 +346,12 @@ class SumatraGroupSummary:
     group_key: str
     locations_reporting: int
     locations_total: int
-    max_rainfall_mm: float
-    has_rain: bool
+    max_rainfall_mm: Optional[float]
+    has_rain: Optional[bool]
     representative_weather: str
     dominant_wind_direction: str
-    avg_wind_speed_ms: float
-    max_cloud_cover_pct: float
+    avg_wind_speed_ms: Optional[float]
+    max_cloud_cover_pct: Optional[float]
     latest_forecast_time: str
     locations: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -345,6 +366,8 @@ class SumatraForecastSnapshot:
     is_live: bool
     error: Optional[str] = None
     groups: Dict[str, SumatraGroupSummary] = field(default_factory=dict)
+    partial: bool = False
+    failed_locations: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -355,6 +378,8 @@ class SumatraForecastSnapshot:
             "unit": self.unit,
             "is_live": self.is_live,
             "error": self.error,
+            "partial": self.partial,
+            "failed_locations": self.failed_locations,
             "groups": {
                 k: {
                     "group_name": v.group_name,
@@ -387,6 +412,15 @@ class SumatraForecastApiClient:
         self.timeout = timeout
 
     def fetch(self) -> SumatraForecastSnapshot:
+        key = (self.base_url.rstrip("/"), self.offline,
+               tuple(str(loc["adm4"]) for loc in _ALL_BMKG_LOCATIONS))
+        return _SUMATRA_CACHE.get_or_fetch(
+            key, self._fetch_uncached, ttl_seconds=_SUMATRA_CACHE_TTL_S,
+            error_ttl_seconds=_SUMATRA_FAILURE_TTL_S,
+            cache_result=lambda snapshot: bool(snapshot.is_live and snapshot.groups) or self.offline,
+        )
+
+    def _fetch_uncached(self) -> SumatraForecastSnapshot:
         if self.offline:
             log.info("Sumatra forecast adapter offline=True; using fallback fixture.")
             return self._normalize(_BMKG_FALLBACK_FIXTURE, is_live=False, source="offline_fixture:BMKG_forecast")
@@ -394,16 +428,22 @@ class SumatraForecastApiClient:
         all_forecasts = []
         failed_locations = []
 
-        for loc in _ALL_BMKG_LOCATIONS:
-            try:
-                forecast = self._fetch_location(loc)
-                if forecast:
-                    all_forecasts.append(forecast)
-                else:
+        # Every location creates its own httpx.Client in _fetch_location, so
+        # requests can run concurrently without sharing a session. The worker
+        # cap bounds provider load and thread usage.
+        with ThreadPoolExecutor(max_workers=_SUMATRA_MAX_WORKERS) as pool:
+            futures = {pool.submit(self._fetch_location, loc): loc for loc in _ALL_BMKG_LOCATIONS}
+            for future in as_completed(futures):
+                loc = futures[future]
+                try:
+                    forecast = future.result()
+                    if forecast:
+                        all_forecasts.append(forecast)
+                    else:
+                        failed_locations.append(loc["adm4"])
+                except Exception as e:
+                    log.warning("BMKG fetch failed for %s: %s", loc["adm4"], e)
                     failed_locations.append(loc["adm4"])
-            except Exception as e:
-                log.warning(f"BMKG fetch failed for {loc['adm4']}: {e}")
-                failed_locations.append(loc["adm4"])
 
         if not all_forecasts and not self.offline:
             error_msg = f"BMKG API unavailable for all locations (failed: {len(failed_locations)})"
@@ -412,7 +452,7 @@ class SumatraForecastApiClient:
                 snapshot_at=_now_iso(),
                 source="error:BMKG_forecast",
                 provider="BMKG / api.bmkg.go.id",
-                endpoint=f"{_BMKG_BASE_URL}?adm4={{ADM4}}",
+                endpoint=f"{self.base_url}?adm4={{ADM4}}",
                 unit="mm",
                 is_live=False,
                 error=error_msg,
@@ -425,15 +465,17 @@ class SumatraForecastApiClient:
             snapshot_at=_now_iso(),
             source=source,
             provider="BMKG / api.bmkg.go.id",
-            endpoint=f"{_BMKG_BASE_URL}?adm4={{ADM4}}",
+            endpoint=f"{self.base_url}?adm4={{ADM4}}",
             unit="mm",
             is_live=bool(all_forecasts),
             error=None,
             groups=groups,
+            partial=bool(failed_locations),
+            failed_locations=sorted(failed_locations),
         )
 
     def _fetch_location(self, loc: Dict[str, Any]) -> Optional[SumatraLocationForecast]:
-        url = f"{_BMKG_BASE_URL}?adm4={loc['adm4']}"
+        url = f"{self.base_url}?adm4={loc['adm4']}"
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 resp = client.get(url)
@@ -481,12 +523,14 @@ class SumatraForecastApiClient:
 
     def _parse_timestamp(self, ts_str: Optional[str]) -> str:
         if not ts_str:
-            return _now_iso()
+            return "N/A"
         try:
-            dt = datetime.fromisoformat(ts_str).replace(tzinfo=WIB_OFFSET)
+            dt = datetime.fromisoformat(ts_str)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=WIB_OFFSET)
             return dt.astimezone(SG_OFFSET).isoformat()
         except Exception:
-            return _now_iso()
+            return "N/A"
 
     def _aggregate_by_group(self, forecasts: List[SumatraLocationForecast]) -> Dict[str, SumatraGroupSummary]:
         group_data: Dict[str, List[SumatraLocationForecast]] = {}
@@ -502,8 +546,8 @@ class SumatraForecastApiClient:
             reporting = len(forecasts_list)
 
             rainfalls = [f.rainfall_mm for f in forecasts_list if f.rainfall_mm is not None]
-            max_rain = max(rainfalls) if rainfalls else 0.0
-            has_rain = any(r > 0 for r in rainfalls)
+            max_rain = max(rainfalls) if rainfalls else None
+            has_rain = any(r > 0 for r in rainfalls) if rainfalls else None
 
             weather_conditions = [f.weather_condition for f in forecasts_list if f.weather_condition]
             representative = max(set(weather_conditions), key=weather_conditions.count) if weather_conditions else "Unknown"
@@ -511,13 +555,13 @@ class SumatraForecastApiClient:
             wind_directions = [f.wind_direction for f in forecasts_list if f.wind_direction]
             wind_speeds = [f.wind_speed_ms for f in forecasts_list if f.wind_speed_ms is not None]
             dominant_wind = max(set(wind_directions), key=wind_directions.count) if wind_directions else "N/A"
-            avg_wind = sum(wind_speeds) / len(wind_speeds) if wind_speeds else 0.0
+            avg_wind = sum(wind_speeds) / len(wind_speeds) if wind_speeds else None
 
             clouds = [f.cloud_cover_pct for f in forecasts_list if f.cloud_cover_pct is not None]
-            max_cloud = max(clouds) if clouds else 0.0
+            max_cloud = max(clouds) if clouds else None
 
             times = [f.forecast_time_local for f in forecasts_list if f.forecast_time_local != "N/A"]
-            latest_time = max(times) if times else _now_iso()
+            latest_time = max(times) if times else "N/A"
 
             loc_details = [
                 {
@@ -544,7 +588,7 @@ class SumatraForecastApiClient:
                 has_rain=has_rain,
                 representative_weather=representative,
                 dominant_wind_direction=dominant_wind,
-                avg_wind_speed_ms=round(avg_wind, 1),
+                avg_wind_speed_ms=round(avg_wind, 1) if avg_wind is not None else None,
                 max_cloud_cover_pct=max_cloud,
                 latest_forecast_time=latest_time,
                 locations=loc_details,
@@ -567,15 +611,16 @@ class SumatraForecastApiClient:
 # ---------- Helper functions used by Flood Agent ----------
 def get_sumatra_forecast_evidence(client: SumatraForecastApiClient) -> Dict[str, Any]:
     snapshot = client.fetch()
+    valid_groups = [g for g in snapshot.groups.values() if g.max_rainfall_mm is not None]
 
-    if not snapshot.is_live or snapshot.error:
+    if not snapshot.is_live or snapshot.error or not valid_groups:
         return {
             "available": False,
             "source": snapshot.source,
-            "error": snapshot.error or "No live data",
+            "error": snapshot.error or "No valid live rainfall values",
             "groups": {},
-            "has_rain": False,
-            "max_rainfall_mm": 0.0,
+            "has_rain": None,
+            "max_rainfall_mm": None,
             "weather_systems": [],
         }
 
@@ -586,9 +631,9 @@ def get_sumatra_forecast_evidence(client: SumatraForecastApiClient) -> Dict[str,
     for group_key, group in snapshot.groups.items():
         if group.has_rain:
             has_rain_any = True
-        if group.max_rainfall_mm > 0:
+        if group.max_rainfall_mm is not None and group.max_rainfall_mm > 0:
             all_rainfalls.append(group.max_rainfall_mm)
-        if group.max_rainfall_mm > 30:
+        if group.max_rainfall_mm is not None and group.max_rainfall_mm > 30:
             weather_systems.append(f"heavy_rain_{group_key}")
         if "Hujan" in group.representative_weather or "Rain" in group.representative_weather:
             weather_systems.append(f"rain_{group_key}")
@@ -613,6 +658,8 @@ def get_sumatra_forecast_evidence(client: SumatraForecastApiClient) -> Dict[str,
 
     return {
         "available": True,
+        "partial": snapshot.partial,
+        "failed_locations": snapshot.failed_locations,
         "source": snapshot.source,
         "groups": {
             k: {
@@ -630,8 +677,8 @@ def get_sumatra_forecast_evidence(client: SumatraForecastApiClient) -> Dict[str,
             }
             for k, v in snapshot.groups.items()
         },
-        "has_rain": any(g.has_rain for g in snapshot.groups.values()),
-        "max_rainfall_mm": max((g.max_rainfall_mm for g in snapshot.groups.values()), default=0.0),
+        "has_rain": any(g.has_rain is True for g in valid_groups),
+        "max_rainfall_mm": max(all_rainfalls) if all_rainfalls else 0.0,
         "weather_systems": list(set(weather_systems)),
     }
 

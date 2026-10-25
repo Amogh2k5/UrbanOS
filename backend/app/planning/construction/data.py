@@ -11,6 +11,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Any
+from backend.app.upstream import SingleFlightTTLCache, retry_429_delay
 
 log = logging.getLogger(__name__)
 SG = timezone(timedelta(hours=8))
@@ -20,6 +21,9 @@ BASE = "https://api-production.data.gov.sg/v2/public/api/datasets"
 MAX_RETRIES = 3
 BASE_BACKOFF_SECONDS = 2.0
 MAX_BACKOFF_SECONDS = 30.0
+_SOURCE_CACHE = SingleFlightTTLCache()
+_SOURCE_TTL_SECONDS = 1800.0
+_SOURCE_ERROR_TTL_SECONDS = 30.0
 
 # Dataset IDs from data.gov.sg
 DATASETS = {
@@ -83,8 +87,9 @@ def _fetch_with_retry(req: urllib.request.Request, timeout: int = 30) -> dict:
                 return json.loads(content)
         except urllib.error.HTTPError as exc:
             last_exception = exc
-            if exc.code == 429 and attempt < MAX_RETRIES - 1:
-                backoff = min(BASE_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
+            backoff = retry_429_delay(exc, attempt, base_seconds=BASE_BACKOFF_SECONDS,
+                                       max_seconds=MAX_BACKOFF_SECONDS)
+            if backoff is not None and attempt < MAX_RETRIES - 1:
                 log.warning("Rate limited (HTTP 429) on attempt %d/%d, backing off %.1fs",
                            attempt + 1, MAX_RETRIES, backoff)
                 time.sleep(backoff)
@@ -111,7 +116,7 @@ def _fetch_with_retry(req: urllib.request.Request, timeout: int = 30) -> dict:
     raise last_exception
 
 
-def _fetch_dataset(key: str, limit: int = 5000) -> SourceResult:
+def _fetch_dataset_uncached(key: str, limit: int = 5000) -> SourceResult:
     spec = DATASETS[key]
     all_records: list[dict[str, Any]] = []
     offset = 0
@@ -180,7 +185,18 @@ def _fetch_dataset(key: str, limit: int = 5000) -> SourceResult:
     )
 
 
-def _fetch_geojson_dataset(key: str) -> SourceResult:
+def _fetch_dataset(key: str, limit: int = 5000) -> SourceResult:
+    cache_key = ("construction", key, limit)
+    return _SOURCE_CACHE.get_or_fetch(
+        cache_key,
+        lambda: _fetch_dataset_uncached(key, limit),
+        ttl_seconds=_SOURCE_TTL_SECONDS,
+        error_ttl_seconds=_SOURCE_ERROR_TTL_SECONDS,
+        cache_result=lambda result: result.status == "available",
+    )
+
+
+def _fetch_geojson_dataset_uncached(key: str) -> SourceResult:
     """Fetch GeoJSON dataset which may have different structure."""
     spec = DATASETS[key]
     headers = {"Accept": "application/json", "User-Agent": "UrbanOS-Construction/1.0"}
@@ -235,6 +251,21 @@ def _fetch_geojson_dataset(key: str) -> SourceResult:
         fields=sorted({str(k) for row in records[:10] for k in row.keys()}) if records else [],
         total_count=len(records),
     )
+
+
+def _fetch_geojson_dataset(key: str) -> SourceResult:
+    cache_key = ("construction", key)
+    return _SOURCE_CACHE.get_or_fetch(
+        cache_key,
+        lambda: _fetch_geojson_dataset_uncached(key),
+        ttl_seconds=_SOURCE_TTL_SECONDS,
+        error_ttl_seconds=_SOURCE_ERROR_TTL_SECONDS,
+        cache_result=lambda result: result.status == "available",
+    )
+
+
+def clear_construction_source_cache() -> None:
+    _SOURCE_CACHE.clear(preserve_errors=True)
 
 
 def fetch_construction_snapshot() -> dict[str, Any]:

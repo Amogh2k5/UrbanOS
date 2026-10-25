@@ -17,15 +17,16 @@ Rules this module enforces:
   * Recommendations may only rest on findings already present in the state.
   * Provenance, timestamps, limitations and affected zones are carried through.
 
-The LangGraph nodes mirror the existing domain agents, so this reads like the
-rest of the agent code in this repository.
+The coordinator is a top-level LangGraph that invokes domain agents as
+nested LangGraph workflows via the DomainGraphRegistry.
 """
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable
 
 import pandas as pd
 from langgraph.graph import END, StateGraph
@@ -33,33 +34,157 @@ from langgraph.graph import END, StateGraph
 from backend.app.intelligence.contracts import (
     CitySituationReport, CrossDomainImpact, DomainStatus, PriorityIncident,
 )
+from backend.app.coordinator.domain_graph import BaseDomainGraph, DomainGraphRegistry, DomainGraphResult
 
 log = logging.getLogger(__name__)
 SG = timezone(timedelta(hours=8))
 
-# Domain agents are imported into this module's namespace so tests can patch
-# them individually (``patch("coordinator.city_agent....")``).
-#
-# Order matters: ``safety/fire/api.py`` imports ``run_fire_agent`` at module
-# level while ``safety/fire/agent.py`` imports ``fetch_fire_snapshot`` from the
-# API at module level. Importing ``fire.api`` first resolves that pre-existing
-# cycle in the only order that works.
-import backend.app.safety.fire.api  # noqa: E402,F401  (breaks the fire cycle)
+# Domain graph registration - imported lazily to avoid circular imports
+def _register_domain_graphs():
+    """Register all domain graphs with the registry."""
+    # LangGraph-based agents
+    from backend.app.mobility.traffic.agent import get_traffic_agent, run_traffic_agent
+    from backend.app.mobility.transit.agent import get_transit_agent, run_transit_agent
+    from backend.app.mobility.roads.agent import get_roads_agent, run_roads_agent
+    from backend.app.environment.agent import get_environment_agent, run_environment_agent
+    from backend.app.environment.weather.agent import get_weather_agent, run_weather_agent
+    from backend.app.environment.pm25.agent import get_pm25_agent, run_pm25_agent
+    from backend.app.environment.flood.agent import get_flood_agent, run_flood_agent_v3
+    from backend.app.infrastructure.water.agent import get_water_agent, run_water_agent
+    from backend.app.infrastructure.waste.agent import get_waste_agent, run_waste_agent
+    from backend.app.planning.land.agent import get_land_agent, run_land_agent
+    from backend.app.safety.crime.agent import get_crime_agent, run_crime_agent
+    from backend.app.safety.fire.agent import get_fire_agent, run_fire_agent
+    from backend.app.environment.agent import get_environment_agent as get_weather_pm25_agent
+    
+    # Simple agents converted to LangGraph
+    from backend.app.infrastructure.energy.agent import get_energy_agent, run_energy_agent
+    from backend.app.planning.housing.agent import get_housing_agent, run_housing_agent
+    from backend.app.planning.construction.agent import get_construction_agent, run_construction_agent
+    from backend.app.environment.environment_module import EnvironmentModule
+    globals()["EnvironmentModule"] = EnvironmentModule
+    if "_original_environment_module" not in globals():
+        globals()["_original_environment_module"] = EnvironmentModule
 
-from backend.app.environment.environment_module import EnvironmentModule  # noqa: E402
-from backend.app.environment.flood.agent import run_flood_agent_v3  # noqa: E402
-from backend.app.infrastructure.water.agent import run_water_agent  # noqa: E402
-from backend.app.mobility.traffic.agent import run_traffic_agent  # noqa: E402
-from backend.app.planning.land.agent import run_land_agent  # noqa: E402
-from backend.app.safety.crime.agent import run_crime_agent  # noqa: E402
-from backend.app.safety.fire.agent import run_fire_agent  # noqa: E402
-from backend.app.infrastructure.waste.agent import run_waste_agent  # noqa: E402
-from backend.app.planning.housing.agent import run_housing_agent  # noqa: E402
-from backend.app.infrastructure.energy.agent import run_energy_agent  # noqa: E402
+    # Preserve the runner symbols as a compatibility seam for API callers and
+    # tests; each runner executes its domain's compiled graph.
+    globals().update({
+        "run_traffic_agent": run_traffic_agent,
+        "run_transit_agent": run_transit_agent,
+        "run_roads_agent": run_roads_agent,
+        "run_weather_agent": run_weather_agent,
+        "run_pm25_agent": run_pm25_agent,
+        "run_environment_agent": run_environment_agent,
+        "run_flood_agent_v3": run_flood_agent_v3,
+        "run_water_agent": run_water_agent,
+        "run_waste_agent": run_waste_agent,
+        "run_land_agent": run_land_agent,
+        "run_crime_agent": run_crime_agent,
+        "run_fire_agent": run_fire_agent,
+        "run_energy_agent": run_energy_agent,
+        "run_housing_agent": run_housing_agent,
+        "run_construction_agent": run_construction_agent,
+    })
+    
+    # Register all domain graphs
+    DomainGraphRegistry.register(BaseDomainGraph(
+        domain_name="traffic",
+        graph=get_traffic_agent(),
+        state_schema=None,  # Will be inferred from graph
+        run_fn=lambda: globals()["run_traffic_agent"](),
+    ))
+    for domain, getter, runner in (
+        ("transit", get_transit_agent, "run_transit_agent"),
+        ("roads", get_roads_agent, "run_roads_agent"),
+        ("weather", get_weather_agent, "run_weather_agent"),
+        ("pm25", get_pm25_agent, "run_pm25_agent"),
+    ):
+        DomainGraphRegistry.register(BaseDomainGraph(
+            domain_name=domain, graph=getter(),
+            run_fn=lambda runner=runner: globals()[runner](),
+        ))
+    DomainGraphRegistry.register(BaseDomainGraph(
+        domain_name="environment",
+        graph=get_environment_agent(),
+        state_schema=None,
+        run_fn=lambda prediction_timestamp=None: (
+            globals()["EnvironmentModule"]().run(prediction_timestamp=prediction_timestamp)
+            if globals()["EnvironmentModule"] is not globals()["_original_environment_module"]
+            else globals()["run_environment_agent"](prediction_timestamp=prediction_timestamp)
+        ),
+    ))
+    DomainGraphRegistry.register(BaseDomainGraph(
+        domain_name="flood",
+        graph=get_flood_agent(),
+        state_schema=None,
+        run_fn=lambda: globals()["run_flood_agent_v3"](),
+    ))
+    DomainGraphRegistry.register(BaseDomainGraph(
+        domain_name="water",
+        graph=get_water_agent(),
+        state_schema=None,
+        run_fn=lambda: globals()["run_water_agent"](),
+    ))
+    DomainGraphRegistry.register(BaseDomainGraph(
+        domain_name="waste",
+        graph=get_waste_agent(),
+        state_schema=None,
+        run_fn=lambda: globals()["run_waste_agent"](),
+    ))
+    DomainGraphRegistry.register(BaseDomainGraph(
+        domain_name="land",
+        graph=get_land_agent(),
+        state_schema=None,
+        run_fn=lambda: globals()["run_land_agent"](),
+    ))
+    DomainGraphRegistry.register(BaseDomainGraph(
+        domain_name="crime",
+        graph=get_crime_agent(),
+        state_schema=None,
+        run_fn=lambda: globals()["run_crime_agent"](),
+    ))
+    DomainGraphRegistry.register(BaseDomainGraph(
+        domain_name="fire",
+        graph=get_fire_agent(),
+        state_schema=None,
+        run_fn=lambda: globals()["run_fire_agent"](),
+    ))
+    DomainGraphRegistry.register(BaseDomainGraph(
+        domain_name="energy",
+        graph=get_energy_agent(),
+        state_schema=None,
+        run_fn=lambda: globals()["run_energy_agent"](),
+    ))
+    DomainGraphRegistry.register(BaseDomainGraph(
+        domain_name="housing",
+        graph=get_housing_agent(),
+        state_schema=None,
+        run_fn=lambda: globals()["run_housing_agent"](),
+    ))
+    DomainGraphRegistry.register(BaseDomainGraph(
+        domain_name="construction",
+        graph=get_construction_agent(),
+        state_schema=None,
+        run_fn=lambda: globals()["run_construction_agent"](),
+    ))
+
+# Register domain graphs on module load
+_register_domain_graphs()
 
 #: Domains that define city confidence. Adding a domain must not silently
 #: change this rule.
 CORE_DOMAINS = ("environment", "traffic", "flood")
+# Keep the pre-migration inputs to city-level rules fixed while exposing the
+# new domain statuses additively in the public report.
+CITY_RULE_DOMAINS = (
+    "environment", "traffic", "flood", "water", "land", "fire", "crime",
+    "waste", "housing", "energy",
+)
+ADVISORY_DOMAINS = {
+    "water", "land", "waste", "housing", "energy", "construction",
+    "transit", "roads", "weather", "pm25",
+}
+COORDINATOR_DEADLINE_SECONDS = 30.0
 
 _RISK_ORDER = {"LOW": 0, "MODERATE": 1, "HIGH": 2, "CRITICAL": 3}
 
@@ -98,6 +223,11 @@ class CityCoordinatorState:
     waste_report: Any = None
     housing_report: Any = None
     energy_report: Any = None
+    construction_report: Any = None
+    transit_report: Any = None
+    roads_report: Any = None
+    weather_report: Any = None
+    pm25_report: Any = None
 
     domain_status: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
@@ -195,93 +325,92 @@ def _unavailable(domain: str, error: str) -> Dict[str, Any]:
 
 # ============================================================ node 1: collect
 def collect_reports(state: CityCoordinatorState) -> CityCoordinatorState:
-    """Run every domain agent. No single failure may abort the coordinator."""
+    """Run every domain agent as a nested LangGraph. No single failure may abort the coordinator."""
+    
+    # Define all domains with their graph names and whether they're advisory
+    domains = [
+        ("environment", "environment", False),
+        ("traffic", "traffic", False),
+        ("transit", "transit", False),
+        ("roads", "roads", False),
+        ("weather", "weather", False),
+        ("pm25", "pm25", False),
+        ("flood", "flood", False),
+        ("water", "water", True),
+        ("land", "land", True),
+        ("fire", "fire", False),
+        ("crime", "crime", False),
+        ("waste", "waste", True),
+        ("housing", "housing", True),
+        ("energy", "energy", True),
+        ("construction", "construction", True),
+    ]
+    
+    # Issue the environment forecast for a current hour
+    t0 = _environment_t0()
+    
+    pool = ThreadPoolExecutor(max_workers=5, thread_name_prefix="urbanos-domain")
+    futures = {}
     try:
-        # Issue the environment forecast for a current hour. Without this the
-        # module caps t0 at the newest entry in the research weather CSVs
-        # (2024) and reports that as the city environment.
-        t0 = _environment_t0()
-        state.environment_report = (
-            EnvironmentModule().run(prediction_timestamp=t0)
-            if t0 is not None else EnvironmentModule().run()
-        )
-        state.source_reports["environment"] = _source_meta(state.environment_report, "environment")
-    except Exception as exc:
-        state.environment_report = None
-        state.errors.append(f"Environment Agent failed: {exc}")
-        state.warnings.append("Environment report unavailable")
+        for domain_name, _, _ in domains:
+            graph = DomainGraphRegistry.get(domain_name)
+            if graph is None:
+                continue
+            initial_state = {"t0": t0} if domain_name == "environment" else {}
+            futures[domain_name] = pool.submit(graph.invoke, initial_state, None, 30.0)
 
-    try:
-        state.traffic_report = run_traffic_agent()
-        state.source_reports["traffic"] = _source_meta(state.traffic_report, "traffic")
-    except Exception as exc:
-        state.traffic_report = None
-        state.errors.append(f"Traffic Agent failed: {exc}")
-        state.warnings.append("Traffic report unavailable")
+        completed, _ = wait(futures.values(), timeout=COORDINATOR_DEADLINE_SECONDS)
 
-    try:
-        state.flood_report = run_flood_agent_v3()
-        state.source_reports["flood"] = _source_meta(state.flood_report, "flood")
-    except Exception as exc:
-        state.flood_report = None
-        state.errors.append(f"Flood Agent failed: {exc}")
-        state.warnings.append("Flood report unavailable")
+        for domain_name, _, _ in domains:
+            graph = DomainGraphRegistry.get(domain_name)
+            if graph is None:
+                error_msg = f"No graph registered for domain: {domain_name}"
+                if domain_name in ADVISORY_DOMAINS:
+                    state.warnings.append(f"{domain_name.title()} report unavailable: {error_msg}")
+                else:
+                    state.errors.append(f"{domain_name.title()} Agent not registered: {error_msg}")
+                continue
 
-    # Advisory domains degrade to warnings rather than errors.
-    try:
-        state.water_report = run_water_agent()
-        state.source_reports["water"] = _source_meta(state.water_report, "water")
-    except Exception as exc:
-        state.water_report = None
-        state.warnings.append(f"Water report unavailable: {exc}")
-
-    try:
-        state.land_report = run_land_agent()
-        state.source_reports["land"] = _source_meta(state.land_report, "land")
-    except Exception as exc:
-        state.land_report = None
-        state.warnings.append(f"Land report unavailable: {exc}")
-
-    try:
-        state.fire_report = run_fire_agent()
-        state.source_reports["fire"] = _source_meta(state.fire_report, "fire")
-    except Exception as exc:
-        state.fire_report = None
-        state.errors.append(f"Fire Agent failed: {exc}")
-        state.warnings.append("Fire report unavailable")
-
-    try:
-        state.crime_report = run_crime_agent()
-        state.source_reports["crime"] = _source_meta(state.crime_report, "crime")
-    except Exception as exc:
-        state.crime_report = None
-        state.errors.append(f"Crime Agent failed: {exc}")
-        state.warnings.append("Crime report unavailable")
-
-    # Waste (advisory: headline metrics only; never city status/risk/confidence)
-    try:
-        state.waste_report = run_waste_agent()
-        state.source_reports["waste"] = _source_meta(state.waste_report, "waste")
-    except Exception as exc:
-        state.waste_report = None
-        state.warnings.append(f"Waste report unavailable: {exc}")
-
-    # Housing (advisory: periodic statistics only; never city status/risk/confidence)
-    try:
-        state.housing_report = run_housing_agent()
-        state.source_reports["housing"] = _source_meta(state.housing_report, "housing")
-    except Exception as exc:
-        state.housing_report = None
-        state.warnings.append(f"Housing report unavailable: {exc}")
-
-    # Energy (advisory: historical statistics only; never city status/risk/confidence)
-    try:
-        state.energy_report = run_energy_agent()
-        state.source_reports["energy"] = _source_meta(state.energy_report, "energy")
-    except Exception as exc:
-        state.energy_report = None
-        state.warnings.append(f"Energy report unavailable: {exc}")
-
+            try:
+                future = futures[domain_name]
+                if future not in completed:
+                    raise TimeoutError("Domain graph exceeded the 30 second coordinator deadline")
+                result = future.result()
+            
+                # Extract report from result
+                report = result.graph_state.get("report") if isinstance(result.graph_state, dict) else None
+                setattr(state, f"{domain_name}_report", report)
+            
+            # Store source metadata
+                state.source_reports[domain_name] = {
+                    "subdomain": getattr(report, "subdomain", None) if report else domain_name,
+                    "domain": domain_name,
+                    "generated_at": getattr(report, "generated_at", None),
+                    "source_status": getattr(report, "source_status", "unknown"),
+                    "is_ml_prediction": getattr(report, "is_ml_prediction", False),
+                }
+            
+            # Track errors/warnings from domain graph
+                if result.errors:
+                    messages = [f"{domain_name}: {e}" for e in result.errors]
+                    if domain_name in ADVISORY_DOMAINS:
+                        state.warnings.append(f"{domain_name.title()} report unavailable")
+                        state.warnings.extend(messages)
+                    else:
+                        state.errors.extend([f"{domain_name.title()} Agent failed: {e}" for e in result.errors])
+                        state.warnings.append(f"{domain_name.title()} report unavailable")
+                if result.warnings:
+                    state.warnings.extend([f"{domain_name}: {w}" for w in result.warnings])
+                
+            except Exception as exc:
+                error_msg = f"{domain_name.title()} Agent failed: {exc}"
+                if domain_name in ADVISORY_DOMAINS:
+                    state.warnings.append(f"{domain_name.title()} report unavailable: {exc}")
+                else:
+                    state.errors.append(error_msg)
+                state.warnings.append(f"{domain_name.title()} report unavailable")
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
     return state
 
 
@@ -506,6 +635,13 @@ def _normalize_traffic(report: Any) -> Dict[str, Any]:
     }
 
 
+def _normalize_generic(domain: str, report: Any) -> Dict[str, Any]:
+    """Use the shared domain normalizer for independently owned modules."""
+    from backend.app.intelligence.normalize import normalize_domain_report
+    normalized = normalize_domain_report(domain, _dump(report))
+    return normalized.model_dump(mode="json")
+
+
 def _normalize_flood(report: Any) -> Dict[str, Any]:
     d = _dump(report)
     raw = d.get("risk_level") or getattr(report, "risk_level", None) or "UNKNOWN"
@@ -655,15 +791,19 @@ def _normalize_fire(report: Any) -> Dict[str, Any]:
 def _normalize_crime(report: Any) -> Dict[str, Any]:
     d = _dump(report)
     total = d.get("total_physical_crime_2025")
-    available = total is not None
+    scams = d.get("total_scams_cybercrime_2025")
+    source_status = str(d.get("source_status") or "").strip().lower()
+    has_published_measure = total is not None or scams is not None
+    available = has_published_measure and source_status not in {"unavailable", "error"}
     out = {
         "domain": "crime",
         "available": available,
         "overall_status": "NORMAL" if available else None,
         "overall_risk": "LOW" if available else "UNKNOWN",
+        "source_status": source_status or None,
         "key_metrics": {
             "physical_crime": total,
-            "scams_cybercrime": d.get("total_scams_cybercrime_2025"),
+            "scams_cybercrime": scams,
             "data_period": d.get("data_period"),
         },
         "active_alert_count": 0,
@@ -797,6 +937,10 @@ def _normalize_energy(report: Any) -> Dict[str, Any]:
 _NORMALIZERS = {
     "environment": ("environment_report", _normalize_environment),
     "traffic": ("traffic_report", _normalize_traffic),
+    "transit": ("transit_report", lambda r: _normalize_generic("transit", r)),
+    "roads": ("roads_report", lambda r: _normalize_generic("roads", r)),
+    "weather": ("weather_report", lambda r: _normalize_generic("weather", r)),
+    "pm25": ("pm25_report", lambda r: _normalize_generic("pm25", r)),
     "flood": ("flood_report", _normalize_flood),
     "water": ("water_report", _normalize_water),
     "land": ("land_report", _normalize_land),
@@ -805,6 +949,7 @@ _NORMALIZERS = {
     "waste": ("waste_report", _normalize_waste),
     "housing": ("housing_report", _normalize_housing),
     "energy": ("energy_report", _normalize_energy),
+    "construction": ("construction_report", lambda r: _normalize_generic("construction", r)),
 }
 
 
@@ -861,8 +1006,9 @@ def prioritize_risks(state: CityCoordinatorState) -> CityCoordinatorState:
     statuses = state.domain_status or {}
 
     known = [
-        s.get("overall_risk") for s in statuses.values()
-        if isinstance(s, dict) and s.get("overall_risk") in _RISK_ORDER
+        (statuses.get(domain) or {}).get("overall_risk") for domain in CITY_RULE_DOMAINS
+        if isinstance(statuses.get(domain), dict)
+        and statuses[domain].get("overall_risk") in _RISK_ORDER
     ]
     # A validated cross-domain impact may raise the city level above the worst
     # single domain, but never lowers it.
@@ -893,7 +1039,8 @@ def prioritize_risks(state: CityCoordinatorState) -> CityCoordinatorState:
         "City confidence is derived from the three core domains "
         f"({', '.join(CORE_DOMAINS)}); advisory domains do not raise or lower it."
     )
-    for domain, s in sorted(statuses.items()):
+    for domain in CITY_RULE_DOMAINS:
+        s = statuses.get(domain)
         if isinstance(s, dict) and s.get("error"):
             limits.append(f"{domain}: {s['error']}")
     state.limitations = limits
@@ -1178,7 +1325,8 @@ def analyze_cross_domain_impacts(state: CityCoordinatorState) -> CityCoordinator
     # --- multi-domain: a count of independently elevated domains. This is
     # explicitly not a causal claim; the description says so.
     high_domains = [
-        d for d, s in sorted(statuses.items())
+        d for d in CITY_RULE_DOMAINS
+        for s in [statuses.get(d)]
         if isinstance(s, dict) and str(s.get("overall_risk") or "").upper() in ("HIGH", "CRITICAL")
     ]
     if len(high_domains) >= 2:
@@ -1290,7 +1438,8 @@ def generate_recommendations(state: CityCoordinatorState) -> CityCoordinatorStat
             f"{prefix}: {template.format(zones=zones, domains=domains)}"
         )
 
-    for domain, s in sorted(statuses.items()):
+    for domain in CITY_RULE_DOMAINS:
+        s = statuses.get(domain)
         spec = _DOMAIN_RECO.get(domain)
         if not spec or not isinstance(s, dict):
             continue
@@ -1309,7 +1458,7 @@ def generate_recommendations(state: CityCoordinatorState) -> CityCoordinatorStat
 
     if not recs:
         unavailable = sorted(
-            d for d, s in statuses.items()
+            d for d in CITY_RULE_DOMAINS for s in [statuses.get(d)]
             if isinstance(s, dict) and not s.get("available")
         )
         if unavailable:

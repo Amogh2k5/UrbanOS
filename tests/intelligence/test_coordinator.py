@@ -18,6 +18,8 @@ from coordinator.city_agent import (
     collect_reports, generate_recommendations, normalize, normalize_state,
     prioritize_risks,
 )
+from backend.app.coordinator.domain_graph import DomainGraphRegistry
+from backend.app.coordinator import city_agent as coordinator_module
 from backend.app.intelligence.contracts import validate_report
 
 ALL_RUNNERS = [
@@ -72,6 +74,41 @@ def test_every_domain_failing_still_yields_a_report():
     assert report is not None
     assert validate_report(report) == []
     assert set(report.domain_status) >= set(CORE_DOMAINS)
+
+
+def test_coordinator_deadline_is_handled_without_waiting(monkeypatch):
+    class ImmediateAdapter:
+        def invoke(self, *args, **kwargs):
+            return SimpleNamespace(graph_state={"report": None}, errors=[], warnings=[])
+
+    monkeypatch.setattr(DomainGraphRegistry, "get", classmethod(lambda cls, name: ImmediateAdapter()))
+    monkeypatch.setattr(coordinator_module, "wait", lambda futures, timeout: (set(), set(futures)))
+    state = collect_reports(CityCoordinatorState())
+    assert any("30 second coordinator deadline" in message for message in state.errors + state.warnings)
+
+
+def test_partial_graph_failure_keeps_independent_domain_results(monkeypatch):
+    class Adapter:
+        def __init__(self, domain):
+            self.domain = domain
+        def invoke(self, *args, **kwargs):
+            if self.domain == "traffic":
+                raise RuntimeError("isolated test failure")
+            report = SimpleNamespace(
+                domain=self.domain, subdomain=self.domain,
+                generated_at="2026-10-24T00:00:00+08:00", source_status="test",
+                is_ml_prediction=False,
+            )
+            return SimpleNamespace(graph_state={"report": report}, errors=[], warnings=[])
+
+    monkeypatch.setattr(
+        DomainGraphRegistry, "get",
+        classmethod(lambda cls, name: Adapter(name)),
+    )
+    state = collect_reports(CityCoordinatorState())
+    assert state.traffic_report is None
+    assert state.flood_report is not None
+    assert any("Traffic Agent failed" in message for message in state.errors)
 
 
 @pytest.mark.parametrize("runner", ALL_RUNNERS)

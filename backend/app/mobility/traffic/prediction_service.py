@@ -41,7 +41,12 @@ from backend.app.mobility.traffic.data import TrafficObservation
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_DB_PATH = Path("data/traffic_observations.db")
+# Resolve the observation store relative to the repository root (same
+# convention as geo_zones.py / predictor.py) so a server started from any
+# CWD finds the real SQLite store instead of creating an empty look-alike
+# (a stray backend/data/traffic_observations.db has done exactly that).
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_DEFAULT_DB_PATH = _REPO_ROOT / "data" / "traffic_observations.db"
 
 # Complete-snapshot row count: same constant used by ml/traffic/train.py
 # (load_complete_snapshots) and verified live: 143,787 unique LinkIDs.
@@ -135,6 +140,14 @@ class TrafficPredictionService:
         self._history_lock = threading.Lock()
         self._compute_lock = threading.Lock()
         self._bundle: Optional[PredictionBundle] = None
+        # Guards start() against a double-start race when several on-demand
+        # requests trigger initialization concurrently.
+        self._start_lock = threading.Lock()
+        # True while _seed_from_db() is walking the SQLite store. get_bundle()
+        # refuses to compute during this window so a request can never be
+        # served a bundle built from a partially seeded history (missing lag
+        # rows would silently degrade every prediction).
+        self._seeding = False
 
         self._refresh_event = threading.Event()
         self._stop_event = threading.Event()
@@ -153,13 +166,19 @@ class TrafficPredictionService:
     # ------------------------------------------------------------------ lifecycle
 
     def start(self) -> None:
-        """Start the background seed+refresh worker (idempotent)."""
-        if self._worker is not None and self._worker.is_alive():
-            return
-        self._worker = threading.Thread(
-            target=self._worker_main, name="traffic-prediction-service", daemon=True
-        )
-        self._worker.start()
+        """Start the background seed+refresh worker (idempotent, race-free).
+
+        Safe to call from any request path: the first caller wins the
+        _start_lock and spawns exactly one worker; concurrent callers
+        observe a live worker and return immediately.
+        """
+        with self._start_lock:
+            if self._worker is not None and self._worker.is_alive():
+                return
+            self._worker = threading.Thread(
+                target=self._worker_main, name="traffic-prediction-service", daemon=True
+            )
+            self._worker.start()
         log.info("Traffic prediction service started (live fetch: %s)", self.fetch_enabled)
 
     def stop(self) -> None:
@@ -305,6 +324,13 @@ class TrafficPredictionService:
           - per-snapshot row fetch via PK range scan.
         No full-table scans, no window functions, read-only connection.
         """
+        self._seeding = True
+        try:
+            self._seed_walk_back()
+        finally:
+            self._seeding = False
+
+    def _seed_walk_back(self) -> None:
         if not self.db_path.exists():
             log.warning("Traffic DB not found at %s; starting unseeded", self.db_path)
             self._seeded = True  # seeded with nothing; live fetches will populate
@@ -378,11 +404,14 @@ class TrafficPredictionService:
 
         Single-flight: concurrent callers block on _compute_lock and then share
         the one computed bundle. Returns None (existing no-data behaviour) when
-        no history exists at all.
+        no history exists at all or while the seed walk-back is still running
+        (the background worker computes the initial bundle when it finishes).
         """
         bundle = self._bundle
         if bundle is not None:
             return bundle
+        if self._seeding:
+            return None
         if not self._seeded and not self._history:
             return None
         with self._compute_lock:
@@ -490,7 +519,10 @@ class TrafficPredictionService:
         bundle = self._bundle
         return {
             "seeded": self._seeded,
+            "seeding": self._seeding,
+            "worker_running": self._worker is not None and self._worker.is_alive(),
             "fetch_enabled": self.fetch_enabled,
+            "db_path": str(self.db_path),
             "compute_count": self.compute_count,
             "fetch_count": self.fetch_count,
             "bundle": None

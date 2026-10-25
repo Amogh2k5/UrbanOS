@@ -812,4 +812,5 @@ def snapshot_to_observations(snapshot) -> List[TrafficObservation]:
             created_at=datetime.now(SG_OFFSET).isoformat(),
         )
         for s in snapshot.segments
+        if s.speed_midpoint is not None
     ]

@@ -10,13 +10,12 @@
  *   2. Active Risk Signals - only coordinator impacts that carry evidence
  *   3. Domain Performance  - live KPI cards, each linking to its domain page
  *
- * Two endpoints are consumed, each for what it alone owns:
- *   - `/api/city/report`  -> status, risk, validated impacts, evidence
- *   - `/api/overview/city`-> module cards, the narrative, per-domain findings
+ * The landing view reads cached `/api/overview/city` summaries. The full city
+ * coordinator is requested only when the user chooses to run an assessment.
  *
  * No intelligence logic lives here. Every value rendered comes from the API.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchCityReport,
   fetchOverviewCity,
@@ -44,7 +43,7 @@ export default function OverviewPage() {
 
   const [report, setCityReport] = useState<CitySituationReport | null>(null);
   const [reportError, setReportError] = useState<string | null>(null);
-  const [reportLoading, setReportLoading] = useState(true);
+  const [reportLoading, setReportLoading] = useState(false);
 
   const [insightDomain, setInsightDomain] = useState<string | null>(null);
 
@@ -66,10 +65,7 @@ export default function OverviewPage() {
   // synchronous setState before the first await (which the lint rules and
   // React both discourage inside an effect).
   const load = useCallback(async () => {
-    const [overviewResult, reportResult] = await Promise.allSettled([
-      fetchOverviewCity(),
-      fetchCityReport(),
-    ]);
+    const overviewResult = await Promise.allSettled([fetchOverviewCity()]).then((r) => r[0]);
 
     if (overviewResult.status === "fulfilled") {
       setOverview(overviewResult.value);
@@ -85,24 +81,8 @@ export default function OverviewPage() {
       );
     }
 
-    if (reportResult.status === "fulfilled") {
-      setCityReport(reportResult.value);
-      setReport(reportResult.value);
-      setReportError(null);
-    } else {
-      const reason = reportResult.reason;
-      setReportError(
-        reason instanceof ApiError
-          ? `API error ${reason.status}`
-          : reason instanceof Error
-            ? reason.message
-            : "Unknown error"
-      );
-    }
-
     setOverviewLoading(false);
-    setReportLoading(false);
-  }, [setReport]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -115,49 +95,46 @@ export default function OverviewPage() {
     };
   }, [load]);
 
-  // ------------------------------------------------- City Situation reconciliation
-  // A coordinator run takes far longer than a page load, so `/api/overview/city`
-  // usually answers from a cold cache: its narrative is per-domain evidence that
-  // explicitly claims no city status. `/api/city/report` blocks until that same
-  // run finishes. Once it does, the pending text is stale and must be replaced.
-  //
-  // This effect reacts to the report completing and asks only for the narrative,
-  // never the whole Overview - that endpoint re-runs all ten domain agents.
-  //
-  // At most one refresh, guarded by a ref: this is reconciliation, not polling.
-  // The backend serves the narrative from the report cache and an
-  // evidence-keyed narrative cache, so the refresh costs no provider quota.
-  const reconciledRef = useRef(false);
-
-  useEffect(() => {
-    // No report: the coordinator failed or is unreachable. The honest
-    // deterministic fallback stays exactly as the Overview returned it.
-    if (!report) return;
-    if (!overview) return;
-    // Already a coordinator-backed assessment - nothing to reconcile.
-    if (overview.city_assessment_ready) return;
-    if (reconciledRef.current) return;
-    reconciledRef.current = true;
-
-    let cancelled = false;
-    void (async () => {
+  const requestCityReport = useCallback(async () => {
+    setReportLoading(true);
+    setReportError(null);
+    try {
+      const result = await fetchCityReport();
+      setCityReport(result);
+      setReport(result);
       try {
         const narrative = await fetchCityNarrative();
-        if (cancelled) return;
-        if (!narrative.city_assessment_ready || !narrative.ai_brief) return;
-        setOverview((prev) =>
-          prev ? { ...prev, ai_brief: narrative.ai_brief, city_assessment_ready: true } : prev
-        );
+        if (narrative.city_assessment_ready && narrative.ai_brief) {
+          setOverview((prev) => prev ? {
+            ...prev,
+            ai_brief: narrative.ai_brief,
+            city_assessment_ready: true,
+          } : prev);
+        }
       } catch {
-        // A failed reconciliation is not a page-level failure: the Overview
-        // response is still valid per-domain evidence. Leave the deterministic
-        // fallback visible and do not surface an error the user cannot act on.
+        // The coordinator report remains usable without optional narration.
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [report, overview]);
+      // The coordinator cache is now warm: re-read the Overview summaries so
+      // the domain cards, findings and assessment-ready flag reflect the run
+      // the user just paid for, instead of staying on the cold-cache view.
+      try {
+        await load();
+      } catch {
+        // The report above is already rendered; a failed summary refresh
+        // leaves the previous cards in place rather than blanking them.
+      }
+    } catch (reason) {
+      setReportError(
+        reason instanceof ApiError
+          ? `API error ${reason.status}`
+          : reason instanceof Error
+            ? reason.message
+            : "Unknown error"
+      );
+    } finally {
+      setReportLoading(false);
+    }
+  }, [setReport, load]);
 
   const loadModuleDetail = useCallback(async (moduleId: string) => {
     setSelectedModule(moduleId);
@@ -229,8 +206,9 @@ export default function OverviewPage() {
           narrative={overview?.ai_brief ?? null}
           report={report}
           assessmentReady={overview?.city_assessment_ready ?? false}
-          loading={overviewLoading && reportLoading}
+          loading={overviewLoading || reportLoading}
           error={overviewError}
+          onRequestReport={requestCityReport}
         />
 
         {/* 2. Active Risk Signals */}
@@ -238,7 +216,7 @@ export default function OverviewPage() {
           impacts={report?.cross_domain_impacts}
           loading={reportLoading}
           error={reportError}
-          reportAvailable={!reportLoading && !reportError}
+          reportAvailable={Boolean(report) && !reportError}
         />
 
         {/* 3. Domain Performance */}

@@ -40,6 +40,18 @@ def get_waste_report(refresh: bool = False) -> WasteReport:
     return get_waste_bundle(refresh)[0]
 
 
+def peek_waste_report():
+    """Return the cached report only while it is still fresh. Never runs the
+    agent and never blocks: ``get_waste_bundle`` holds ``_lock`` for the whole
+    fetch, so taking it here would make a cheap Overview card read wait
+    behind a full data fetch. A cold or expired cache reads as ``None``.
+    """
+    cached = _cache["report"]
+    if cached is not None and time.time() < _cache["expires_at"]:
+        return cached
+    return None
+
+
 def _bundle(refresh: bool) -> Tuple[WasteReport, WasteSnapshot]:
     try:
         return get_waste_bundle(refresh)

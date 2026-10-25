@@ -55,23 +55,26 @@ from backend.app.mobility.roads.api import router as roads_router
 from backend.app.safety.fire.api import router as fire_router
 from backend.app.safety.crime.api import router as crime_router
 from backend.app.infrastructure.water.api import router as water_router
-from backend.app.infrastructure.water.api import start_water_warmup
 from backend.app.infrastructure.waste.api import router as waste_router
 from backend.app.infrastructure.energy.api import router as energy_router
 from backend.app.planning.land.api import router as land_router
-from backend.app.planning.land.api import start_land_warmup
 from backend.app.planning.housing.api import router as housing_router
-from backend.app.planning.housing.api import start_housing_warmup
 from backend.app.planning.construction.api import router as construction_router
-from backend.app.planning.construction.api import start_construction_warmup
 from backend.app.infrastructure.energy.api import router as energy_router
-from backend.app.infrastructure.energy.api import start_energy_warmup
 from backend.app.overview.api import router as overview_router
 from backend.app.mobility.transit.scheduler import TransitAlertsScheduler, SchedulerConfig
 
 log = logging.getLogger(__name__)
 
 SG_OFFSET = timezone(timedelta(hours=8))
+
+
+def _schedule_warmup_nonfatal(name: str, starter) -> None:
+    """Keep a warm-up scheduling failure from aborting application startup."""
+    try:
+        starter()
+    except Exception:  # noqa: BLE001
+        log.exception("%s warm-up could not be scheduled; continuing startup", name)
 
 # City report: single-flight lock + short TTL cache. A coordinator run costs
 # ~60s of CPU; without this, every timed-out client leaves a full run grinding
@@ -80,7 +83,7 @@ SG_OFFSET = timezone(timedelta(hours=8))
 # single-flight lock and a short TTL cache shared by /api/city/report and the
 # Overview city endpoint. See backend/app/coordinator/access.py.
 from backend.app.coordinator.access import (  # noqa: E402
-    city_report_cached, start_coordinator_warmup,
+    city_report_cached,
 )
 
 
@@ -105,7 +108,9 @@ def _build_app() -> FastAPI:
     # Adapter singletons. offline mode = reads env var URBANOS_API_OFFLINE=1.
     offline = os.getenv("URBANOS_API_OFFLINE", "0") == "1"
     app.state.pm25_client = Pm25ApiClient(offline=offline)
-    app.state.air_temperature_client = AirTemperatureApiClient(offline=offline)
+    app.state.air_temperature_client = AirTemperatureApiClient(
+        offline=offline, allow_fallback_fixture=False
+    )
     app.state.weather_client = WeatherApiClient(offline=offline, air_temperature_client=app.state.air_temperature_client)
     try:
         app.state.traffic_client = TrafficSpeedBandsV2ApiClient()
@@ -130,7 +135,6 @@ def _build_app() -> FastAPI:
     # once per new snapshot. /api/mobility/traffic/predict and
     # /api/traffic/report both READ this bundle; they never compute their own.
     app.state.traffic_prediction_service = get_traffic_prediction_service()
-    app.state.traffic_prediction_service.start()
 
     # Weather forecast store and collector
     app.state.weather_store = WeatherForecastStore()
@@ -155,7 +159,6 @@ def _build_app() -> FastAPI:
     # refreshes the shared latest snapshot from the live NEA API in the
     # background (hourly). /kpi/live/pm25 reads it; requests never hit the API.
     app.state.pm25_live_service = get_pm25_live_service()
-    app.state.pm25_live_service.start()
 
     # PM2.5 scheduler
     app.state.pm25_scheduler = Pm25Scheduler(
@@ -570,14 +573,35 @@ def _build_app() -> FastAPI:
 
             # Read the shared PredictionBundle computed once per new snapshot by
             # the background TrafficPredictionService (rolling 7-obs-per-link
-            # history + existing TrafficPredictor, unchanged). Single-flight:
+            # history + existing TrafficPredictor, unchanged). On-demand
+            # initialization: the first Traffic request starts the service
+            # (idempotent, race-free) so it seeds rolling history from the
+            # existing SQLite store and computes the first bundle in the
+            # background; requests never compute or fetch inline. Single-flight:
             # concurrent cold-start requests coalesce onto ONE computation; a
-            # stale bundle is served with its real observed_at; when nothing has
-            # ever been computed, raise the same no-data error as before.
+            # stale bundle is served with its real observed_at; while nothing
+            # has been computed yet the endpoint answers with an honest 503.
             service = get_traffic_prediction_service()
+            service.start()
             bundle = await asyncio.to_thread(service.get_bundle)
             if bundle is None or not bundle.link_preds:
-                raise ValueError("No traffic observations available")
+                status = service.status()
+                if status.get("seeding") or not status.get("seeded"):
+                    reason = (
+                        "Traffic predictions are warming up: the local observation "
+                        "history is still being loaded. Retry shortly."
+                    )
+                else:
+                    reason = "No traffic observations available to compute predictions."
+                log.warning("Traffic prediction unavailable: %s (service=%s)", reason, status)
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "message": reason,
+                        "reason": "prediction_bundle_unavailable",
+                        "service_status": status,
+                    },
+                )
             link_preds = bundle.link_preds
             diagnostics = bundle.diagnostics
 
@@ -683,6 +707,10 @@ def _build_app() -> FastAPI:
                 ],
                 "divisions": division_list,
             }
+        except HTTPException:
+            # Honest 503s (warming up / no observations) must reach the client
+            # as-is; only unexpected failures become a 500 below.
+            raise
         except Exception as e:
             log.exception("Traffic prediction failed")
             raise HTTPException(status_code=500, detail=f"traffic prediction error: {e}")
@@ -1019,38 +1047,9 @@ Live Evidence (determines current risk):
     app.include_router(land_router)
     app.include_router(overview_router)
 
-    # Start transit alerts scheduler in background thread
-    import threading
-    def _run_transit_alerts_scheduler():
-        app.state.transit_alerts_scheduler.run()
-    threading.Thread(target=_run_transit_alerts_scheduler, daemon=True, name="transit-alerts-scheduler").start()
-
-    # Start weather forecast scheduler in background thread (NEA 24h forecast,
-    # 4h interval by default; collects immediately at boot). The PM2.5 CatBoost
-    # models genuinely require fresh wf_* forecast features; without this the
-    # forecast store goes stale and /api/pollution/predict correctly refuses.
-    def _run_weather_scheduler():
-        app.state.weather_scheduler.run()
-    threading.Thread(target=_run_weather_scheduler, daemon=True, name="weather-forecast-scheduler").start()
-
-    # Start water warm-up in background thread (datasets are annual/periodic;
-    # warm-up avoids first-request latency and fails silently if sources are down)
-    start_water_warmup()
-
-    # Housing warm-up (annual/quarterly datasets; avoids first-request latency)
-    start_housing_warmup()
-
-    # Construction warm-up (historical datasets; avoids first-request latency)
-    start_construction_warmup()
-
-    # Energy warm-up (historical datasets; avoids first-request latency)
-    start_energy_warmup()
-
-    # Same reasoning for the City Coordinator: one background run at startup so
-    # the first dashboard request finds a warm cache instead of a pending city
-    # assessment. Fails silently; the accessor re-runs on demand.
-    start_coordinator_warmup()
-
+    # Schedulers and caches are initialized for explicit/on-demand operations.
+    # Nothing is started here: app startup must not collect domain data or invoke
+    # the coordinator before a consumer asks for it.
     return app
 
 

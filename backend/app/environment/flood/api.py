@@ -4,9 +4,9 @@ Adapter owns ALL per-source quirks (URL, auth, units, nulls) per architecture
 proposal §4. API data is used **only for live frontend KPI display** — never
 enters ML training/prediction, never touches model artifacts.
 
-Spec: PUB Flood Alerts / data.gov.sg Flood API
-Server: https://api.data.gov.sg/v1/environment/flood-alerts (requires auth)
-Alternative: PUB Telegram channel / PUB website scraping
+Spec: PUB Flood Alerts / data.gov.sg Open Data API
+Server: https://api-open.data.gov.sg/v2/real-time/api/weather/flood-alerts
+An API key is optional; when configured, it is sent in the x-api-key header.
 
 For MVP, we use offline mode with deterministic fixtures.
 """
@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import logging
 import os
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
+from backend.app.upstream import SingleFlightTTLCache
 
 # Local zone lookup
 import sys
@@ -30,9 +32,12 @@ from backend.app.mobility.traffic.geo_zones import get_zone
 log = logging.getLogger(__name__)
 
 SG_OFFSET = timezone(timedelta(hours=8))
-_DEFAULT_BASE = "https://api.data.gov.sg/v1/environment"
-_ENDPOINT = "/flood-alerts"
+_DEFAULT_BASE = "https://api-open.data.gov.sg/v2/real-time/api"
+_ENDPOINT = "/weather/flood-alerts"
 _TIMEOUT = 15.0
+_FLOOD_ALERT_CACHE = SingleFlightTTLCache()
+_FLOOD_ALERT_TTL_SECONDS = 30.0
+_FLOOD_ALERT_ERROR_TTL_SECONDS = 60.0
 
 # Deterministic fallback fixture based on typical flood alert structure.
 # Used only when offline=True OR when network fetch fails AND allow_fallback_fixture=True.
@@ -125,7 +130,7 @@ class FloodAlertsSnapshot:
 class FloodAlertsApiClient:
     """Adapter wrapping the PUB Flood Alerts endpoint.
 
-    offline=True   -> return the deterministic fallback fixture (no network).
+    offline=True   -> return the clearly labeled deterministic fixture (no network).
     offline=False  -> call the live endpoint; on failure, raise (or use fixture
                       if allow_fallback_fixture=True).
     """
@@ -135,7 +140,7 @@ class FloodAlertsApiClient:
         base_url: str = _DEFAULT_BASE,
         account_key: Optional[str] = None,
         offline: bool = True,  # Default to offline for MVP
-        allow_fallback_fixture: bool = True,
+        allow_fallback_fixture: bool = False,
         timeout: float = _TIMEOUT,
     ) -> None:
         self.base_url = base_url.rstrip("/")
@@ -146,8 +151,17 @@ class FloodAlertsApiClient:
 
     def fetch(self) -> FloodAlertsSnapshot:
         """Fetch latest Flood Alerts snapshot."""
-        payload, is_live = self._get_payload()
-        return self._normalize(payload, is_live=is_live)
+        if self.offline:
+            payload, is_live = self._get_payload()
+            return self._normalize(payload, is_live=is_live)
+        key_fingerprint = hashlib.sha256((self.account_key or "").encode()).hexdigest()[:16]
+        cache_key = ("flood_alerts", self.base_url, key_fingerprint, self.allow_fallback_fixture)
+        return _FLOOD_ALERT_CACHE.get_or_fetch(
+            cache_key,
+            lambda: self._normalize(*self._get_payload()),
+            ttl_seconds=_FLOOD_ALERT_TTL_SECONDS,
+            error_ttl_seconds=_FLOOD_ALERT_ERROR_TTL_SECONDS,
+        )
 
     # ---------------------------------------------------------------- internals
 
@@ -156,14 +170,13 @@ class FloodAlertsApiClient:
             log.info("Flood Alerts adapter offline=True; using fallback fixture.")
             return _FALLBACK_FIXTURE, False
 
-        if not self.account_key:
-            log.warning("DATA_GOV_SG_API_KEY not set; using fallback fixture.")
-            if self.allow_fallback_fixture:
-                return _FALLBACK_FIXTURE, False
-            raise ValueError("DATA_GOV_SG_API_KEY not configured")
-
-        headers = {"Authorization": f"Bearer {self.account_key}", "accept": "application/json"}
+        # Authentication is optional on the current Open Data API. Its
+        # optional key uses x-api-key rather than the legacy Bearer scheme.
+        headers = {"accept": "application/json"}
+        if self.account_key:
+            headers["x-api-key"] = self.account_key
         url = f"{self.base_url}{_ENDPOINT}"
+        last_exception: Optional[Exception] = None
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 resp = client.get(url, headers=headers)
@@ -171,28 +184,54 @@ class FloodAlertsApiClient:
                 return resp.json(), True
         except httpx.TimeoutException as e:
             log.warning("Flood Alerts live fetch timeout: %s", e)
+            last_exception = e
         except httpx.HTTPStatusError as e:
             log.warning("Flood Alerts HTTP error: %s", e)
+            last_exception = e
         except httpx.RequestError as e:
             log.warning("Flood Alerts connection error: %s", e)
+            last_exception = e
         except ValueError as e:
             log.warning("Flood Alerts malformed response: %s", e)
+            last_exception = e
 
         if self.allow_fallback_fixture:
             log.warning("Flood Alerts falling back to deterministic fixture (KPI only).")
             return _FALLBACK_FIXTURE, False
-        raise
+        if last_exception:
+            raise last_exception
+        raise RuntimeError("Flood Alerts fetch failed with unknown error")
 
     def _normalize(self, payload: dict, is_live: bool) -> FloodAlertsSnapshot:
-        items = payload.get("items") or payload.get("value") or []
+        if not isinstance(payload, dict):
+            raise ValueError("Unexpected Flood Alerts response: expected an object")
+
+        # Current v2 response: data.records[].item.readings[]. Keep accepting
+        # the old items/value form for local fixtures and cached legacy data.
+        data = payload.get("data")
+        records = data.get("records") if isinstance(data, dict) else None
+        if records is not None:
+            items = records
+            current_schema = True
+        elif "items" in payload or "value" in payload:
+            items = payload.get("items") or payload.get("value") or []
+            current_schema = False
+        else:
+            raise ValueError("Unexpected Flood Alerts response structure")
         if not isinstance(items, list):
-            log.warning("Unexpected payload structure for Flood Alerts")
-            items = []
+            raise ValueError("Unexpected Flood Alerts records: expected a list")
 
         alerts: List[FloodAlert] = []
         for item in items:
-            item_timestamp = item.get("timestamp")
-            alerts_list = item.get("alerts") or item.get("value") or []
+            item_timestamp = item.get("datetime") if current_schema else item.get("timestamp")
+            item_timestamp = item_timestamp or item.get("updatedTimestamp")
+            record_item = item.get("item") if current_schema else item
+            if not isinstance(record_item, dict):
+                continue
+            alerts_list = (record_item.get("readings") if current_schema else
+                           (record_item.get("alerts") or record_item.get("value") or []))
+            if not isinstance(alerts_list, list):
+                raise ValueError("Unexpected Flood Alerts readings: expected a list")
 
             for alert_item in alerts_list:
                 def _get(item: dict, *keys):
@@ -202,13 +241,20 @@ class FloodAlertsApiClient:
                             return v
                     return None
 
-                alert_id = _get(alert_item, "id", "alert_id", "alertId") or ""
-                location = _get(alert_item, "location", "area", "name") or ""
+                alert_id = _get(record_item, "identifier", "id", "alert_id", "alertId") or ""
+                area = alert_item.get("area") if current_schema else None
+                area = area if isinstance(area, dict) else {}
+                location = _get(area, "areaDesc") or _get(alert_item, "location", "area", "name") or ""
                 latitude = _get(alert_item, "latitude", "lat")
                 longitude = _get(alert_item, "longitude", "lon", "lng")
-                alert_type = _get(alert_item, "type", "alert_type", "category") or "Flash Flood"
-                severity = _get(alert_item, "severity", "level", "risk_level") or "Moderate"
-                message = _get(alert_item, "message", "description", "details") or ""
+                circle = area.get("circle")
+                if current_schema and isinstance(circle, list) and len(circle) >= 2:
+                    latitude, longitude = circle[0], circle[1]
+                alert_type = (_get(alert_item, "event", "headline", "type", "alert_type", "category")
+                              or _get(record_item, "event") or "Flood Alert")
+                severity = _get(alert_item, "severity", "level", "risk_level") or "UNKNOWN"
+                message = (_get(alert_item, "description", "message", "details")
+                           or _get(alert_item, "headline") or "")
 
                 def _to_float(v):
                     try:
@@ -218,11 +264,11 @@ class FloodAlertsApiClient:
 
                 def _parse_ts(v):
                     if v is None:
-                        return datetime.now(SG_OFFSET)
+                        raise ValueError("Flood Alert record is missing its source timestamp")
                     try:
                         return datetime.fromisoformat(v.replace('Z', '+00:00'))
                     except (ValueError, AttributeError):
-                        return datetime.now(SG_OFFSET)
+                        raise ValueError("Flood Alert record has an invalid source timestamp")
 
                 lat_f = _to_float(latitude)
                 lon_f = _to_float(longitude)
@@ -253,7 +299,7 @@ class FloodAlertsApiClient:
             snapshot_at=_now_iso(),
             source=("live_api:PUB_flood_alerts" if is_live else "offline_fixture:PUB_flood_alerts"),
             provider="PUB / data.gov.sg",
-            endpoint=f"{_DEFAULT_BASE}{_ENDPOINT}",
+            endpoint=f"{self.base_url}{_ENDPOINT}",
             alerts=alerts,
             is_live=is_live,
         )

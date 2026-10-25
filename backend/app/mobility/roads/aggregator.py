@@ -257,6 +257,23 @@ def _with_age(payload: Dict[str, Any], fetched_at_epoch: float,
     return out
 
 
+def peek_roads_snapshot() -> Optional[Dict[str, Any]]:
+    """Fresh cached payload only. Never refreshes, never blocks.
+
+    The Overview city card reads this so a warm Roads page can be reused
+    without the card ever contacting LTA. Cold or older than the cache TTL
+    reads as ``None`` - the caller then reports the module honestly as
+    unavailable rather than paying a live fetch. Stale payloads are NOT
+    served here: only :func:`get_roads_snapshot` may decide to do that.
+    """
+    if _last_good is None:
+        return None
+    fetched_at = _last_good_at
+    if fetched_at <= 0 or time.time() - fetched_at >= ROADS_CACHE_TTL_S:
+        return None
+    return _with_age(dict(_last_good), fetched_at)
+
+
 def reset_cache() -> None:
     """Test hook: drop the cached payload."""
     global _last_good, _last_good_at

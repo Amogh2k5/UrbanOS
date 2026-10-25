@@ -24,9 +24,11 @@ Failure behaviour is explicit, never silent:
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -41,6 +43,7 @@ log = logging.getLogger(__name__)
 
 # NEA publishes PM2.5 hourly; refresh at that cadence by default.
 _REFRESH_INTERVAL_S = float(os.getenv("URBANOS_PM25_REFRESH_INTERVAL_S", "3600"))
+_PM25_REGIONS = {"north", "south", "east", "west", "central"}
 
 
 class Pm25LiveSnapshotService:
@@ -64,6 +67,8 @@ class Pm25LiveSnapshotService:
 
         self._snapshot: Optional[Pm25LiveSnapshot] = None
         self._refresh_lock = threading.Lock()
+        self._store_seed_lock = threading.Lock()
+        self._store_seed_attempted = False
         self._stop_event = threading.Event()
         self._worker: Optional[threading.Thread] = None
 
@@ -94,7 +99,7 @@ class Pm25LiveSnapshotService:
 
     def _worker_main(self) -> None:
         try:
-            self._load_from_store()
+            self._ensure_store_seeded()
         except Exception as e:
             self.last_error = f"seed from store failed: {e}"
             log.exception("PM2.5 live service: failed to load stored snapshot")
@@ -111,6 +116,16 @@ class Pm25LiveSnapshotService:
 
     # ------------------------------------------------------------------ seeding
 
+    def _ensure_store_seeded(self) -> None:
+        """Read the persisted snapshot at most once, without an API refresh."""
+        if self._store_seed_attempted:
+            return
+        with self._store_seed_lock:
+            if self._store_seed_attempted:
+                return
+            self._store_seed_attempted = True
+            self._load_from_store()
+
     def _load_from_store(self) -> None:
         """Load the latest stored snapshot from the observation store.
 
@@ -126,22 +141,38 @@ class Pm25LiveSnapshotService:
             log.warning("PM2.5 live service: no stored observations; waiting for first live fetch")
             return
         rows = store.get_latest_snapshot()  # {region: row-dict} at latest ts
-        if not rows:
+        if not rows or set(rows) != _PM25_REGIONS:
+            if rows:
+                log.warning("PM2.5 store snapshot is incomplete; not exposing it as current")
+            return
+
+        observations = {row.get("observed_at") for row in rows.values()}
+        if observations != {latest}:
+            log.warning("PM2.5 store snapshot has inconsistent observation timestamps")
+            return
+
+        try:
+            datetime.fromisoformat(str(latest).replace("Z", "+00:00"))
+            readings = {}
+            for region, row in rows.items():
+                value = float(row["value"])
+                if not math.isfinite(value) or value < 0:
+                    raise ValueError("invalid stored PM2.5 value")
+                readings[region] = Pm25Reading(
+                    region=region,
+                    value=value,
+                    observed_at=str(row["observed_at"]),
+                    source=str(row["source"]),
+                )
+        except (KeyError, TypeError, ValueError) as exc:
+            log.warning("PM2.5 stored snapshot failed validation: %s", exc)
             return
 
         snapshot = Pm25LiveSnapshot(
             snapshot_at=_now_iso(),
             source="stored_snapshot:pm25_observations_db",
-            unit=next(iter(rows.values()))["unit"],
-            regions={
-                r: Pm25Reading(
-                    region=r,
-                    value=float(row["value"]),
-                    observed_at=row["observed_at"],
-                    source=row["source"],
-                )
-                for r, row in rows.items()
-            },
+            unit=str(next(iter(rows.values())).get("unit") or "µg/m3"),
+            regions=readings,
             raw_issue_timestamp=latest,
             raw_updated_timestamp=None,
             is_live=False,
@@ -227,7 +258,16 @@ class Pm25LiveSnapshotService:
     # ------------------------------------------------------------------ reads
 
     def snapshot(self) -> Optional[Pm25LiveSnapshot]:
-        """Non-blocking read of the latest snapshot (may be None at cold start)."""
+        """Return memory data, or seed once from validated local storage.
+
+        This read performs no upstream request. The stored values remain marked
+        ``is_live=False`` and retain their original observation timestamp.
+        """
+        if self._snapshot is None:
+            try:
+                self._ensure_store_seeded()
+            except Exception as exc:
+                log.warning("PM2.5 store-only snapshot read failed: %s", exc)
         return self._snapshot
 
     def status(self) -> Dict[str, Any]:

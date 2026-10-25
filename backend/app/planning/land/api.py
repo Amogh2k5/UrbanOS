@@ -44,6 +44,14 @@ def get_land_report(refresh: bool = False) -> LandReport:
         return report
 
 
+def peek_land_report() -> Optional[LandReport]:
+    """Read the current Land report cache without running or waiting on the agent."""
+    cached: Optional[LandReport] = _REPORT_CACHE["report"]
+    if cached is not None and time.time() < _REPORT_CACHE["expires_at"]:
+        return cached
+    return None
+
+
 def start_land_warmup() -> None:
     """Pre-build the report in a background thread at server start.
 

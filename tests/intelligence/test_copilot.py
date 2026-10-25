@@ -637,7 +637,7 @@ class TestEndpoint:
                         NarrativeValidation(ok=True))
 
         with _patch("backend.app.overview.api.get_ai_service", return_value=_Service()), \
-             _patch("backend.app.overview.api.city_report_cached",
+             _patch("backend.app.overview.api.peek_city_report_cached",
                     return_value=(_report(), {})):
             resp = await chat(None, ChatRequest(message="What is the flood risk?"))
         assert "HIGH" in resp.response
@@ -656,7 +656,7 @@ class TestEndpoint:
                 return None, NarrativeValidation(ok=False, reasons=["rejected"])
 
         with _patch("backend.app.overview.api.get_ai_service", return_value=_Service()), \
-             _patch("backend.app.overview.api.city_report_cached",
+             _patch("backend.app.overview.api.peek_city_report_cached",
                     return_value=(_report(), {})):
             resp = await chat(None, ChatRequest(message="What is the flood risk?"))
         # Falls back to validated data, not to an error or a guess.
@@ -664,9 +664,11 @@ class TestEndpoint:
 
     @pytest.mark.asyncio
     async def test_chat_falls_back_when_coordinator_unavailable(self):
+        """Cold cache: the route must answer honestly without ever starting
+        the ~74s coordinator run (that run is what used to time the chat out)."""
         from backend.app.overview.api import chat, ChatRequest
         from backend.app.ai.narrative import NarrativeValidation
-        from unittest.mock import patch as _patch
+        from unittest.mock import MagicMock, patch as _patch
 
         class _Service:
             def is_available(self):
@@ -675,11 +677,13 @@ class TestEndpoint:
             async def generate_copilot_answer(self, ctx):
                 return None, NarrativeValidation(ok=False, reasons=["no evidence"])
 
+        forbidden_run = MagicMock(side_effect=AssertionError("coordinator started"))
         with _patch("backend.app.overview.api.get_ai_service", return_value=_Service()), \
-             _patch("backend.app.overview.api.city_report_cached",
-                    side_effect=RuntimeError("coordinator down")):
+             _patch("backend.app.overview.api.peek_city_report_cached", return_value=None), \
+             _patch("backend.app.overview.api.city_report_cached", forbidden_run):
             resp = await chat(None, ChatRequest(message="anything"))
         assert "unavailable" in resp.response.lower()
+        forbidden_run.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_chat_rejects_an_empty_question(self):
@@ -703,7 +707,7 @@ class TestEndpoint:
                 return None, None
 
         with _patch("backend.app.overview.api.get_ai_service", return_value=_Service()), \
-             _patch("backend.app.overview.api.city_report_cached",
+             _patch("backend.app.overview.api.peek_city_report_cached",
                     return_value=(_report(), {})):
             await chat(None, ChatRequest(message="x" * 5000))
         assert seen["len"] <= MAX_QUESTION_CHARS

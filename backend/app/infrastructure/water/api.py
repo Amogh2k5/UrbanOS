@@ -52,6 +52,22 @@ def start_water_warmup() -> None:
     threading.Thread(target=_run, name="water-warmup", daemon=True).start()
 
 
+def peek_water_report() -> Optional[WaterReport]:
+    """Return the cached report only while it is still fresh. Never runs the
+    agent and never blocks: a cold or expired cache reads as ``None`` so the
+    caller can degrade honestly instead of paying a fetch.
+
+    Deliberately lock-free: ``get_water_report`` holds ``_lock`` for the whole
+    agent run, so taking it here would make a cheap Overview card read wait
+    behind a full data fetch. Plain dict reads are atomic, and the worst race
+    serves an entry a fraction of a second past its expiry.
+    """
+    cached = _cache["report"]
+    if cached is not None and time.time() < _cache["expires_at"]:
+        return cached
+    return None
+
+
 def _report(refresh: bool) -> WaterReport:
     try:
         return get_water_report(refresh)

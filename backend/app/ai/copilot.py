@@ -136,13 +136,41 @@ _DOMAIN_HINTS: Dict[str, Tuple[str, ...]] = {
     "flood": ("flood", "flooding", "water level", "drain", "canal", "ponding"),
     "fire": ("fire", "scdf", "blaze", "smoke"),
     "crime": ("crime", "police", "scam", "fraud", "theft", "arrest", "offence"),
-    "water": ("water", "drain", "reservoir", "newater", "tap", "supply"),
+    "water": ("water", "reservoir", "newater", "tap", "supply"),
     "land": ("land", "zoning", "plot ratio", "gpr", "planning area", "use"),
+    "waste": ("waste", "rubbish", "garbage", "trash", "recycling", "recycled",
+              "landfill", "disposal"),
+    "energy": ("energy", "electricity", "power", "grid", "solar", "demand"),
+    "housing": ("housing", "hdb", "resale", "flat", "dwelling", "apartment"),
+    "construction": ("construction", "building works", "green mark", "contractor",
+                     "pipeline project"),
 }
 
 
 def _tokens(text: str) -> Set[str]:
     return {t for t in re.findall(r"[a-z0-9.]+", text.lower()) if t and t not in _STOPWORDS}
+
+
+def detect_domains(question: str) -> List[str]:
+    """Domains whose name or plain-language synonyms appear in the question.
+
+    Deterministic keyword matching over :data:`_DOMAIN_HINTS`, shared with
+    :func:`select_domains` so a question can never route to a domain the
+    evidence ranking would disagree with. Used by the chat route to answer a
+    single-domain question from that domain's own summary when no coordinator
+    report is cached; an empty or ambiguous match returns an empty list and
+    the caller must not guess.
+    """
+    q = _tokens(question or "")
+    if not q:
+        return []
+    out: List[str] = []
+    for domain, hints in _DOMAIN_HINTS.items():
+        hint_tokens = _tokens(" ".join(hints))
+        name_tokens = _tokens(domain.replace("_", " "))
+        if (q & hint_tokens) or (q & name_tokens):
+            out.append(domain)
+    return sorted(out)
 
 
 @dataclass

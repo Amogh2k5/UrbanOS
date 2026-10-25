@@ -79,6 +79,9 @@
   /* Planning / Administration */
   --color-dom-land: #6d28d9;
   --color-dom-housing: #5b21b6;
+  /* amber-900: distinct from energy's amber-700 fill and dark enough for
+     AA with white text, like every other domain fill. */
+  --color-dom-construction: #78350f;
 
   /* ---- Semantic status. Badges ONLY - never a card background. -------- */
   --color-badge-normal: #ecfdf5;

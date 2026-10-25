@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
+import math
+import threading
+import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -12,17 +16,22 @@ from pydantic import BaseModel, Field
 
 from backend.app.ai.copilot import (
     MAX_HISTORY_CHARS, MAX_HISTORY_TURNS, MAX_QUESTION_CHARS,
-    build_copilot_context, grounded_fallback,
+    build_copilot_context, detect_domains, grounded_fallback,
 )
 from backend.app.ai.narrative import (
     build_narrative_input, deterministic_summary,
     deterministic_summary_from_domains,
 )
 from backend.app.ai.service import get_ai_service, UrbanOSAIService
-from backend.app.coordinator.access import city_report_cached
+# ``city_report_cached`` is deliberately still imported even though this
+# module no longer calls it: the chat route must only ever *peek* at the
+# coordinator cache (starting a ~74s run inside a chat request is what blew
+# its latency budget), and tests assert on this attribute to enforce that.
+from backend.app.coordinator.access import city_report_cached, peek_city_report_cached  # noqa: F401
 from backend.app.intelligence.contracts import DomainStatus
 from backend.app.intelligence.normalize import (
-    DOMAIN_NAMES, DOMAIN_ROUTES, build_kpi, determine_status, normalize_domain_report,
+    CANONICAL_MODULES, DOMAIN_NAMES, DOMAIN_ROUTES, build_card_metrics,
+    build_kpi, determine_status, normalize_domain_report,
 )
 
 log = logging.getLogger(__name__)
@@ -32,13 +41,124 @@ SG_OFFSET = timezone(timedelta(hours=8))
 
 router = APIRouter(prefix="/api/overview", tags=["overview"])
 
-# Keys under which expensive per-request results are memoised. The dict holding
-# them is created fresh by each route handler and discarded when the response is
-# built, so one caller can never see another's data.
+# Optional legacy per-call memo keys accepted by helper functions. Active
+# summary requests use ``_OVERVIEW_SUMMARY_CACHE`` so independent HTTP requests
+# share in-flight work and short-lived results.
 #: A full flood assessment costs several live API calls and is needed twice.
 _FLOOD_ASSESSMENT_KEY = "flood_assessment"
 #: The crime report costs four data.gov.sg dataset fetches and is needed twice.
 _CRIME_REPORT_KEY = "crime_report"
+
+
+class _OverviewSummaryCache:
+    """Process-local cache and single-flight gate for domain summaries.
+
+    The cache is deliberately outside the route-local data dict: separate
+    Overview, module-detail, and Copilot requests for the same module now share
+    one computation. Values are copied at the boundary because graph reports
+    contain mutable dictionaries. Failed/unavailable results get a short
+    cooldown so a provider outage cannot become a request storm.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: Dict[Tuple[int, str], Tuple[float, Any, Dict[str, Any]]] = {}
+        self._in_flight: Dict[Tuple[int, str], Tuple[Any, asyncio.Task, asyncio.Event]] = {}
+
+    async def get(
+        self,
+        app_state: Any,
+        module_id: str,
+        loader: Any,
+        *,
+        started: Optional[asyncio.Event] = None,
+        timeout_after_start: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        key = (id(app_state), module_id)
+        now = time.monotonic()
+        with self._lock:
+            for expired_key, expired in list(self._entries.items()):
+                if expired[0] <= now:
+                    self._entries.pop(expired_key, None)
+            entry = self._entries.get(key)
+            if entry and entry[1] is app_state and entry[0] > now:
+                return copy.deepcopy(entry[2])
+            if entry:
+                self._entries.pop(key, None)
+            in_flight = self._in_flight.get(key)
+            if in_flight and in_flight[0] is app_state:
+                task, operation_started = in_flight[1], in_flight[2]
+            else:
+                operation_started = started or asyncio.Event()
+                # Ordinary detail/chat loaders are not queued behind the
+                # city-summary semaphore, so their work is already started.
+                if started is None:
+                    operation_started.set()
+                task = asyncio.create_task(
+                    self._load(key, app_state, module_id, loader, operation_started)
+                )
+                self._in_flight[key] = (app_state, task, operation_started)
+
+        if timeout_after_start is not None:
+            # The city route bounds provider execution, not queue wait time.
+            # Queued modules must not all time out merely because three other
+            # modules currently own the bounded provider slots.
+            await operation_started.wait()
+            result = await asyncio.wait_for(asyncio.shield(task), timeout_after_start)
+        else:
+            result = await asyncio.shield(task)
+        return copy.deepcopy(result)
+
+    async def _load(self, key, app_state, module_id, loader, operation_started) -> Dict[str, Any]:
+        try:
+            # The route-level timeout may expire while a synchronous provider
+            # call is still running in asyncio.to_thread. Shielding keeps the
+            # single-flight marker alive until that real work completes, so a
+            # following Overview request cannot launch a duplicate fetch.
+            value = await loader()
+            if not isinstance(value, dict):
+                value = {"error": "invalid_domain_response"}
+        except asyncio.CancelledError:
+            with self._lock:
+                current = self._in_flight.get(key)
+                if current and current[0] is app_state:
+                    self._in_flight.pop(key, None)
+            raise
+        except Exception as exc:
+            log.warning("Overview %s summary failed: %s", module_id, exc)
+            value = {"error": "summary_unavailable"}
+        finally:
+            # Prevent waiters from hanging if a loader fails before it signals
+            # that its provider operation has acquired a concurrency slot.
+            operation_started.set()
+
+        self._finish(key, app_state, module_id, value)
+        return value
+
+    def _finish(self, key, app_state, module_id, value) -> None:
+        failed = bool(value.get("error")) or str(value.get("source_status") or "").lower() == "unavailable"
+        # Successful values are cached briefly at this layer. Domains with
+        # report APIs still retain their longer source-aware TTL in those APIs;
+        # the short overview TTL also bounds data without a report cache.
+        ttl = _OVERVIEW_FAILURE_TTL_S if failed else _OVERVIEW_SUCCESS_TTLS_S.get(module_id, _OVERVIEW_DEFAULT_SUCCESS_TTL_S)
+        with self._lock:
+            self._entries[key] = (time.monotonic() + ttl, app_state, copy.deepcopy(value))
+            current = self._in_flight.get(key)
+            if current and current[0] is app_state:
+                self._in_flight.pop(key, None)
+
+    def clear(self) -> None:
+        """Clear cached summaries; useful for explicit refresh and isolated tests."""
+        with self._lock:
+            self._entries.clear()
+
+
+_OVERVIEW_SUMMARY_CACHE = _OverviewSummaryCache()
+_OVERVIEW_DEFAULT_SUCCESS_TTL_S = 15.0
+_OVERVIEW_FAILURE_TTL_S = 30.0
+# Keep these no longer than the corresponding live source/report freshness
+# windows. Existing report APIs below remain the authority for long-lived data.
+_OVERVIEW_SUCCESS_TTLS_S = {"weather": 60.0, "flood": 30.0, "fire": 30.0, "crime": 60.0}
 
 
 # ============================================================
@@ -51,13 +171,33 @@ class ModuleKPI(BaseModel):
     unit: str
 
 
+class ModuleMetric(BaseModel):
+    """One Overview card metric, independently available or unavailable.
+
+    ``value`` is ``None`` exactly when this metric could not be obtained -
+    the card then renders an explicit unavailable placeholder for THIS metric
+    without hiding its sibling metrics. An explicit ``0`` is a real reading
+    and is preserved.
+    """
+    key: str
+    label: str
+    value: Optional[Any] = None
+    unit: str = ""
+
+
 class ModuleSummary(BaseModel):
     id: str
     name: str
     status: str  # "normal" | "elevated" | "critical" | "unavailable"
     kpi: Optional[ModuleKPI] = None
+    #: All intended card metrics for this module, each independently
+    #: available or unavailable. Empty when the module has no usable data.
+    metrics: List[ModuleMetric] = Field(default_factory=list)
     updated_at: Optional[str] = None
     detail_route: str
+    #: Data availability/freshness is separate from the domain risk status.
+    data_state: str = "unavailable"  # available | partial | stale | unavailable
+    age_seconds: Optional[float] = None
 
 
 class AlertItem(BaseModel):
@@ -157,11 +297,18 @@ async def _generate_ai_brief(ai_service: UrbanOSAIService, context: Dict[str, An
         return None
 
 
+#: Seconds the chat route will wait for the LLM answer before serving the
+#: grounded deterministic fallback. The fallback is always available and
+#: correct, so a slow provider is not worth the wait - and the budget plus the
+#: domain-summary fetch budget must stay under the frontend's 30s abort.
+_CHAT_LLM_BUDGET_S = 15.0
+
+
 async def _copilot_answer(ai_service, ctx) -> tuple:
     """Generate and validate a Copilot answer. Never raises."""
     try:
         return await asyncio.wait_for(
-            ai_service.generate_copilot_answer(ctx), timeout=25.0
+            ai_service.generate_copilot_answer(ctx), timeout=_CHAT_LLM_BUDGET_S
         )
     except asyncio.TimeoutError:
         log.warning("Copilot answer timed out; using grounded fallback.")
@@ -220,10 +367,9 @@ async def _coordinator_assessment() -> Tuple[Optional[str], bool, Optional[str]]
     assessment must never be presented as a completed one, so the caller decides
     what to show and can tell the dashboard that reconciliation is needed.
 
-    The report is read through the same cached accessor ``/api/city/report``
-    uses, so both routes share one coordinator run, and the narrative is keyed
-    on a hash of the evidence, so repeating this call within the cache window
-    costs no provider quota.
+    This is a cache-only read. It never launches a report run; only the explicit
+    ``/api/city/report`` request starts the coordinator. The narrative is keyed
+    on evidence so repeated reads reuse its cached text.
 
     Regression note: the accessor returns a ``(report, json_payload)`` tuple.
     Passing that tuple straight to :func:`build_narrative_input` looks up
@@ -232,14 +378,13 @@ async def _coordinator_assessment() -> Tuple[Optional[str], bool, Optional[str]]
     report object must be unpacked first.
     """
     try:
-        cached = city_report_cached(block=False)
+        cached = peek_city_report_cached()
     except Exception as e:
         log.warning("Coordinator report unavailable: %s", e)
         return None, False, None
 
     if cached is None:
-        # Cold cache. The accessor has started a single background run; this
-        # caller deliberately does not wait for it.
+        # Cold cache. This endpoint does not start or wait for domain work.
         return None, False, None
 
     report = cached[0] if isinstance(cached, tuple) else cached
@@ -343,52 +488,36 @@ def _generate_deterministic_module_brief(module_id: str, module_data: Dict[str, 
 # ============================================================
 
 async def _fetch_traffic_overview(app_state) -> Dict[str, Any]:
-    """Fetch lightweight traffic overview using shared prediction service."""
+    """Summarize observed LTA speed bands; predictions stay on the detail page.
+
+    The per-segment midpoint is an approximation because DataMall publishes a
+    speed interval, not an exact speed. Each valid segment receives equal
+    weight; missing, non-finite, or reversed intervals are omitted.
+    """
     try:
-        service = app_state.traffic_prediction_service
-        bundle = await asyncio.to_thread(service.get_bundle)
-        
-        if bundle is None or not bundle.link_preds:
-            return {"error": "No traffic prediction data available"}
-        
-        link_preds = bundle.link_preds
-        
-        # Compute overall metrics
-        current_speeds = [lp.current_speed for lp in link_preds if lp.current_speed is not None]
-        predicted_speeds = [lp.predicted_speed for lp in link_preds if lp.predicted_speed is not None]
-        
-        overall_current = sum(current_speeds) / len(current_speeds) if current_speeds else None
-        overall_predicted = sum(predicted_speeds) / len(predicted_speeds) if predicted_speeds else None
-        
-        # Determine congestion level
-        speed_for_congestion = overall_predicted if overall_predicted is not None else overall_current
-        if speed_for_congestion is not None:
-            if speed_for_congestion >= 70:
-                congestion = "free_flow"
-            elif speed_for_congestion >= 50:
-                congestion = "moderate"
-            elif speed_for_congestion >= 30:
-                congestion = "heavy"
-            else:
-                congestion = "severe"
-        else:
-            congestion = "unknown"
-        
-        # Count incidents using existing client
-        try:
-            incidents_client = app_state.traffic_incidents_client
-            incidents_snap = await asyncio.to_thread(incidents_client.fetch)
-            incident_count = len(incidents_snap.incidents) if incidents_snap and incidents_snap.incidents else 0
-        except Exception:
-            incident_count = 0
-        
+        from backend.app.mobility.traffic.api import TrafficSpeedBandsV2ApiClient
+
+        snapshot = await asyncio.to_thread(TrafficSpeedBandsV2ApiClient().fetch)
+        valid_speeds = []
+        for segment in snapshot.segments:
+            speed = segment.speed_midpoint
+            if (speed is not None and math.isfinite(speed) and speed >= 0
+                    and segment.minimum_speed is not None
+                    and segment.maximum_speed is not None
+                    and segment.minimum_speed <= segment.maximum_speed):
+                valid_speeds.append(speed)
+        if not snapshot.is_live or not valid_speeds:
+            return {"error": "No valid live LTA speed-band observations"}
+        average = sum(valid_speeds) / len(valid_speeds)
         return {
-            "overall_average_speed": round(overall_current, 1) if overall_current else None,
-            "overall_predicted_speed": round(overall_predicted, 1) if overall_predicted else None,
-            "overall_congestion_level": congestion,
-            "incident_count": incident_count,
-            "prediction_timestamp": bundle.link_preds[0].prediction_timestamp if link_preds else None,
-            "target_timestamp": bundle.link_preds[0].target_timestamp if link_preds else None,
+            "overall_average_speed": round(average, 1),
+            "generated_at": snapshot.snapshot_at,
+            "timestamp": snapshot.snapshot_at,
+            "source_status": "live",
+            "source": snapshot.source,
+            "limitations": [
+                "Equal-weight average of valid LTA speed-band midpoints; each midpoint approximates a published speed interval."
+            ],
         }
     except Exception as e:
         log.warning("Traffic overview fetch failed: %s", e)
@@ -463,7 +592,10 @@ async def _fetch_pm25_overview(app_state) -> Dict[str, Any]:
         snap = app_state.pm25_live_service.snapshot()
         if snap is None:
             return {"error": "No PM2.5 live snapshot available"}
-        return snap.to_dict()
+        data = snap.to_dict()
+        data["generated_at"] = snap.raw_issue_timestamp or snap.snapshot_at
+        data["source_status"] = "live" if snap.is_live else "stale"
+        return data
     except Exception as e:
         log.warning("PM2.5 overview fetch failed: %s", e)
         return {"error": str(e)}
@@ -529,10 +661,10 @@ async def _fetch_fire_overview(app_state) -> Dict[str, Any]:
 
 
 async def _fetch_water_overview(app_state) -> Dict[str, Any]:
-    """Fetch lightweight water overview using water agent."""
+    """Fetch Water using the same TTL report cache as its detail endpoint."""
     try:
-        from backend.app.infrastructure.water.agent import run_water_agent
-        report = await asyncio.to_thread(run_water_agent)
+        from backend.app.infrastructure.water.api import get_water_report
+        report = await asyncio.to_thread(get_water_report)
         return report.model_dump()
     except Exception as e:
         log.warning("Water overview fetch failed: %s", e)
@@ -560,14 +692,198 @@ async def _fetch_crime_overview(app_state, cache: Optional[Dict[str, Any]] = Non
 
 
 async def _fetch_land_overview(app_state) -> Dict[str, Any]:
-    """Fetch lightweight land overview using land agent."""
+    """Fetch Land using the same TTL report cache as its detail endpoint."""
     try:
-        from backend.app.planning.land.agent import run_land_agent
-        report = await asyncio.to_thread(run_land_agent)
+        from backend.app.planning.land.api import get_land_report
+        report = await asyncio.to_thread(get_land_report)
         return report.model_dump()
     except Exception as e:
         log.warning("Land overview fetch failed: %s", e)
         return {"error": str(e)}
+
+
+async def _fetch_waste_overview(app_state) -> Dict[str, Any]:
+    """Fetch Waste using the same TTL report cache as its detail endpoint."""
+    try:
+        from backend.app.infrastructure.waste.api import get_waste_report
+        report = await asyncio.to_thread(get_waste_report)
+        return report.model_dump()
+    except Exception as e:
+        log.warning("Waste overview fetch failed: %s", e)
+        return {"error": str(e)}
+
+
+async def _fetch_energy_overview(app_state) -> Dict[str, Any]:
+    """Fetch Energy using the same TTL report cache as its detail endpoint."""
+    try:
+        from backend.app.infrastructure.energy.api import get_energy_report
+        report = await asyncio.to_thread(get_energy_report)
+        return report.model_dump()
+    except Exception as e:
+        log.warning("Energy overview fetch failed: %s", e)
+        return {"error": str(e)}
+
+
+async def _fetch_housing_overview(app_state) -> Dict[str, Any]:
+    """Fetch Housing using the same TTL report cache as its detail endpoint."""
+    try:
+        from backend.app.planning.housing.api import get_housing_report
+        report = await asyncio.to_thread(get_housing_report)
+        return report.model_dump()
+    except Exception as e:
+        log.warning("Housing overview fetch failed: %s", e)
+        return {"error": str(e)}
+
+
+async def _fetch_construction_overview(app_state) -> Dict[str, Any]:
+    """Fetch Construction using its shared detail-report TTL cache."""
+    try:
+        from backend.app.planning.construction.api import get_construction_report
+        report = await asyncio.to_thread(get_construction_report)
+        return _construction_overview_data(report)
+    except Exception as e:
+        log.warning("Construction overview fetch failed: %s", e)
+        return {"error": str(e)}
+
+
+# ============================================================
+# Module cache peeks (NO fetches, NO workflow starts)
+# ============================================================
+# The Overview city endpoint must stay cheap, so a card may only read caches
+# that something else has already populated (a domain page visit, a shared
+# domain service, or a previous coordinator run). Every helper below is a
+# pure read: cold caches return None and the card honestly reports
+# "unavailable". None of them runs an agent or contacts an upstream API.
+
+def _peek_pm25_summary(app_state) -> Optional[Dict[str, Any]]:
+    """Latest PM2.5 snapshot from the shared live-snapshot service."""
+    service = getattr(app_state, "pm25_live_service", None)
+    snapshot = service.snapshot() if service is not None else None
+    if snapshot is None:
+        return None
+    data = snapshot.to_dict()
+    data["generated_at"] = snapshot.raw_issue_timestamp or snapshot.snapshot_at
+    data["source_status"] = "live" if snapshot.is_live else "stale"
+    return data
+
+
+def _peek_water_summary(app_state) -> Optional[Dict[str, Any]]:
+    """Water report from the water router's TTL cache (never runs the agent)."""
+    from backend.app.infrastructure.water.api import peek_water_report
+
+    report = peek_water_report()
+    if report is None:
+        return None
+    return report.model_dump()
+
+
+def _peek_roads_summary(app_state) -> Optional[Dict[str, Any]]:
+    """Roads snapshot from the aggregator's fresh cache (never refreshes)."""
+    from backend.app.mobility.roads.aggregator import peek_roads_snapshot
+
+    snapshot = peek_roads_snapshot()
+    if snapshot is None:
+        return None
+    return {
+        "road_works": snapshot.get("road_works"),
+        "road_openings": snapshot.get("road_openings"),
+        "taxi_stands": snapshot.get("taxi_stands"),
+        "timestamp": snapshot.get("fetched_at"),
+        "source_status": snapshot.get("source_status"),
+        "partial": snapshot.get("partial", False),
+        "stale": snapshot.get("stale", False),
+        "age_seconds": snapshot.get("age_seconds"),
+        "unavailable_sources": snapshot.get("unavailable_sources", []),
+        "warnings": snapshot.get("warnings", []),
+    }
+
+
+def _peek_waste_summary(app_state) -> Optional[Dict[str, Any]]:
+    """Waste report from the waste router's TTL cache (never runs the agent)."""
+    from backend.app.infrastructure.waste.api import peek_waste_report
+
+    report = peek_waste_report()
+    if report is None:
+        return None
+    return report.model_dump()
+
+
+def _peek_energy_summary(app_state) -> Optional[Dict[str, Any]]:
+    """Energy report from the energy router's TTL cache (never runs the agent)."""
+    from backend.app.infrastructure.energy.api import peek_energy_report
+
+    report = peek_energy_report()
+    if report is None:
+        return None
+    return report.model_dump()
+
+
+def _peek_housing_summary(app_state) -> Optional[Dict[str, Any]]:
+    """Housing report from the housing router's TTL cache (never runs the agent)."""
+    from backend.app.planning.housing.api import peek_housing_report
+
+    report = peek_housing_report()
+    if report is None:
+        return None
+    return report.model_dump()
+
+
+def _peek_construction_summary(app_state) -> Optional[Dict[str, Any]]:
+    """Construction report from the router's TTL cache (never runs the agent)."""
+    from backend.app.planning.construction.api import peek_construction_report
+
+    report = peek_construction_report()
+    if report is None:
+        return None
+    return _construction_overview_data(report)
+
+
+def _construction_overview_data(report) -> Dict[str, Any]:
+    """Use source publication time when supplied; agent time is not publication."""
+    data = report.model_dump()
+    published = []
+    for source in data.get("sources") or []:
+        value = source.get("last_updated_at") if isinstance(source, dict) else None
+        if not value:
+            continue
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        if parsed.tzinfo is None:
+            continue
+        published.append((parsed, str(value)))
+    data["generated_at"] = max(published, key=lambda item: item[0])[1] if published else None
+    if str(data.get("status") or "").upper() == "PARTIAL":
+        data["source_status"] = "partial"
+    return data
+
+
+def _peek_land_summary(app_state) -> Optional[Dict[str, Any]]:
+    """Land report from the planning router's TTL cache (never runs the agent)."""
+    from backend.app.planning.land.api import peek_land_report
+
+    report = peek_land_report()
+    if report is None:
+        return None
+    data = report.model_dump()
+    if str(data.get("source_status") or "").lower() == "unavailable":
+        data["error"] = "Land data sources are unavailable"
+    return data
+
+
+#: Module -> cache-only peek. A module absent from this map has no warm-on-
+#: visit cache and its card can only be populated by the coordinator report.
+_MODULE_PEEKS = {
+    "pm25": _peek_pm25_summary,
+    "water": _peek_water_summary,
+    "roads": _peek_roads_summary,
+    "waste": _peek_waste_summary,
+    "energy": _peek_energy_summary,
+    "housing": _peek_housing_summary,
+    "construction": _peek_construction_summary,
+    "land": _peek_land_summary,
+}
 
 
 # ============================================================
@@ -785,6 +1101,34 @@ async def _fetch_crime_incidents(cache: Optional[Dict[str, Any]] = None) -> Aler
     }])
 
 
+def _crime_incidents_from_summary(data: Dict[str, Any]) -> AlertBatch:
+    """Build the module's statistics alert from its already-loaded report."""
+    if str(data.get("source_status") or "").lower() == "unavailable" or data.get("error"):
+        return AlertBatch.unavailable("crime")
+    parts: List[str] = []
+    physical = data.get("total_physical_crime_2025")
+    cyber = data.get("total_scams_cybercrime_2025")
+    if physical is not None:
+        parts.append(f"{physical:,} physical crimes")
+    if cyber is not None:
+        parts.append(f"{cyber:,} scams and cybercrime")
+    if not parts:
+        return AlertBatch(())
+    period = data.get("data_period") or "period not stated"
+    return AlertBatch([{
+        "domain": "crime",
+        "severity": "info",
+        "title": "Crime: published annual statistics",
+        "description": (
+            f"Police statistics ({period}): " + " and ".join(parts)
+            + ". Annual published figures, not live incidents - this system "
+              "has no incident-level crime feed."
+        ),
+        "timestamp": _alert_timestamp(data.get("generated_at")),
+        "affected_zones": [],
+    }])
+
+
 async def _fetch_water_incidents(cache: Optional[Dict[str, Any]] = None) -> List[Dict]:
     """Fetch water alerts from water agent (drain conditions, quality exceedances, usage changes).
 
@@ -813,163 +1157,239 @@ async def _fetch_water_incidents(cache: Optional[Dict[str, Any]] = None) -> List
 # Main Endpoints
 # ============================================================
 
+def _card_metrics_for_status(module_id: str, status: DomainStatus) -> List[ModuleMetric]:
+    """The card metric list for one resolved DomainStatus.
+
+    ``normalize_domain_report`` embeds the full metric list (extracted from
+    the raw report) into ``key_metrics["metrics"]``; the coordinator's
+    bespoke per-domain normalizers instead publish flat ``key_metrics``
+    entries. Prefer the embedded list when present, otherwise rebuild from
+    the flat entries with the same spec table - one canonical metric
+    definition, never two.
+    """
+    key_metrics = status.key_metrics or {}
+    embedded = key_metrics.get("metrics")
+    if isinstance(embedded, list) and embedded:
+        out: List[ModuleMetric] = []
+        for m in embedded:
+            if isinstance(m, dict) and m.get("key") and m.get("label") is not None:
+                out.append(ModuleMetric(
+                    key=str(m["key"]),
+                    label=str(m["label"]),
+                    value=m.get("value"),
+                    unit=str(m.get("unit") or ""),
+                ))
+        if out:
+            return out
+
+    flat = {k: v for k, v in key_metrics.items()
+            if k not in ("headline", "metrics")}
+    return [
+        ModuleMetric(key=str(m["key"]), label=str(m["label"]),
+                     value=m.get("value"), unit=str(m.get("unit") or ""))
+        for m in build_card_metrics(module_id, flat)
+    ]
+
+
+def _card_data_state(status: DomainStatus, metrics: List[ModuleMetric]) -> str:
+    """Report measurement availability separately from assessed risk."""
+    key_metrics = status.key_metrics or {}
+    source_status = str(status.source_status or "").strip().lower()
+    if key_metrics.get("stale") is True or source_status in {"stale", "cached_stale"}:
+        return "stale"
+    has_values = any(metric.value is not None for metric in metrics)
+    # A Water report can retain historical metrics while live drain risk is
+    # unassessed. Keep the risk unavailable and show the data as partial.
+    if has_values and str(status.overall_status or "").upper() == "UNAVAILABLE":
+        return "partial"
+    if source_status == "partial" or key_metrics.get("partial") is True \
+            or (has_values and (not status.available or status.warnings)):
+        return "partial"
+    if status.available and has_values:
+        return "available"
+    return "unavailable"
+
+
 @router.get("/city", response_model=CityOverviewResponse)
 async def get_overview_city(request: Request) -> CityOverviewResponse:
     """
-    Get lightweight city overview using direct service calls (NO HTTP LOOPBACK).
-    Part 1: Base city/module data only. No AI, no alerts, no cross-domain intelligence.
+    Load the canonical module summaries on an explicit Overview request.
+
+    This restores the pushed data-loading path: Overview calls each module's
+    existing lightweight summary fetcher, rather than requiring a prior
+    detail-page visit or a full City Coordinator run. Calls are bounded and
+    isolated per module. The coordinator report remains an explicit action
+    and is only read here for its grounded city-level narrative/incidents.
     """
     app_state = request.app.state
-    
-    # Fetch all modules concurrently with error isolation
-    module_ids = ["traffic", "roads", "transit", "pm25", "weather", "flood",
-                  "fire", "crime", "water", "land"]
-    fetchers = {
-        "traffic": _fetch_traffic_overview,
-        "roads": _fetch_roads_overview,
-        "transit": _fetch_transit_overview,
-        "pm25": _fetch_pm25_overview,
-        "weather": _fetch_weather_overview,
-        "flood": _fetch_flood_overview,
-        "fire": _fetch_fire_overview,
-        "crime": _fetch_crime_overview,
-        "water": _fetch_water_overview,
-        "land": _fetch_land_overview,
-    }
-    # Flood and crime both cost several live API calls, and each is needed
-    # twice in this request (module card + alert summary). Memoise them for the
-    # lifetime of this request only: the dict is created here and goes out of
-    # scope with the response, so it can never leak between requests.
-    request_cache: Dict[str, Any] = {}
 
-    async def fetch_module(module_id: str) -> Dict[str, Any]:
-        fetcher = fetchers[module_id]
-        if module_id == "flood":
-            return await fetcher(request.app.state, request_cache)
-        if module_id == "crime":
-            return await fetcher(request.app.state, request_cache)
-        return await fetcher(request.app.state)
+    fetchers = _module_fetcher_map()
+    semaphore = asyncio.Semaphore(_OVERVIEW_DOMAIN_CONCURRENCY)
 
-    results = await asyncio.gather(
-        *(fetch_module(m) for m in module_ids),
-        return_exceptions=True,
-    )
+    async def fetch_one(module_id: str) -> tuple[str, Dict[str, Any]]:
+        try:
+            provider_started = asyncio.Event()
 
-    module_data = {}
-    for module_id, result in zip(module_ids, results):
-        if isinstance(result, Exception):
-            log.exception("Module %s failed with exception: %s", module_id, result)
-            module_data[module_id] = {"error": str(result)}
+            async def load_bounded() -> Dict[str, Any]:
+                async with semaphore:
+                    provider_started.set()
+                    return await fetchers[module_id](app_state)
+
+            data = await _OVERVIEW_SUMMARY_CACHE.get(
+                app_state,
+                module_id,
+                load_bounded,
+                started=provider_started,
+                timeout_after_start=_OVERVIEW_DOMAIN_TIMEOUT_S,
+            )
+            if not isinstance(data, dict):
+                return module_id, {"error": "invalid_domain_response"}
+            # Preserve explicit provider unavailability. A report with no
+            # records from an unavailable provider is not a NORMAL/zero report.
+            if str(data.get("source_status") or "").lower() == "unavailable":
+                data = {**data, "error": "source_unavailable"}
+            return module_id, data
+        except asyncio.TimeoutError:
+            log.warning("Overview %s summary timed out", module_id)
+            return module_id, {"error": "summary_timeout"}
+        except Exception as exc:
+            log.warning("Overview %s summary failed: %s", module_id, exc)
+            return module_id, {"error": "summary_unavailable"}
+
+    # Fetch summaries, not the City Coordinator. Semaphore bounds provider
+    # pressure, and each failure only degrades its own card.
+    cached = peek_city_report_cached()
+    report = cached[0] if cached else None
+    cached_statuses = getattr(report, "domain_status", {}) if report else {}
+
+    # First reuse the coordinator's standardized result or an existing
+    # module cache. For cold modules, restore the pushed on-demand summary
+    # fetch path. This means already loaded modules cost no new requests while
+    # Overview still works correctly on a cold start.
+    module_data: Dict[str, Dict[str, Any]] = {}
+    statuses_from_coordinator: Dict[str, DomainStatus] = {}
+    missing: List[str] = []
+    for module_id in CANONICAL_MODULES:
+        peek_fn = _MODULE_PEEKS.get(module_id)
+        try:
+            peek_data = peek_fn(app_state) if peek_fn else None
+        except Exception as exc:
+            log.warning("Overview %s cache peek failed: %s", module_id, exc)
+            peek_data = None
+        if isinstance(peek_data, dict):
+            module_data[module_id] = peek_data
+            continue
+
+        # Traffic's Overview card is specifically a current observed LTA
+        # speed-band summary. A cached coordinator status may contain an ML
+        # prediction-based or older Traffic assessment, so it cannot replace
+        # this source path. The request still reuses the source/API summary
+        # caches above the adapter boundary.
+        if module_id == "traffic":
+            missing.append(module_id)
+            continue
+
+        cached_status = cached_statuses.get(module_id)
+        if cached_status is not None:
+            statuses_from_coordinator[module_id] = (
+                DomainStatus.model_validate(cached_status)
+                if isinstance(cached_status, dict) else cached_status
+            )
+        elif report is not None:
+            # A valid coordinator snapshot is a complete city run. Do not
+            # start another set of domain workflows to fill any absent field.
+            module_data[module_id] = {"error": "not_in_cached_city_report"}
         else:
-            module_data[module_id] = result
-    
-    # Build module summaries through the shared normaliser, so the overview
-    # cards, the coordinator and the KPI insight panels read one source.
+            missing.append(module_id)
+
+    # Domain calls are async wrappers around their own service/adapters.
+    if missing:
+        loaded = await asyncio.gather(*(fetch_one(module_id) for module_id in missing))
+        module_data.update(dict(loaded))
+
     modules = []
     domain_status: Dict[str, DomainStatus] = {}
-    for module_id in module_ids:
-        data = module_data.get(module_id, {"error": "No data"})
-        status = normalize_domain_report(module_id, data)
+    for module_id in CANONICAL_MODULES:
+        status = statuses_from_coordinator.get(module_id)
+        if status is None:
+            data = module_data.get(module_id, {"error": "summary_unavailable"})
+            status = normalize_domain_report(module_id, data)
+        else:
+            data = {}
         domain_status[module_id] = status
 
-        updated_at = None
-        if isinstance(data, dict):
-            updated_at = data.get("timestamp") or data.get("snapshot_at") or data.get("generated_at")
-            if updated_at is not None and hasattr(updated_at, "isoformat"):
-                updated_at = updated_at.isoformat()
+        metrics = _card_metrics_for_status(module_id, status)
+        headline = (status.key_metrics or {}).get("headline") or {}
+        if not (isinstance(headline, dict) and {"label", "value", "unit"} <= headline.keys()):
+            # Coordinator-specific normalizers publish their structured values
+            # under flat key_metrics names. Select the first usable metric from
+            # the same domain spec as the detail rows, so valid readings such as
+            # Traffic average speed and Crime statistics are not lost merely
+            # because that normalizer did not duplicate a headline object.
+            headline_metric = next((m for m in metrics if m.value is not None),
+                                   metrics[0] if metrics else None)
+            if headline_metric is not None:
+                headline = {"label": headline_metric.label,
+                            "value": headline_metric.value,
+                            "unit": headline_metric.unit}
+        kpi = (ModuleKPI(**headline) if isinstance(headline, dict)
+               and {"label", "value", "unit"} <= headline.keys() else None)
+
+        raw_status = str(status.overall_status or "").lower()
+        module_status = ({"disrupted": "high"}.get(raw_status, raw_status)
+                         if raw_status in {"normal", "elevated", "critical", "disrupted"}
+                         else "unavailable")
+        age_seconds = (status.key_metrics or {}).get("age_seconds")
 
         modules.append(ModuleSummary(
             id=module_id,
             name=DOMAIN_NAMES.get(module_id, module_id.title()),
-            status=("unavailable" if not status.available else
-                    _determine_module_status(module_id, data)),
-            kpi=_extract_module_kpi(module_id, data),
-            updated_at=updated_at,
+            status=module_status if status.available else "unavailable",
+            kpi=kpi,
+            metrics=metrics,
+            updated_at=status.generated_at,
             detail_route=DOMAIN_ROUTES.get(module_id, "/"),
+            data_state=_card_data_state(status, metrics),
+            age_seconds=age_seconds if isinstance(age_seconds, (int, float)) and not isinstance(age_seconds, bool) else None,
         ))
-    
-    # Part 2: Fetch real alerts from all sources with error isolation.
-    # Each source is independent: one failing source degrades only its own
-    # contribution. A source that could not be reached is logged as a data gap;
-    # a source that was reached and had nothing to report is logged as zero.
-    all_alerts: List[Dict[str, Any]] = []
-    for name, fetch_fn in [
-        ("traffic", _fetch_traffic_incidents),
-        ("fire", _fetch_fire_incidents),
-        ("flood", _fetch_flood_alerts),
-        ("crime", _fetch_crime_incidents),
-        ("water", _fetch_water_incidents),
-    ]:
-        try:
-            result = await asyncio.wait_for(
-                fetch_fn(request_cache), timeout=8.0
-            )
-            if isinstance(result, list):
-                if isinstance(result, AlertBatch) and not result.source_ok:
-                    log.warning("Alert source %s unavailable: %s", name, result.source_error)
-                else:
-                    log.info("Alert source %s returned %d alerts", name, len(result))
-                all_alerts.extend(result)
-        except asyncio.TimeoutError:
-            log.warning("Alert source %s timed out after 8 seconds", name)
-        except Exception as e:
-            log.warning("Alert source %s failed: %s", name, e)
-    
-    # Surface status for non-normal modules.
-    # An unavailable module is NOT turned into an alert: a missing feed is a
-    # data-quality fact already carried by its finding, not a city risk signal.
+
+    generated_at = datetime.now(SG_OFFSET).isoformat()
+    assessment_ready = bool(report and build_narrative_input(report))
+    ai_brief = (deterministic_summary(report) if assessment_ready else
+                "City assessment not loaded. Request a city report to run cross-domain analysis.")
+    cached_alerts = []
+    if report:
+        for incident in report.priority_incidents:
+            cached_alerts.append(AlertItem(
+                domain=incident.domain,
+                severity=incident.severity,
+                title=incident.type,
+                description=incident.description,
+                timestamp=report.generated_at,
+                affected_zones=incident.affected_zones,
+            ))
+
+    # Preserve the established response shape and useful alerts without
+    # repeating provider fetches after the module summaries have completed.
+    # Domain-level risk alerts are grounded in those same structured reports.
     for module in modules:
-        if module.status in ("elevated", "critical"):
+        if module.status in ("elevated", "high", "critical"):
             data = module_data.get(module.id, {})
-            all_alerts.append({
-                "domain": module.id,
-                "severity": module.status,
-                "title": f"{module.name} Status: {module.status.capitalize()}",
-                "description": _generate_deterministic_module_brief(module.id, data),
-                "timestamp": datetime.now(SG_OFFSET).isoformat(),
-                "affected_zones": domain_status[module.id].affected_zones,
-            })
-    
-    # Sort by timestamp descending, take top 20
-    all_alerts.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-    top_alerts = all_alerts[:20]
-
-    # ---- City Situation narrative (Phase 3) ---------------------------------
-    # The deterministic coordinator report is the only permitted source for the
-    # city-level narrative, and it is shared with /api/city/report through the
-    # cached accessor, so the two never run the coordinator twice.
-    #
-    # Non-blocking on purpose: a measured coordinator run takes ~74s, far longer
-    # than a dashboard refresh may wait. When the cache is cold this response
-    # carries per-domain evidence only and says so via
-    # ``city_assessment_ready=False``; the dashboard reconciles once the report
-    # it is already waiting on completes.
-    narrative, assessment_ready, _report_at = await _coordinator_assessment()
-
-    if assessment_ready:
-        ai_brief = narrative
-    else:
-        # Cold start, or a coordinator report carrying no usable evidence: fall
-        # back to the per-domain readings rather than showing nothing. This
-        # never claims a city status or risk level.
-        ai_brief = deterministic_summary_from_domains(domain_status)
+            cached_alerts.append(AlertItem(
+                domain=module.id,
+                severity=module.status,
+                title=f"{module.name} Status: {module.status.capitalize()}",
+                description=_generate_deterministic_module_brief(module.id, data),
+                timestamp=domain_status[module.id].generated_at or generated_at,
+                affected_zones=domain_status[module.id].affected_zones,
+            ))
 
     return CityOverviewResponse(
-        generated_at=datetime.now(SG_OFFSET).isoformat(),
+        generated_at=generated_at,
         modules=modules,
         domain_status=domain_status,
-        alerts=[
-            AlertItem(
-                domain=a["domain"],
-                severity=a["severity"],
-                title=a["title"],
-                description=a["description"],
-                timestamp=a["timestamp"],
-                affected_zones=a.get("affected_zones", []),
-            )
-            for a in top_alerts
-        ],
-        ai_brief=ai_brief,
+        alerts=cached_alerts[:20],
+        ai_brief=(ai_brief if assessment_ready else deterministic_summary_from_domains(domain_status)),
         city_assessment_ready=assessment_ready,
     )
 
@@ -978,11 +1398,9 @@ async def get_overview_city(request: Request) -> CityOverviewResponse:
 async def get_city_narrative() -> CityNarrativeResponse:
     """Reconcile the City Situation against a finished coordinator report.
 
-    The Overview endpoint cannot simply be called twice to pick up a report
-    that finished after it answered, because it re-runs all ten domain agents -
-    several live API calls. This endpoint reads only the cached coordinator
-    report and the cached narrative, so reconciliation is cheap and costs no
-    provider quota when the evidence has not changed.
+    This endpoint reads the cached coordinator report. It may generate optional
+    narration, but it never starts a domain workflow; the full report endpoint
+    is the explicit coordinator trigger.
     """
     narrative, ready, report_at = await _coordinator_assessment()
     return CityNarrativeResponse(
@@ -1018,7 +1436,11 @@ async def get_overview_module(
         "fire": _fetch_fire_overview,
         "crime": _fetch_crime_overview,
         "water": _fetch_water_overview,
+        "waste": _fetch_waste_overview,
+        "energy": _fetch_energy_overview,
         "land": _fetch_land_overview,
+        "housing": _fetch_housing_overview,
+        "construction": _fetch_construction_overview,
     }
 
     if module_id not in fetch_functions:
@@ -1027,7 +1449,9 @@ async def get_overview_module(
     fetch_fn = fetch_functions[module_id]
 
     try:
-        data = await fetch_fn(request.app.state)
+        data = await _OVERVIEW_SUMMARY_CACHE.get(
+            request.app.state, module_id, lambda: fetch_fn(request.app.state)
+        )
     except Exception as e:
         log.warning("Failed to fetch module %s: %s", module_id, e)
         data = {"error": str(e)}
@@ -1052,7 +1476,7 @@ async def get_overview_module(
     elif module_id == "flood":
         alerts = await _fetch_flood_alerts()
     elif module_id == "crime":
-        alerts = await _fetch_crime_incidents()
+        alerts = _crime_incidents_from_summary(data)
 
     # Some agents emit datetimes, others ISO strings; normalise once here.
     status_obj = normalize_domain_report(module_id, data)
@@ -1070,20 +1494,107 @@ async def get_overview_module(
     )
 
 
+#: Seconds the chat route will wait for one domain's summary fetch while
+#: grounding a single-domain question. Small enough that a degraded upstream
+#: cannot push the total (fetch + LLM) past the frontend's 30s abort.
+_CHAT_DOMAIN_FETCH_BUDGET_S = 8.0
+
+# Overview once again loads the module summaries on demand, as the pushed
+# implementation did. Keep that work bounded: the old route launched ten
+# modules at once and separately fetched several of their sources a second
+# time for alerts. The current route uses the same domain fetchers as module
+# detail, with an explicit concurrency and per-domain time budget.
+_OVERVIEW_DOMAIN_CONCURRENCY = 3
+_OVERVIEW_DOMAIN_TIMEOUT_S = 10.0
+
+#: All module ids the module-detail endpoint can fetch on demand - the
+#: canonical 14-module roster, no duplicates, no legacy aliases.
+_CHAT_MODULE_IDS = CANONICAL_MODULES
+
+
+def _module_fetcher_map() -> Dict[str, Any]:
+    """Resolve the per-module summary fetchers at call time.
+
+    Built per call (never captured at import) so tests that patch
+    ``api._fetch_<module>_overview`` intercept the chat path exactly like the
+    module-detail endpoint.
+    """
+    return {name: globals()[f"_fetch_{name}_overview"] for name in _CHAT_MODULE_IDS}
+
+
+async def _single_domain_report_for_question(
+    question: str,
+    module_id: Optional[str],
+    app_state: Any,
+) -> Optional[Any]:
+    """Build a one-domain coordinator-shaped report for a chat question.
+
+    Only ever called when no cached coordinator report exists. Never runs the
+    City Coordinator: a question that names exactly one domain (or arrives
+    from that module's page) is answered from that domain's own bounded
+    summary - the same fetcher the module-detail endpoint uses. An ambiguous
+    or unmatched question returns None and the caller answers honestly that no
+    verified intelligence is available.
+    """
+    fetchers = _module_fetcher_map()
+    domain: Optional[str] = None
+    if module_id in fetchers:
+        domain = module_id
+    else:
+        detected = detect_domains(question)
+        domain = detected[0] if len(detected) == 1 else None
+    if domain is None:
+        return None
+
+    try:
+        data = await asyncio.wait_for(
+            _OVERVIEW_SUMMARY_CACHE.get(
+                app_state, domain, lambda: fetchers[domain](app_state)
+            ), timeout=_CHAT_DOMAIN_FETCH_BUDGET_S
+        )
+    except asyncio.TimeoutError:
+        log.warning("Copilot: %s summary fetch exceeded the %.1fs budget.",
+                    domain, _CHAT_DOMAIN_FETCH_BUDGET_S)
+        data = {"error": "summary fetch timed out"}
+    except Exception as e:
+        log.warning("Copilot: %s summary fetch failed: %s", domain, e)
+        data = {"error": str(e)}
+
+    from backend.app.intelligence.contracts import CitySituationReport
+
+    status = normalize_domain_report(domain, data)
+    return CitySituationReport(
+        generated_at=datetime.now(SG_OFFSET).isoformat(),
+        overall_city_status="UNKNOWN",
+        overall_risk_level="UNKNOWN",
+        confidence="low",
+        domain_status={domain: status},
+        limitations=[
+            "Single-domain answer: the full City Coordinator assessment has not "
+            "run, so cross-domain effects are outside this answer's scope.",
+        ],
+    )
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
     """Grounded Copilot.
 
-    Answers only from the validated City Coordinator report. The user's text
-    and the retrieved evidence are both treated as untrusted data and are never
-    interpolated into system instructions. Every answer is validated before it
-    is returned, and a grounded deterministic fallback is used whenever the
+    Answers only from validated intelligence. The user's text and the
+    retrieved evidence are both treated as untrusted data and are never
+    interpolated into system instructions. Every answer is validated before
+    it is returned, and a grounded deterministic fallback is used whenever the
     model cannot produce something verifiable.
-    """
-    from backend.app.ai.copilot import (
-        build_copilot_context, grounded_fallback,
-    )
 
+    Evidence sources, in priority order, and nothing else:
+      1. the *cached* coordinator report (peeked, never started here - a full
+         run costs ~74s and would blow the chat latency budget);
+      2. when the cache is cold, the single named domain's own bounded
+         summary (the same fetcher the module-detail endpoint uses), wrapped
+         in a one-domain report so the normal grounding/validation chain
+         applies unchanged;
+      3. no evidence -> an explicit "cannot answer" reply. Nothing is invented.
+    """
     user_message = (chat_request.message or "").strip()[:MAX_QUESTION_CHARS]
     if not user_message:
         return ChatResponse(response="Please enter a question.")
@@ -1093,16 +1604,21 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
         for h in (chat_request.history or [])[-MAX_HISTORY_TURNS:]
     ]
 
-    # Single shared, cached coordinator run - no duplicate agent execution.
-    report = None
+    # Cache-only read of the shared coordinator report: this route must never
+    # run the coordinator itself.
     try:
-        report, _payload = await asyncio.wait_for(
-            asyncio.to_thread(city_report_cached), timeout=20.0
-        )
-    except asyncio.TimeoutError:
-        log.warning("Copilot: coordinator report unavailable within 20s.")
+        cached = peek_city_report_cached()
     except Exception as e:
-        log.warning("Copilot: coordinator report unavailable: %s", e)
+        log.warning("Copilot: coordinator cache read failed: %s", e)
+        cached = None
+    report = cached[0] if cached else None
+
+    if report is None:
+        # request may be absent in direct unit calls; production always has one.
+        app_state = getattr(getattr(request, "app", None), "state", None)
+        report = await _single_domain_report_for_question(
+            user_message, chat_request.module_id, app_state
+        )
 
     ctx = build_copilot_context(
         report, user_message, chat_request.module_id, history

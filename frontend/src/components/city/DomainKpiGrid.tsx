@@ -8,12 +8,21 @@
  * badge says how bad it is. Those are independent, so a green Environment card
  * carrying a red "Critical" badge is correct, not a contradiction.
  *
+ * Every canonical UrbanOS module has a card here, including modules whose
+ * data has not loaded: an unloaded card shows an honest "Unavailable" state
+ * and never disappears. The legacy `environment` umbrella is not a module
+ * and must never produce a second card next to PM2.5/Weather.
+ *
+ * Each card renders the module's intended metric list. Metrics are
+ * independent: one unavailable metric renders an explicit placeholder
+ * without hiding its siblings, and a real zero renders as 0.
+ *
  * Each card navigates to its existing domain page. The insight action is a
  * separate control that must never trigger the card's navigation.
  * Unavailable data is rendered as such - never as zero.
  */
 import Link from "next/link";
-import { Sparkles, Car, Route, Train, Wind, CloudSun, Waves, Flame, ShieldAlert, Droplets, Map as MapIcon } from "lucide-react";
+import { Sparkles, Car, Route, Train, Wind, CloudSun, Waves, Flame, ShieldAlert, Droplets, Map as MapIcon, Trash2, Zap, Building2, Construction } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ModuleSummary } from "@/services/api";
 import {
@@ -34,7 +43,11 @@ const ICONS: Record<string, LucideIcon> = {
   fire: Flame,
   crime: ShieldAlert,
   water: Droplets,
+  waste: Trash2,
+  energy: Zap,
   land: MapIcon,
+  housing: Building2,
+  construction: Construction,
 };
 
 interface Props {
@@ -42,6 +55,15 @@ interface Props {
   /** Domain ids that have at least one grounded finding. */
   domainsWithFindings: Set<string>;
   onOpenInsight: (moduleId: string) => void;
+}
+
+/** Metrics to list under the headline, one row each. The headline itself is
+ * already rendered as the card's big number, so it is not repeated. */
+function metricRows(mod: ModuleSummary) {
+  const fallbackMetric = (mod.metrics ?? []).find((metric) => metric.value !== null && metric.value !== undefined)
+    ?? mod.metrics?.[0];
+  const headline = mod.kpi?.label ?? fallbackMetric?.label;
+  return (mod.metrics ?? []).filter((m) => m.label !== headline);
 }
 
 export default function DomainKpiGrid({
@@ -59,7 +81,7 @@ export default function DomainKpiGrid({
           Domain Performance
         </h3>
         <span className="text-[10px] font-medium text-slate-500 bg-white border border-slate-200 px-2.5 py-1 rounded-md">
-          Live backend values
+          Cached summaries or unavailable
         </span>
       </div>
 
@@ -73,7 +95,11 @@ export default function DomainKpiGrid({
           // status is "unavailable" threw away a real number and made the card
           // look broken. formatKpiValue already returns null for no value, so
           // an absent KPI still renders "Unavailable".
-          const kpiText = formatKpiValue(mod.kpi?.value, mod.kpi?.unit);
+          const fallbackMetric = (mod.metrics ?? []).find((metric) => metric.value !== null && metric.value !== undefined)
+            ?? mod.metrics?.[0];
+          const headlineLabel = mod.kpi?.label ?? fallbackMetric?.label;
+          const headlineValue = mod.kpi ?? fallbackMetric;
+          const kpiText = formatKpiValue(headlineValue?.value, headlineValue?.unit);
 
           return (
             <Link
@@ -124,7 +150,7 @@ export default function DomainKpiGrid({
                 </div>
 
                 <p className="text-sm text-white/90 mb-1 font-medium">
-                  {kpiText ? mod.kpi?.label : mod.kpi?.label ?? "No supported metric"}
+                  {headlineLabel ?? "No supported metric"}
                 </p>
 
                 {kpiText ? (
@@ -139,6 +165,30 @@ export default function DomainKpiGrid({
                   </p>
                 )}
 
+                {(() => {
+                  const rows = metricRows(mod);
+                  if (rows.length === 0) return null;
+                  return (
+                    <div data-testid="kpi-metrics" className="mb-3 space-y-1">
+                      {rows.map((m) => {
+                        const formatted = formatKpiValue(m.value, m.unit);
+                        return (
+                          <div
+                            key={m.key}
+                            data-testid={`kpi-metric-${m.key}`}
+                            className="flex items-baseline justify-between gap-2 text-xs"
+                          >
+                            <span className="text-white/90">{m.label}</span>
+                            <span className={`font-mono text-right ${formatted ? "text-white" : "text-white/70"}`}>
+                              {formatted ?? "Unavailable"}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+
                 <span data-testid="kpi-status" className={statusBadgeClass(mod.status)}>
                   {statusLabel(mod.status)}
                 </span>
@@ -146,6 +196,24 @@ export default function DomainKpiGrid({
                 {mod.updated_at && (
                   <p className="mt-3 text-[11px] text-white/90">
                     Updated {formatTimestamp(mod.updated_at)}
+                  </p>
+                )}
+                {mod.data_state && (
+                  <p data-testid="kpi-data-state" className="mt-2 text-[10px] text-white/80">
+                    {mod.data_state === "stale" && mod.age_seconds != null
+                      ? `Stale data · ${Math.round(mod.age_seconds / 60)} min old`
+                      : mod.data_state === "stale"
+                        ? "Stale data"
+                        : mod.data_state === "partial"
+                          ? "Partial data"
+                          : mod.data_state === "unavailable"
+                            ? "Data unavailable"
+                            : "Data available"}
+                  </p>
+                )}
+                {mod.id === "fire" && (
+                  <p data-testid="fire-card-limitation" className="mt-2 text-[10px] text-white/80">
+                    SCDF published reports; not a complete real-time dispatch feed.
                   </p>
                 )}
               </div>

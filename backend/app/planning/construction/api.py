@@ -5,21 +5,27 @@ import threading
 import time
 from fastapi import APIRouter, HTTPException, Query
 from .agent import run_construction_agent
+from .data import clear_construction_source_cache
 from .models import ConstructionReport
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/planning/construction", tags=["planning-construction"])
 _lock = threading.Lock()
-_cache: dict = {"report": None, "expires_at": 0.0}
+_cache: dict = {"report": None, "expires_at": 0.0, "cached_at": 0.0}
 
 
 def get_construction_report(refresh: bool = False) -> ConstructionReport:
     now = time.time()
+    request_started = time.monotonic()
     with _lock:
         report = _cache["report"]
+        if report is not None and refresh and _cache["cached_at"] > request_started:
+            return report
         if report is not None and not refresh and now < _cache["expires_at"]:
             return report
         try:
+            if refresh:
+                clear_construction_source_cache()
             report = run_construction_agent()
         except Exception as exc:
             log.exception("Construction report generation failed")
@@ -27,7 +33,20 @@ def get_construction_report(refresh: bool = False) -> ConstructionReport:
         _cache["report"] = report
         # Annual/historical sources don't need aggressive polling
         _cache["expires_at"] = now + (300 if report.status == "UNAVAILABLE" else 1800)
+        _cache["cached_at"] = time.monotonic()
         return report
+
+
+def peek_construction_report():
+    """Return the cached report only while it is still fresh. Never runs the
+    agent and never blocks: ``get_construction_report`` holds ``_lock`` for
+    the whole run, so taking it here would make a cheap Overview card read
+    wait behind a full data fetch. A cold or expired cache reads as ``None``.
+    """
+    cached = _cache["report"]
+    if cached is not None and time.time() < _cache["expires_at"]:
+        return cached
+    return None
 
 
 @router.get("/report")

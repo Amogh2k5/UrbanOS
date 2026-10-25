@@ -177,6 +177,10 @@ def fetch_sumatra_forecast(state: FloodAgentState) -> FloodAgentState:
         if snapshot.is_live:
             total_locs = sum(g.locations_reporting for g in snapshot.groups.values())
             log.info(f"Live Sumatra forecast: {total_locs} locations reporting")
+            if snapshot.partial:
+                state.warnings.append(
+                    f"BMKG Sumatra forecast is partial; {len(snapshot.failed_locations)} location requests failed."
+                )
         else:
             log.info(f"Sumatra forecast unavailable: {snapshot.error}")
         
@@ -260,7 +264,11 @@ def assess_risk(state: FloodAgentState) -> FloodAgentState:
         
         # Track evidence availability
         sg_available = state.singapore_rainfall is not None and state.singapore_rainfall.is_live
-        su_available = state.sumatra_rainfall is not None and state.sumatra_rainfall.is_live
+        su_available = (
+            state.sumatra_rainfall is not None
+            and state.sumatra_rainfall.is_live
+            and any(g.max_rainfall_mm is not None for g in state.sumatra_rainfall.groups.values())
+        )
         pub_available = len(state.pub_alerts) > 0
         nea_available = state.nea_weather is not None and state.nea_weather.is_live
         
@@ -306,7 +314,7 @@ def assess_risk(state: FloodAgentState) -> FloodAgentState:
             for group in su_snapshot.groups.values():
                 if group.has_rain:
                     has_rain_any = True
-                if group.max_rainfall_mm > max_rain:
+                if group.max_rainfall_mm is not None and group.max_rainfall_mm > max_rain:
                     max_rain = group.max_rainfall_mm
             
             if max_rain >= 50:
@@ -319,7 +327,7 @@ def assess_risk(state: FloodAgentState) -> FloodAgentState:
             # Check for squall signature
             squall_groups = 0
             for group in su_snapshot.groups.values():
-                if group.has_rain and group.max_rainfall_mm > 10:
+                if group.has_rain and group.max_rainfall_mm is not None and group.max_rainfall_mm > 10:
                     squall_groups += 1
             
             if squall_groups >= 2:
@@ -561,7 +569,8 @@ def build_report(state: FloodAgentState) -> FloodAgentState:
             su_evidence = SumatraRainfallEvidence(
                 available=True,
                 source=su_snapshot.source,
-                max_1h_mm=max((g.max_rainfall_mm for g in su_snapshot.groups.values()), default=0.0),
+                max_1h_mm=max((g.max_rainfall_mm for g in su_snapshot.groups.values()
+                               if g.max_rainfall_mm is not None), default=None),
                 stations_reporting=sum(g.locations_reporting for g in su_snapshot.groups.values()),
                 weather_systems=[],  # Will be populated from groups
             )
@@ -587,8 +596,8 @@ def build_report(state: FloodAgentState) -> FloodAgentState:
             su_evidence = SumatraRainfallEvidence(
                 available=False,
                 source=su_snapshot.source if su_snapshot else "unavailable",
-                max_1h_mm=0.0,
-                stations_reporting=0,
+                max_1h_mm=None,
+                stations_reporting=None,
                 weather_systems=[],
             )
         
@@ -758,6 +767,12 @@ def get_flood_agent_v3():
     return _flood_agent_v3_graph
 
 
+# Alias for backward compatibility with coordinator
+def get_flood_agent():
+    """Alias for get_flood_agent_v3 for backward compatibility."""
+    return get_flood_agent_v3()
+
+
 def run_flood_agent_v3(offline: bool = True) -> FloodReport:
     """Run the Flood Agent V3 and return a FloodReport."""
     prev_offline = os.getenv("FLOOD_AGENT_OFFLINE")
@@ -777,3 +792,7 @@ def run_flood_agent_v3(offline: bool = True) -> FloodReport:
             os.environ["FLOOD_AGENT_OFFLINE"] = prev_offline
         else:
             os.environ.pop("FLOOD_AGENT_OFFLINE", None)
+
+
+# Alias for backward compatibility
+run_flood_agent = run_flood_agent_v3

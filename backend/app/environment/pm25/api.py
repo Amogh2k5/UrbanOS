@@ -120,7 +120,7 @@ class Pm25ApiClient:
         timeout: float = _TIMEOUT,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key or os.getenv("NEA_API_KEY")
+        self.api_key = api_key or os.getenv("DATA_GOV_SG_API_KEY")
         self.offline = offline
         self.allow_fallback_fixture = allow_fallback_fixture
         self.timeout = timeout

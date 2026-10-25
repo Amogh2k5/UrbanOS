@@ -53,7 +53,7 @@ const DOMAIN_TOKENS = [
   "dom-pm25", "dom-weather", "dom-flood",
   "dom-fire", "dom-crime",
   "dom-water", "dom-energy", "dom-waste",
-  "dom-land", "dom-housing",
+  "dom-land", "dom-housing", "dom-construction",
 ];
 
 const SIGNAL_TOKENS = ["signal-low", "signal-elevated", "signal-high", "signal-critical"];
