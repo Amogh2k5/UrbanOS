@@ -1,9 +1,0 @@
-Found 4 occurrences
-1. Pos 2348: PTED",         overall_risk_level="HIGH",         confidence="high",         domain_status={             "flood": {"d
----
-2. Pos 3260: s=["Central South"],         evidence=[],         confidence="high",         limitations=["The City Coordinator is a 
----
-3. Pos 13165:            overall_risk_level="HIGH",             confidence="high",             domain_status={                 "flo
----
-4. Pos 14766: PTED",         overall_risk_level="HIGH",         confidence="high",         domain_status={             "flood": {"d
----

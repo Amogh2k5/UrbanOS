@@ -1,4 +1,0 @@
-Line 4: LIVE WEATHER OBSERVATIONS (Singapore, Malaysia/Johor, Sumatra) → CURRENT FLOOD RISK
-Line 11: 2. Fetch live Malaysia/Johor rainfall (MetMalaysia API)
-Line 252: - Malaysia/Johor rainfall = SUPPORTING (weight 0.3)
-Line 266: my_available = state.malaysia_evidence and state.malaysia_evidence.get("available")
