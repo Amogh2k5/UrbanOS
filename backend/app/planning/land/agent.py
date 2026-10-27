@@ -20,8 +20,8 @@ from langgraph.graph import END, StateGraph
 
 from backend.app.planning.land.models import LandInsight, LandReport
 from backend.app.planning.land.processing import (
-    GROUP_LABELS, build_alerts, build_cadastral_section, build_gls_section,
-    build_gpr_section, build_industrial_section, build_land_use_section,
+    GROUP_LABELS, build_alerts, build_cadastral_section, build_gls_price_forecast_section,
+    build_gls_section, build_gpr_section, build_industrial_section, build_land_use_section,
     build_planning_section, construction_context, housing_context,
 )
 from backend.app.planning.land.sources import LandSnapshot, fetch_land_snapshot, source_status
@@ -38,6 +38,7 @@ STANDARD_QUESTIONS = (
     "How much industrial land is there?",
     "What is the cadastral parcel coverage?",
     "How does land relate to housing and construction?",
+    "What is the baseline estimate for next year's residential GLS tender price per GFA?",
 )
 
 
@@ -206,6 +207,40 @@ def build_insights(report: LandReport) -> List[LandInsight]:
         ),
         data_kind="latest_available",
     ))
+
+    # 9. Baseline tender-price estimate (persistence, one narrow category)
+    pf = report.price_forecast
+    if pf.forecast_value is not None and pf.latest_award_year is not None:
+        in_progress = (
+            f" (the next calendar year after the in-progress {pf.current_year_excluded})"
+            if pf.current_year_excluded is not None
+            else ""
+        )
+        out.append(LandInsight(
+            question=STANDARD_QUESTIONS[8],
+            answer=(
+                f"The latest completed award year {pf.latest_award_year} shows a median "
+                f"successful tender price of {_fmt(pf.latest_median_price_per_gfa, 'per GFA unit')} "
+                f"across {_fmt(pf.latest_site_count, 'eligible sites')} in the "
+                f"'{pf.development_code}' GLS category. The persistence baseline for "
+                f"{pf.forecast_year}{in_progress} carries that median forward unchanged. "
+                "Prices are nominal (not inflation-adjusted); this is a baseline estimate "
+                "for awarded sites in one development category, not all Singapore land prices."
+            ),
+            data_kind="forecast",
+        ))
+    else:
+        reason = next(
+            (l for l in pf.limitations if "Insufficient history" in l or "unavailable" in l.lower()),
+            "insufficient eligible history",
+        )
+        out.append(LandInsight(
+            question=STANDARD_QUESTIONS[8],
+            answer=(
+                f"No baseline estimate is available: {reason}. No value is invented."
+            ),
+            data_kind="unavailable",
+        ))
     return out
 
 
@@ -217,6 +252,7 @@ def analyze_land(state: LandAgentState) -> LandAgentState:
     planning = build_planning_section(snap)
     cadastral = build_cadastral_section(snap)
     gls = build_gls_section(snap)
+    price_forecast = build_gls_price_forecast_section(snap)
     industrial = build_industrial_section(snap, land_use)
 
     ok_sources = sum(1 for s in snap.sources if s.status == "ok")
@@ -246,6 +282,7 @@ def analyze_land(state: LandAgentState) -> LandAgentState:
         planning=planning,
         cadastral=cadastral,
         gls=gls,
+        price_forecast=price_forecast,
         industrial=industrial,
         alerts=build_alerts(land_use, planning, gls, industrial, snap),
         sources=snap.sources,

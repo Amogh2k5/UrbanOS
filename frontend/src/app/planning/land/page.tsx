@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import { AlertTriangle, Building2, Factory, Info, Layers, MapPin, RefreshCw, ShieldAlert } from "lucide-react";
 import { domainCardClass } from "@/components/city/presentation";
 import { GroupBars, GroupShareBar, YearBars } from "./LandCharts";
+import LandPriceForecast from "./LandPriceForecast";
 import { DATA_KIND_STYLE, GROUP_COLOR, GROUP_LABEL, SOURCE_STATUS_STYLE } from "./landConstants";
 import {
   fetchLandGls,
@@ -780,6 +781,10 @@ export default function LandPage() {
                       {g.scope} Showing the {g.latest_sites.length} most recent awards in the source.
                     </div>
                   </Card>
+
+                  <div className="mt-4">
+                    <LandPriceForecast section={gls?.price_forecast ?? null} />
+                  </div>
 
                   {cad && (
                     <Card className="mt-4">

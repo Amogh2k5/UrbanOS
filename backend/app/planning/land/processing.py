@@ -14,11 +14,14 @@ it is never dropped and never merged into a group it does not belong to.
 """
 from __future__ import annotations
 
+import math
 import statistics
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.app.planning.land.models import (
-    CadastralSection, GprValue, GlsSection, GlsSite, GrossPlotRatioSection,
+    AnnualMedianRecord, CadastralSection, ForecastMethodResult, GlsPriceForecastEvaluation,
+    GlsPriceForecastSection, GprValue, GlsSection, GlsSite, GrossPlotRatioSection,
     IndustrialSection, LandAlert, LandUseCategory, LandUseSection, PlanningArea,
     PlanningSection,
 )
@@ -405,6 +408,288 @@ def build_gls_section(snap: LandSnapshot) -> GlsSection:
         for r in latest
     ]
     sec.data_kind = "historical"
+    return sec
+
+
+# ------------------------------------------- GLS price baseline estimate
+SG_TZ = timezone(timedelta(hours=8))
+
+# Verified during the Land ML feasibility audit: the only GLS development
+# category with enough positive-GFA awarded sites to support a narrow
+# baseline. Do not pool categories into this target.
+PRICE_FORECAST_DEVELOPMENT_CODE = "Residential (Non-Landed)"
+
+# Years supported by fewer eligible sites than this are flagged low-sample
+# (the audit found 2021 has a single eligible site).
+LOW_SAMPLE_SITE_THRESHOLD = 3
+
+# A persistence forecast needs at least this many completed award years; with
+# one year there is no evidence of any continuity to carry forward.
+MIN_COMPLETED_YEARS_FOR_FORECAST = 2
+
+# Walk-forward burn-in: the first 3 completed years seed every method, so all
+# methods score an identical set of later years.
+EVAL_BURN_IN_YEARS = 3
+
+# The recent-period walk-forward comparison runs over the most recent
+# RECENT_EVAL_YEARS completed award years, alongside the full-history window.
+RECENT_EVAL_YEARS = 10
+
+EVAL_METHODS = ("persistence", "expanding_median", "rolling_median_3")
+
+
+def _finite_positive(value: Any) -> bool:
+    """True only for a real, finite, strictly positive number - booleans and
+    strings never qualify, so a sentinel can never become a fake observation."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    )
+
+
+def _eligible_price_forecast_records(
+    records: List[Dict[str, Any]], current_year: int
+) -> Tuple[Dict[int, List[float]], Dict[str, int]]:
+    """Waterfall filter from all GLS records down to eligible price-per-GFA
+    observations, with an account of every exclusion so nothing is silently
+    dropped.
+
+    Eligibility, in order: exact development category match, valid award year,
+    valid successful price (> 0), finite positive GFA. Records eligible but
+    awarded in the still-in-progress current year (or later) are counted
+    separately and excluded from training/evaluation.
+    """
+    counts: Dict[str, int] = {
+        "sites_total": len(records),
+        "sites_eligible": 0,
+        "excluded_other_development_code": 0,
+        "excluded_invalid_award_year": 0,
+        "excluded_invalid_price": 0,
+        "excluded_invalid_gfa": 0,
+        "excluded_incomplete_or_future_year": 0,
+    }
+    by_year: Dict[int, List[float]] = {}
+    for rec in records:
+        if str(rec.get("devt_code") or "").strip() != PRICE_FORECAST_DEVELOPMENT_CODE:
+            counts["excluded_other_development_code"] += 1
+            continue
+        year = rec.get("award_year")
+        if not isinstance(year, int) or isinstance(year, bool) or year <= 0:
+            counts["excluded_invalid_award_year"] += 1
+            continue
+        price = rec.get("successful_price")
+        if not _finite_positive(price):
+            counts["excluded_invalid_price"] += 1
+            continue
+        gfa = rec.get("gfa_sqm")
+        if not _finite_positive(gfa):
+            counts["excluded_invalid_gfa"] += 1
+            continue
+        counts["sites_eligible"] += 1
+        if year >= current_year:
+            counts["excluded_incomplete_or_future_year"] += 1
+            continue
+        by_year.setdefault(year, []).append(float(price) / float(gfa))
+    return by_year, counts
+
+
+def _annual_medians(by_year: Dict[int, List[float]]) -> Dict[int, Tuple[float, int]]:
+    """{completed year: (median price per GFA, eligible site count)}."""
+    return {
+        year: (statistics.median(values), len(values))
+        for year, values in sorted(by_year.items())
+    }
+
+
+def _walk_forward_evaluation(
+    annual: Dict[int, Tuple[float, int]],
+    burn_in: int = EVAL_BURN_IN_YEARS,
+    window: str = "all_completed_years",
+    window_note: str = "all completed award years",
+) -> GlsPriceForecastEvaluation:
+    """One-year-ahead chronological walk-forward over completed award years.
+
+    Each test year is predicted using only strictly earlier years; all three
+    methods are scored on an identical set of test periods. 'rolling_median_3'
+    uses the (up to) three most recent *observed* earlier years, so gap years
+    shrink the window instead of breaking the comparison.
+    """
+    years = sorted(annual)
+    if len(years) < burn_in + 1:
+        return GlsPriceForecastEvaluation(
+            status="insufficient_history",
+            window=window,
+            insufficient_reason=(
+                f"Only {len(years)} completed award year(s) with an eligible median; "
+                f"a walk-forward comparison needs at least {burn_in + 1}."
+            ),
+            note=(
+                f"Window: {window_note}. No out-of-sample metrics are reported when "
+                "history is this thin."
+            ),
+        )
+
+    test_years = years[burn_in:]
+    errors: Dict[str, List[float]] = {m: [] for m in EVAL_METHODS}
+    for t in test_years:
+        prior = [y for y in years if y < t]
+        actual = annual[t][0]
+        errors["persistence"].append(abs(actual - annual[prior[-1]][0]))
+        errors["expanding_median"].append(
+            abs(actual - statistics.median([annual[y][0] for y in prior]))
+        )
+        recent = prior[-3:]
+        errors["rolling_median_3"].append(
+            abs(actual - statistics.median([annual[y][0] for y in recent]))
+        )
+
+    return GlsPriceForecastEvaluation(
+        status="ok",
+        window=window,
+        test_periods=len(test_years),
+        window_start=test_years[0],
+        window_end=test_years[-1],
+        train_years_before_first_test=burn_in,
+        methods=[
+            ForecastMethodResult(
+                method=m,
+                mae=round(statistics.mean(errs), 2),
+                test_periods=len(test_years),
+            )
+            for m, errs in errors.items()
+        ],
+        note=(
+            f"One-year-ahead chronological walk-forward over {window_note}: "
+            f"every method predicts {test_years[0]}-{test_years[-1]} using only strictly "
+            "earlier years. persistence = previous completed year's median; "
+            "expanding_median = median of all earlier completed years; "
+            "rolling_median_3 = median of the (up to) three most recent earlier "
+            "completed years. All methods are scored on the same test years, and "
+            "the incomplete current year is excluded."
+        ),
+    )
+
+
+def _recent_walk_forward_evaluation(
+    annual: Dict[int, Tuple[float, int]], recent_years: int = RECENT_EVAL_YEARS
+) -> GlsPriceForecastEvaluation:
+    """Same methodology restricted to the most recent ``recent_years``
+    completed award years, so a recent-period MAE sits alongside the
+    full-history MAE. All methods still use identical test periods."""
+    years = sorted(annual)
+    recent = {y: annual[y] for y in years[-recent_years:]}
+    if recent:
+        n = len(recent)
+        window_note = (
+            f"the {n} most recent completed award years "
+            f"({years[-n]}-{years[-1]})"
+        )
+    else:
+        window_note = "the most recent completed award years"
+    return _walk_forward_evaluation(
+        recent, window="recent_years", window_note=window_note
+    )
+
+
+def build_gls_price_forecast_section(
+    snap: LandSnapshot, now: Optional[datetime] = None
+) -> GlsPriceForecastSection:
+    """Baseline estimate for the NEXT CALENDAR YEAR of the annual median
+    successful tender price per GFA unit for awarded GLS sites in one
+    verified category.
+
+    Three years stay distinct: ``latest_award_year`` is the most recent
+    COMPLETED award year and the persistence source; ``current_year_excluded``
+    is the still-in-progress Asia/Singapore year, never used for training and
+    never the forecast target; ``forecast_year`` is the calendar year after
+    the in-progress one (next year). The estimate is the latest completed
+    year's median. This is not an ML prediction; no evaluation output feeds
+    the live forecast.
+    """
+    sec = GlsPriceForecastSection()
+    records = snap.gls_sites or []
+    now = now or datetime.now(SG_TZ)
+    current_year = now.year
+    sec.current_year_excluded = current_year
+    sec.limitations.extend([
+        "Prices are NOMINAL successful tender prices as published; no inflation "
+        "adjustment is applied because no reliable local inflation series is "
+        "available offline. Values from different years are not inflation-comparable.",
+        "This is a persistence baseline (the next calendar year repeats the latest "
+        "completed year's median), not an ML prediction, not a guaranteed price, "
+        "and not a real-time market quote or government prediction.",
+        "The estimate targets the next calendar year after the in-progress year; "
+        f"the in-progress year {current_year} is never used as training data and is "
+        "never presented as the forecast target.",
+        "The estimate covers awarded GLS sites in the 'Residential (Non-Landed)' "
+        "development category only; it does not represent all Singapore land prices.",
+        "The source publishes GFA without a unit label (unlike SA_SQM, which names "
+        "square metres), and no local documentation states GFA units; values are "
+        "therefore reported as tender price per GFA unit without assuming an area unit.",
+        "Annual medians built from very few sites are fragile; per-year site counts "
+        "are retained so the UI can disclose the evidence behind each median.",
+    ])
+
+    by_year, counts = _eligible_price_forecast_records(records, current_year)
+    sec.eligibility = counts
+    if counts["sites_total"] == 0:
+        sec.limitations.append(
+            "URA Sale Sites layer unavailable; no baseline estimate can be produced."
+        )
+        sec.evaluation = _walk_forward_evaluation({})
+        sec.evaluation_recent = _recent_walk_forward_evaluation({})
+        return sec
+
+    annual = _annual_medians(by_year)
+    completed_years = sorted(annual)
+    sec.annual_medians = [
+        AnnualMedianRecord(
+            award_year=y,
+            median_price_per_gfa=annual[y][0],
+            site_count=annual[y][1],
+            low_sample=annual[y][1] < LOW_SAMPLE_SITE_THRESHOLD,
+        )
+        for y in completed_years
+    ]
+
+    # Both walk-forward windows are computed (or honestly refused) on every
+    # path, so the evaluation never silently defaults.
+    sec.evaluation = _walk_forward_evaluation(annual)
+    sec.evaluation_recent = _recent_walk_forward_evaluation(annual)
+
+    if len(completed_years) < MIN_COMPLETED_YEARS_FOR_FORECAST:
+        sec.limitations.append(
+            f"Insufficient history for a baseline estimate: {len(completed_years)} "
+            f"completed award year(s) with eligible sites; at least "
+            f"{MIN_COMPLETED_YEARS_FOR_FORECAST} required."
+        )
+        return sec
+
+    latest = completed_years[-1]
+    sec.latest_award_year = latest
+    sec.latest_median_price_per_gfa = annual[latest][0]
+    sec.latest_site_count = annual[latest][1]
+    sec.latest_year_low_sample = annual[latest][1] < LOW_SAMPLE_SITE_THRESHOLD
+    if sec.latest_year_low_sample:
+        sec.warnings.append(
+            f"The latest completed award year {latest} is based on only "
+            f"{annual[latest][1]} eligible site(s); the baseline estimate is fragile."
+        )
+    # Forecast target: the next calendar year AFTER the in-progress year. The
+    # current incomplete year is never the target and never training data, so
+    # latest observed, current, and forecast years stay distinct (e.g. 2025 /
+    # 2026 / 2027).
+    sec.forecast_year = current_year + 1
+    sec.forecast_value = annual[latest][0]
+    sec.data_kind = "forecast"
+
+    if counts["excluded_incomplete_or_future_year"]:
+        sec.warnings.append(
+            f"{counts['excluded_incomplete_or_future_year']} eligible site(s) awarded in "
+            f"{current_year} or later were excluded: the year is still in progress."
+        )
     return sec
 
 

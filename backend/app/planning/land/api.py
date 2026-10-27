@@ -139,7 +139,12 @@ def land_planning_areas(refresh: bool = Query(False)) -> Dict[str, Any]:
 @router.get("/gls")
 def land_gls(refresh: bool = Query(False)) -> Dict[str, Any]:
     r = _report(refresh)
-    return {**_meta(r), "gls": r.gls.model_dump(mode="json"), "cadastral": r.cadastral.model_dump(mode="json")}
+    return {
+        **_meta(r),
+        "gls": r.gls.model_dump(mode="json"),
+        "cadastral": r.cadastral.model_dump(mode="json"),
+        "price_forecast": r.price_forecast.model_dump(mode="json"),
+    }
 
 
 @router.get("/industrial")

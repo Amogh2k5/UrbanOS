@@ -1591,6 +1591,53 @@ export interface LandCadastralSection {
 export interface LandGlsResponse extends LandMeta {
   gls: LandGlsSection;
   cadastral: LandCadastralSection;
+  price_forecast: LandPriceForecastSection;
+}
+
+export interface LandAnnualMedianRecord {
+  award_year: number;
+  median_price_per_gfa: number;
+  site_count: number;
+  low_sample: boolean;
+}
+
+export interface LandForecastMethodResult {
+  method: string;
+  mae: number;
+  test_periods: number;
+}
+
+export interface LandPriceForecastEvaluation {
+  status: 'ok' | 'insufficient_history';
+  window: string;
+  test_periods: number | null;
+  window_start: number | null;
+  window_end: number | null;
+  train_years_before_first_test: number | null;
+  methods: LandForecastMethodResult[];
+  note: string;
+  insufficient_reason: string | null;
+}
+
+export interface LandPriceForecastSection {
+  data_kind: LandDataKind;
+  development_code: string;
+  scope: string;
+  forecast_method: string;
+  is_nominal: boolean;
+  latest_award_year: number | null;
+  latest_median_price_per_gfa: number | null;
+  latest_site_count: number | null;
+  latest_year_low_sample: boolean;
+  forecast_year: number | null;
+  forecast_value: number | null;
+  current_year_excluded: number | null;
+  annual_medians: LandAnnualMedianRecord[];
+  evaluation: LandPriceForecastEvaluation;
+  evaluation_recent: LandPriceForecastEvaluation;
+  eligibility: Record<string, number>;
+  warnings: string[];
+  limitations: string[];
 }
 
 export interface LandIndustrialSection {

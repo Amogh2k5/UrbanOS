@@ -1,12 +1,17 @@
 """Land analytics: category grouping, area aggregation, GPR, planning areas,
-cadastral, GLS, industrial, alerts. All pure functions over a mocked snapshot."""
+cadastral, GLS, industrial, alerts, and the GLS price baseline forecast.
+All pure functions over a mocked snapshot."""
 from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from backend.app.planning.land.models import LandReport
 from backend.app.planning.land.processing import (
-    GROUP_LABELS, _LU_GROUP, _percent, build_alerts, build_cadastral_section, build_gls_section,
+    EVAL_BURN_IN_YEARS, LOW_SAMPLE_SITE_THRESHOLD, MIN_COMPLETED_YEARS_FOR_FORECAST,
+    PRICE_FORECAST_DEVELOPMENT_CODE, GROUP_LABELS, _LU_GROUP, _percent, build_alerts,
+    build_cadastral_section, build_gls_price_forecast_section, build_gls_section,
     build_gpr_section, build_industrial_section, build_land_use_section,
     build_planning_section, category_group, construction_context, housing_context,
 )
@@ -18,6 +23,11 @@ from land_fixtures import (
     cadastral_doc, gls_doc, jtc_doc, land_use_feature, planning_area_doc, region_doc,
 )
 import json
+
+
+SG_TEST_TZ = timezone(timedelta(hours=8))
+# Pin "now" so the incomplete-year exclusion is deterministic in tests.
+NOW = datetime(2026, 10, 27, tzinfo=SG_TEST_TZ)
 
 
 def _snap():
@@ -366,6 +376,312 @@ def test_gls_latest_sites_sorted_newest_first(snap):
 def test_gls_empty_is_unavailable():
     sec = build_gls_section(LandSnapshot(generated_at="x"))
     assert sec.data_kind == "unavailable" and sec.site_count is None
+
+
+# ================================================ GLS price baseline forecast
+def _gls_rec(year, price, gfa, devt=PRICE_FORECAST_DEVELOPMENT_CODE, **over):
+    """One record shaped exactly like parse_gls_site_feature output."""
+    rec = {
+        "location": "Test Road",
+        "devt_code": devt,
+        "devt_allowed": "Condominium",
+        "site_area_sqm": 1000.0,
+        "gpr": 2.0,
+        "gfa_sqm": gfa,
+        "housing_units": 0,
+        "award_date": f"{year}0101",
+        "award_year": year,
+        "successful_tenderer": "T",
+        "successful_price": price,
+        "no_of_bids": 2,
+        "planning_area": "Bedok",
+        "centroid_lon": 103.9,
+        "centroid_lat": 1.3,
+        "updated": "2025-01-01",
+    }
+    rec.update(over)
+    return rec
+
+
+def _forecast_snap(records):
+    snap = LandSnapshot(generated_at="2026-10-27T00:00:00+08:00")
+    snap.gls_sites = records
+    return snap
+
+
+def _build(records):
+    return build_gls_price_forecast_section(_forecast_snap(records), now=NOW)
+
+
+def test_forecast_exact_category_filtering_no_pooling():
+    sec = _build([
+        _gls_rec(2024, 100.0, 10.0),
+        _gls_rec(2024, 100.0, 10.0, devt="Residential (Landed)"),
+        _gls_rec(2024, 100.0, 10.0, devt="Industrial"),
+        _gls_rec(2024, 100.0, 10.0, devt="Residential with Commercial at 1st Sty"),
+        _gls_rec(2024, 100.0, 10.0, devt="Commercial and Residential"),
+    ])
+    assert sec.eligibility["excluded_other_development_code"] == 4
+    assert sec.eligibility["sites_eligible"] == 1
+    assert sec.annual_medians[0].site_count == 1
+
+
+def test_forecast_invalid_gfa_zero_none_negative_excluded():
+    sec = _build([
+        _gls_rec(2024, 100.0, 0.0),
+        _gls_rec(2024, 100.0, None),
+        _gls_rec(2024, 100.0, -5.0),
+        _gls_rec(2024, 100.0, 10.0),  # valid
+        _gls_rec(2023, 100.0, 10.0),  # valid second year
+    ])
+    assert sec.eligibility["excluded_invalid_gfa"] == 3
+    assert sec.eligibility["sites_eligible"] == 2
+    assert all(m.site_count == 1 for m in sec.annual_medians)
+
+
+def test_forecast_invalid_price_none_zero_negative_excluded():
+    sec = _build([
+        _gls_rec(2024, None, 10.0),
+        _gls_rec(2024, 0, 10.0),
+        _gls_rec(2024, -1.0, 10.0),
+        _gls_rec(2024, 100.0, 10.0),
+        _gls_rec(2023, 100.0, 10.0),
+    ])
+    assert sec.eligibility["excluded_invalid_price"] == 3
+    assert sec.eligibility["sites_eligible"] == 2
+
+
+def test_forecast_invalid_award_year_excluded():
+    sec = _build([
+        _gls_rec(None, 100.0, 10.0),
+        _gls_rec(2024, 100.0, 10.0),
+        _gls_rec(2023, 100.0, 10.0),
+    ])
+    assert sec.eligibility["excluded_invalid_award_year"] == 1
+    assert sec.eligibility["sites_eligible"] == 2
+
+
+def test_forecast_price_per_gfa_and_annual_median():
+    # 2023: two sites -> ppg 10 and 30 -> median 20; 2024: one site -> 10.
+    sec = _build([
+        _gls_rec(2023, 100.0, 10.0),
+        _gls_rec(2023, 300.0, 10.0),
+        _gls_rec(2024, 200.0, 20.0),
+    ])
+    by_year = {m.award_year: m for m in sec.annual_medians}
+    assert by_year[2023].median_price_per_gfa == pytest.approx(20.0)
+    assert by_year[2023].site_count == 2
+    assert by_year[2024].median_price_per_gfa == pytest.approx(10.0)
+
+
+def test_forecast_excludes_incomplete_current_year():
+    sec = _build([
+        _gls_rec(2025, 100.0, 10.0),
+        _gls_rec(2024, 100.0, 10.0),
+        _gls_rec(2026, 999.0, 10.0),  # current in-progress year
+    ])
+    assert sec.current_year_excluded == 2026
+    assert sec.eligibility["excluded_incomplete_or_future_year"] == 1
+    assert 2026 not in {m.award_year for m in sec.annual_medians}
+    assert any("excluded" in w and "2026" in w for w in sec.warnings)
+    # 2026 records are valid data, just not yet a completed year
+    assert sec.eligibility["sites_eligible"] == 3
+
+
+def test_forecast_persistence_uses_latest_completed_year_only():
+    sec = _build([
+        _gls_rec(2023, 100.0, 10.0),  # median 10
+        _gls_rec(2024, 300.0, 10.0),  # median 30
+        _gls_rec(2025, 500.0, 10.0),  # median 50 <- persistence source
+    ])
+    assert sec.latest_award_year == 2025
+    assert sec.latest_median_price_per_gfa == pytest.approx(50.0)
+    assert sec.forecast_value == pytest.approx(50.0)
+    assert sec.forecast_method == "persistence"
+    assert sec.data_kind == "forecast"
+
+
+def test_forecast_year_targets_next_calendar_year_not_in_progress_year():
+    """latest observed (2025), current in-progress (2026, excluded) and
+    forecast target (2027) must stay distinct; the incomplete current year is
+    never labelled as the next-year forecast target."""
+    sec = _build([
+        _gls_rec(2024, 100.0, 10.0),
+        _gls_rec(2025, 500.0, 10.0),
+        _gls_rec(2026, 999.0, 10.0),  # in-progress year: never target, never training
+    ])
+    assert sec.latest_award_year == 2025
+    assert sec.current_year_excluded == 2026
+    assert sec.forecast_year == 2027
+    assert sec.latest_award_year < sec.current_year_excluded < sec.forecast_year
+    assert sec.forecast_value == pytest.approx(50.0)  # source stays the completed 2025 median
+    assert any(
+        "never used as training data" in l and "never presented as the forecast target" in l
+        for l in sec.limitations
+    )
+
+
+def test_forecast_gfa_unit_limitation_disclosed():
+    sec = _build([_gls_rec(2024, 100.0, 10.0), _gls_rec(2025, 100.0, 10.0)])
+    assert any(
+        "GFA without a unit label" in l and "per GFA unit without assuming an area unit" in l
+        for l in sec.limitations
+    )
+
+
+def test_forecast_insufficient_history_shows_nothing_not_zero():
+    sec = _build([_gls_rec(2025, 100.0, 10.0)])  # only one completed year
+    assert sec.data_kind == "unavailable"
+    assert sec.forecast_value is None
+    assert sec.forecast_year is None
+    assert sec.latest_median_price_per_gfa is None
+    assert any("Insufficient history" in l for l in sec.limitations)
+
+
+def test_forecast_empty_snapshot_unavailable_not_zero():
+    sec = _build([])
+    assert sec.data_kind == "unavailable"
+    assert sec.eligibility["sites_total"] == 0
+    assert sec.forecast_value is None
+    assert any("unavailable" in l.lower() for l in sec.limitations)
+
+
+def test_forecast_walk_forward_known_series_and_identical_periods():
+    # Medians 10..70 for 2019..2025 (one site each, gfa=10).
+    recs = [_gls_rec(y, v * 10.0, 10.0) for y, v in zip(range(2019, 2026), range(10, 80, 10))]
+    sec = _build(recs)
+    ev = sec.evaluation
+    assert ev.status == "ok"
+    # burn-in of 3 -> test years 2022..2025
+    assert ev.test_periods == 4
+    assert ev.window_start == 2022 and ev.window_end == 2025
+    assert ev.train_years_before_first_test == EVAL_BURN_IN_YEARS
+    assert all(m.test_periods == 4 for m in ev.methods)
+    mae = {m.method: m.mae for m in ev.methods}
+    # hand-computed: persistence 10; expanding 27.5; rolling-3 20
+    assert mae["persistence"] == pytest.approx(10.0)
+    assert mae["expanding_median"] == pytest.approx(27.5)
+    assert mae["rolling_median_3"] == pytest.approx(20.0)
+    # evaluation output must never feed the live forecast
+    assert sec.forecast_value == pytest.approx(70.0)
+
+
+def test_forecast_recent_window_differs_from_full_history():
+    # 16 completed years 2010-2025, one site each, medians 10,20,...,160.
+    recs = [
+        _gls_rec(y, (y - 2009) * 10.0 * 10.0, 10.0)
+        for y in range(2010, 2026)
+    ]
+    sec = _build(recs)
+    full, recent = sec.evaluation, sec.evaluation_recent
+    assert full.status == "ok" and recent.status == "ok"
+    # identical periods per comparison, different windows side by side
+    assert full.window == "all_completed_years"
+    assert recent.window == "recent_years"
+    assert full.test_periods == 13 and full.window_start == 2013 and full.window_end == 2025
+    assert recent.test_periods == 7 and recent.window_start == 2019 and recent.window_end == 2025
+    assert all(m.test_periods == 13 for m in full.methods)
+    assert all(m.test_periods == 7 for m in recent.methods)
+    # hand-computed full-window MAEs (linear series, step 10)
+    full_mae = {m.method: m.mae for m in full.methods}
+    assert full_mae["persistence"] == pytest.approx(10.0)
+    assert full_mae["expanding_median"] == pytest.approx(50.0)
+    assert full_mae["rolling_median_3"] == pytest.approx(20.0)
+    # hand-computed recent-window (2016-2025) MAEs
+    recent_mae = {m.method: m.mae for m in recent.methods}
+    assert recent_mae["persistence"] == pytest.approx(10.0)
+    assert recent_mae["expanding_median"] == pytest.approx(35.0)
+    assert recent_mae["rolling_median_3"] == pytest.approx(20.0)
+    # forecast year semantics hold on this long series too
+    assert sec.forecast_year == 2027  # next calendar year after in-progress 2026
+
+
+def test_forecast_recent_window_short_history_matches_full():
+    # With fewer than 10 observed years the recent window is the whole series,
+    # so it must equal the full window rather than fabricate a different one.
+    recs = [_gls_rec(y, v * 10.0, 10.0) for y, v in zip(range(2019, 2026), range(10, 80, 10))]
+    sec = _build(recs)
+    assert sec.evaluation.test_periods == sec.evaluation_recent.test_periods == 4
+    assert sec.evaluation_recent.window_start == 2022
+    assert "7 most recent" in sec.evaluation_recent.note
+
+
+def test_forecast_walk_forward_insufficient_history():
+    recs = [_gls_rec(y, v * 10.0, 10.0) for y, v in [(2023, 10), (2024, 20), (2025, 30)]]
+    sec = _build(recs)
+    ev = sec.evaluation
+    assert ev.status == "insufficient_history"
+    assert ev.methods == []
+    assert ev.insufficient_reason
+    assert "at least" in ev.insufficient_reason
+    # the recent window is equally thin and must also refuse to report metrics
+    assert sec.evaluation_recent.status == "insufficient_history"
+    assert sec.evaluation_recent.methods == []
+    # but the forecast itself is still produced from >= 2 completed years
+    assert sec.data_kind == "forecast"
+    assert sec.forecast_value == pytest.approx(30.0)
+
+
+def test_forecast_low_sample_latest_year_warns():
+    # 2025 has one site -> below LOW_SAMPLE_SITE_THRESHOLD; earlier years do not.
+    recs = [
+        _gls_rec(2024, 100.0, 10.0),
+        _gls_rec(2024, 120.0, 10.0),
+        _gls_rec(2024, 140.0, 10.0),
+        _gls_rec(2025, 500.0, 10.0),
+    ]
+    sec = _build(recs)
+    assert sec.latest_site_count == 1
+    assert sec.latest_year_low_sample is True
+    assert any("fragile" in w for w in sec.warnings)
+    per_year = {m.award_year: m for m in sec.annual_medians}
+    assert per_year[2025].low_sample is True
+    assert per_year[2024].low_sample is False
+
+
+def test_forecast_eligibility_counters_reconcile_no_silent_drops():
+    recs = [
+        _gls_rec(2025, 100.0, 10.0),
+        _gls_rec(2024, 100.0, 10.0),
+        _gls_rec(2024, 100.0, 0.0),               # invalid gfa
+        _gls_rec(2024, None, 10.0),               # invalid price
+        _gls_rec(None, 100.0, 10.0),              # invalid year
+        _gls_rec(2024, 100.0, 10.0, devt="Hotel"),  # wrong category
+        _gls_rec(2026, 100.0, 10.0),               # incomplete current year
+    ]
+    sec = _build(recs)
+    e = sec.eligibility
+    assert e["sites_total"] == 7
+    # waterfall: every record lands in exactly one bucket
+    assert (
+        e["sites_eligible"]
+        + e["excluded_other_development_code"]
+        + e["excluded_invalid_award_year"]
+        + e["excluded_invalid_price"]
+        + e["excluded_invalid_gfa"]
+        == e["sites_total"]
+    )
+    assert e["sites_eligible"] == 3
+    assert e["excluded_incomplete_or_future_year"] == 1
+
+
+def test_forecast_nominal_disclaimer_and_scope_present():
+    recs = [_gls_rec(2024, 100.0, 10.0), _gls_rec(2025, 100.0, 10.0)]
+    sec = _build(recs)
+    assert sec.is_nominal is True
+    joined = " ".join(sec.limitations).lower()
+    assert "nominal" in joined and "inflation" in joined
+    assert "not an ml prediction" in joined
+    assert "does not represent all singapore land prices" in joined
+
+
+def test_forecast_uses_real_now_by_default():
+    # No `now` passed: the current Asia/Singapore year must be the excluded year.
+    snap = _forecast_snap([_gls_rec(2000, 100.0, 10.0), _gls_rec(2001, 100.0, 10.0)])
+    sec = build_gls_price_forecast_section(snap)
+    current = datetime.now(timezone(timedelta(hours=8))).year
+    assert sec.current_year_excluded == current
+
 
 
 # ============================================================ industrial

@@ -187,6 +187,83 @@ class GlsSection(BaseModel):
     limitations: List[str] = Field(default_factory=list)
 
 
+# --------------------------------------------- GLS price baseline estimate
+class AnnualMedianRecord(BaseModel):
+    """One completed award year's median tender price per GFA unit, with the
+    number of eligible awarded sites behind it so the UI can disclose fragility."""
+
+    award_year: int
+    median_price_per_gfa: float
+    site_count: int
+    low_sample: bool = False
+
+
+class ForecastMethodResult(BaseModel):
+    """MAE of one deterministic baseline over the walk-forward test periods."""
+
+    method: str  # persistence | expanding_median | rolling_median_3
+    mae: float
+    test_periods: int
+
+
+class GlsPriceForecastEvaluation(BaseModel):
+    """Chronological one-year-ahead walk-forward comparison of simple baselines.
+
+    Every test year is predicted strictly from earlier years only, and all
+    methods are scored on an identical set of test periods. ``window`` names
+    the evaluation window: ``all_completed_years`` or ``recent_years``.
+    """
+
+    status: Literal["ok", "insufficient_history"] = "insufficient_history"
+    window: str = ""
+    test_periods: Optional[int] = None
+    window_start: Optional[int] = None
+    window_end: Optional[int] = None
+    train_years_before_first_test: Optional[int] = None
+    methods: List[ForecastMethodResult] = Field(default_factory=list)
+    note: str = ""
+    insufficient_reason: Optional[str] = None
+
+
+class GlsPriceForecastSection(BaseModel):
+    """Baseline estimate for the NEXT CALENDAR YEAR of the annual median
+    successful tender price per GFA unit for awarded GLS sites in one
+    verified development category (Residential (Non-Landed)).
+
+    Three years are kept distinct and must never be conflated:
+    ``latest_award_year`` is the most recent COMPLETED award year (the
+    persistence source), ``current_year_excluded`` is the still-in-progress
+    Singapore calendar year (excluded from training and evaluation), and
+    ``forecast_year`` is the next calendar year after the in-progress one.
+    The current incomplete year is never the forecast target.
+
+    This is a persistence baseline over nominal historical medians - not an
+    ML prediction, not a market quote, and not a government prediction.
+    """
+
+    data_kind: DataKind = "unavailable"
+    development_code: str = "Residential (Non-Landed)"
+    scope: str = (
+        "Awarded Government Land Sales sites in the 'Residential (Non-Landed)' "
+        "development category only; this is NOT all Singapore land prices."
+    )
+    forecast_method: str = "persistence"
+    is_nominal: bool = True
+    latest_award_year: Optional[int] = None
+    latest_median_price_per_gfa: Optional[float] = None
+    latest_site_count: Optional[int] = None
+    latest_year_low_sample: bool = False
+    forecast_year: Optional[int] = None
+    forecast_value: Optional[float] = None
+    current_year_excluded: Optional[int] = None
+    annual_medians: List[AnnualMedianRecord] = Field(default_factory=list)
+    evaluation: GlsPriceForecastEvaluation = Field(default_factory=GlsPriceForecastEvaluation)
+    evaluation_recent: GlsPriceForecastEvaluation = Field(default_factory=GlsPriceForecastEvaluation)
+    eligibility: Dict[str, int] = Field(default_factory=dict)
+    warnings: List[str] = Field(default_factory=list)
+    limitations: List[str] = Field(default_factory=list)
+
+
 # -------------------------------------------------------------- industrial
 class IndustrialSection(BaseModel):
     data_kind: DataKind = "unavailable"
@@ -233,6 +310,7 @@ class LandReport(BaseModel):
     planning: PlanningSection = Field(default_factory=PlanningSection)
     cadastral: CadastralSection = Field(default_factory=CadastralSection)
     gls: GlsSection = Field(default_factory=GlsSection)
+    price_forecast: GlsPriceForecastSection = Field(default_factory=GlsPriceForecastSection)
     industrial: IndustrialSection = Field(default_factory=IndustrialSection)
 
     alerts: List[LandAlert] = Field(default_factory=list)

@@ -217,3 +217,97 @@ def test_routes_registered_on_real_app():
     paths = set(app.openapi()["paths"])
     for p in ("report", "overview", "use", "planning-areas", "gls", "industrial", "map", "sources"):
         assert f"/api/planning/land/{p}" in paths, p
+
+
+# ================================================ price baseline forecast
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+from backend.app.planning.land.models import GlsPriceForecastSection  # noqa: E402
+
+SG = timezone(timedelta(hours=8))
+NOW = datetime(2026, 10, 27, tzinfo=SG)
+
+
+def _pf_rec(year, price, gfa, devt="Residential (Non-Landed)"):
+    return {
+        "location": "Test Road", "devt_code": devt, "devt_allowed": "Condominium",
+        "site_area_sqm": 1000.0, "gpr": 2.0, "gfa_sqm": gfa, "housing_units": 0,
+        "award_date": f"{year}0101", "award_year": year, "successful_tenderer": "T",
+        "successful_price": price, "no_of_bids": 2, "planning_area": "Bedok",
+        "centroid_lon": 103.9, "centroid_lat": 1.3, "updated": "2025-01-01",
+    }
+
+
+def _forecast_history_snapshot():
+    """Full snapshot whose GLS records are several completed Residential
+    (Non-Landed) years, so the forecast path has real history."""
+    snap = full_snapshot()
+    snap.gls_sites = [
+        _pf_rec(y, v * 10.0, 10.0) for y, v in zip(range(2019, 2026), range(10, 80, 10))
+    ]
+    return snap
+
+
+@pytest.fixture()
+def forecast_report():
+    return run_land_agent(fetcher=_forecast_history_snapshot)
+
+
+def test_report_carries_price_forecast_section(report):
+    assert isinstance(report.price_forecast, GlsPriceForecastSection)
+    # The shared fixture has only ONE completed eligible year (2025), so the
+    # forecast must degrade honestly rather than invent a value.
+    assert report.price_forecast.data_kind == "unavailable"
+    assert report.price_forecast.forecast_value is None
+
+
+def test_report_price_forecast_available_with_history(forecast_report):
+    pf = forecast_report.price_forecast
+    assert pf.data_kind == "forecast"
+    assert pf.latest_award_year == 2025
+    # next-year semantics: the target is AFTER the in-progress year
+    assert pf.forecast_year == pf.current_year_excluded + 1
+    assert pf.forecast_value == pytest.approx(70.0)
+    assert pf.evaluation.status == "ok"
+    assert pf.evaluation.test_periods == 4
+    mae = {m.method: m.mae for m in pf.evaluation.methods}
+    assert mae["persistence"] == pytest.approx(10.0)
+    # the 7-year fixture is shorter than the recent window, so recent == full
+    assert pf.evaluation_recent.status == "ok"
+    assert pf.evaluation_recent.test_periods == pf.evaluation.test_periods
+
+
+def test_report_price_forecast_years_distinct(forecast_report):
+    pf = forecast_report.price_forecast
+    assert pf.latest_award_year < pf.current_year_excluded < pf.forecast_year
+
+
+def test_price_forecast_insight_answered(forecast_report):
+    assert STANDARD_QUESTIONS[-1] == (
+        "What is the baseline estimate for next year's residential GLS tender price per GFA?"
+    )
+    insight = next(i for i in forecast_report.insights if i.question == STANDARD_QUESTIONS[-1])
+    assert insight.data_kind == "forecast"
+    assert "nominal" in insight.answer.lower()
+    assert "not all singapore land prices" in insight.answer.lower()
+
+
+def test_price_forecast_insight_unavailable_is_honest(report):
+    insight = next(i for i in report.insights if i.question == STANDARD_QUESTIONS[-1])
+    assert insight.data_kind == "unavailable"
+    assert "no baseline estimate" in insight.answer.lower()
+
+
+def test_gls_endpoint_returns_price_forecast(client_and_report):
+    b = client_and_report.get("/api/planning/land/gls").json()
+    assert "price_forecast" in b
+    pf = b["price_forecast"]
+    assert pf["development_code"] == "Residential (Non-Landed)"
+    assert pf["is_nominal"] is True
+    assert "eligibility" in pf and "evaluation" in pf and "evaluation_recent" in pf and "annual_medians" in pf
+
+
+def test_report_endpoint_includes_price_forecast(client_and_report):
+    b = client_and_report.get("/api/planning/land/report").json()
+    assert "price_forecast" in b
+    assert b["price_forecast"]["data_kind"] in {"forecast", "unavailable"}
