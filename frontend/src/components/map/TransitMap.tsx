@@ -428,7 +428,7 @@ export default function TransitMap() {
             setLoading(true);
             void loadData();
           }}
-          className="mt-4 rounded-lg bg-cyan-400 px-4 py-2 font-semibold text-slate-950"
+          className="mt-4 rounded-lg bg-primary px-4 py-2 font-semibold text-obsidian hover:bg-primary-dim"
         >
           Retry
         </button>

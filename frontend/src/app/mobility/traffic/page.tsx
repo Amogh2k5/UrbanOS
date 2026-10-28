@@ -30,10 +30,10 @@ function formatDivisionName(id: string) {
 
 function getCongestionColor(level: string) {
   switch ((level || '').toLowerCase()) {
-    case 'free_flow': return 'text-emerald-100'; // on solid card
-    case 'moderate': return 'text-amber-100'; // on solid card
-    case 'heavy': return 'text-orange-100'; // on solid card
-    case 'severe': return 'text-red-100'; // on solid card
+    case 'free_flow': return 'text-emerald-700';
+    case 'moderate': return 'text-amber-700';
+    case 'heavy': return 'text-orange-700';
+    case 'severe': return 'text-red-700';
     default: return 'text-white/90';
   }
 }
@@ -204,7 +204,7 @@ export default function TrafficPage() {
         {/* Forecast Section — driven ONLY by the Forecast request */}
         <section className="mb-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-bold text-cyan-700 flex items-center gap-2 uppercase tracking-widest text-xs">
+            <h3 className="text-lg font-bold text-primary flex items-center gap-2 uppercase tracking-widest text-xs">
               <TrendingUp size={18} />
               <span>Traffic Forecast – Next 5 min</span>
             </h3>

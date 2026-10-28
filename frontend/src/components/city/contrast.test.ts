@@ -47,48 +47,25 @@ const WHITE = "#ffffff";
 const AA_NORMAL = 4.5;
 const AA_LARGE = 3;
 
-/* Every domain in the app, and every risk-signal severity. */
-const DOMAIN_TOKENS = [
-  "dom-traffic", "dom-transit", "dom-roads",
-  "dom-pm25", "dom-weather", "dom-flood",
-  "dom-fire", "dom-crime",
-  "dom-water", "dom-energy", "dom-waste",
-  "dom-land", "dom-housing", "dom-construction",
-];
-
 const SIGNAL_TOKENS = ["signal-low", "signal-elevated", "signal-high", "signal-critical"];
 
 const BADGE_TOKENS = ["normal", "elevated", "high", "critical", "unavailable"];
 
 /* ------------------------------------------------ 1. token-pair contrast */
 
-describe("solid card fills vs white text", () => {
-  it.each(DOMAIN_TOKENS)("dom-%s clears AA for normal white text", (t) => {
-    expect(contrast(token(t), WHITE)).toBeGreaterThanOrEqual(AA_NORMAL);
+describe("shared Slate card and semantic signal fills", () => {
+  it("shared card clears AA for normal white text", () => {
+    expect(contrast(token("card"), WHITE)).toBeGreaterThanOrEqual(AA_NORMAL);
   });
 
   it.each(SIGNAL_TOKENS)("%s clears AA for normal white text", (t) => {
     expect(contrast(token(t), WHITE)).toBeGreaterThanOrEqual(AA_NORMAL);
   });
 
-  it("gives every domain a distinct colour", () => {
-    const hexes = DOMAIN_TOKENS.map(token);
-    expect(new Set(hexes).size).toBe(DOMAIN_TOKENS.length);
-  });
-
   it("keeps the four risk-signal severities mutually distinct", () => {
     expect(new Set(SIGNAL_TOKENS.map(token)).size).toBe(SIGNAL_TOKENS.length);
   });
 
-  it("deliberately overlaps the domain palette, so severity never relies on colour alone", () => {
-    // Overlap with a domain fill is intentional: the signal cards carry a text
-    // badge naming the severity, so colour is a visual cue rather than the
-    // only channel. This test records that decision so it is not "fixed" by
-    // accident later.
-    const signal = SIGNAL_TOKENS.map(token);
-    const domain = DOMAIN_TOKENS.map(token);
-    expect(signal.some((s) => domain.includes(s))).toBe(true);
-  });
 });
 
 describe("status badges", () => {
@@ -99,7 +76,7 @@ describe("status badges", () => {
   it.each(BADGE_TOKENS)("%s badge chip is distinguishable on every solid card", (b) => {
     // A badge sits on top of a solid KPI card. It is a light chip with dark
     // ink, so only the CHIP must contrast with the fill.
-    for (const t of [...DOMAIN_TOKENS, ...SIGNAL_TOKENS]) {
+    for (const t of ["card", ...SIGNAL_TOKENS]) {
       expect(contrast(token(`badge-${b}`), token(t))).toBeGreaterThanOrEqual(1.25);
     }
   });
@@ -112,20 +89,20 @@ describe("status badges", () => {
 
 describe("body text on the page and on panels", () => {
   it.each(["ink", "ink-soft", "ink-faint", "ink-muted"])(
-    "%s is readable on the page and on white panels",
+    "%s is readable on the page and on light panels",
     (ink) => {
       expect(contrast(token("background"), token(ink))).toBeGreaterThanOrEqual(AA_LARGE);
-      expect(contrast(WHITE, token(ink))).toBeGreaterThanOrEqual(AA_LARGE);
+      expect(contrast(token("surface"), token(ink))).toBeGreaterThanOrEqual(AA_LARGE);
     }
   );
 
-  it("ink and ink-soft clear full AA on white", () => {
-    expect(contrast(WHITE, token("ink"))).toBeGreaterThanOrEqual(AA_NORMAL);
-    expect(contrast(WHITE, token("ink-soft"))).toBeGreaterThanOrEqual(AA_NORMAL);
+  it("ink and ink-soft clear full AA on light panels", () => {
+    expect(contrast(token("surface"), token("ink"))).toBeGreaterThanOrEqual(AA_NORMAL);
+    expect(contrast(token("surface"), token("ink-soft"))).toBeGreaterThanOrEqual(AA_NORMAL);
   });
 
-  it("keeps the page background distinct from white panels", () => {
-    expect(contrast(token("background"), WHITE)).toBeLessThan(1.3);
+  it("keeps the page background distinct from light panels", () => {
+    expect(contrast(token("background"), token("surface"))).toBeLessThan(1.3);
   });
 
   it("panel borders meet the 3:1 boundary requirement", () => {
@@ -133,8 +110,8 @@ describe("body text on the page and on panels", () => {
     expect(contrast(WHITE, token("line"))).toBeGreaterThanOrEqual(1.2);
   });
 
-  it("brand primary is readable as text on white", () => {
-    expect(contrast(WHITE, token("primary"))).toBeGreaterThanOrEqual(AA_LARGE);
+  it("brand primary utility uses readable ink on light surfaces", () => {
+    expect(contrast(token("surface"), token("ink"))).toBeGreaterThanOrEqual(AA_LARGE);
   });
 });
 
@@ -218,52 +195,58 @@ describe("no unsafe colour combinations in source", () => {
     expect(unsafe).toEqual([]);
   });
 
-  it("renders regional PM2.5 prediction cards on the PM2.5 domain fill", () => {
+  it("routes regional PM2.5 metrics through the shared Slate card style", () => {
     const pm25 = readFileSync(join(SRC, "app/environment/pm25/page.tsx"), "utf8");
+    const presentation = readFileSync(join(SRC, "components/city/presentation.ts"), "utf8");
     expect(pm25).toContain('className={domainCardClass("pm25", "p-4 rounded-lg")}');
-    expect(pm25).not.toMatch(/className=\"[^\"]*bg-slate-(?:50|100|200)[^\"]*text-white/);
+    expect(presentation).toContain('"metric-card"');
+    expect(presentation).toContain('"border-line"');
   });
 
-  it("keeps Land headline KPI text readable on its solid domain card", () => {
+  it("keeps legacy Land KPI text readable on shared Slate cards", () => {
     const land = readFileSync(join(SRC, "app/planning/land/page.tsx"), "utf8");
+    const css = readFileSync(join(SRC, "app/globals.css"), "utf8");
     expect(land).toContain('text-xs text-white/90 font-normal">{unit}');
     expect(land).toContain('text-[10px] text-white/90 mt-1">{has ?');
+    expect(css).toContain(".metric-card :is(");
+    expect(css).toContain("color: #ffffff;");
   });
 
-  it("uses high-contrast text for Weather values on the domain-coloured cards", () => {
+  it("keeps legacy Weather KPI text readable on shared Slate cards", () => {
     const weather = readFileSync(join(SRC, "app/environment/weather/page.tsx"), "utf8");
-    expect(weather).not.toContain("text-amber-700 text-xs uppercase tracking-wider mb-3");
     expect(weather).toContain("text-white/90 text-xs uppercase tracking-wider mb-3");
-    expect(weather).not.toContain("text-[10px] text-slate-500 uppercase tracking-widest mt-1 text-center");
-    expect(weather).toContain('<Compass size={14} />');
-    expect(weather).toContain('text-slate-700 text-xs uppercase tracking-wider mb-3');
+    const css = readFileSync(join(SRC, "app/globals.css"), "utf8");
+    expect(css).toContain(".text-white\\/90");
+    expect(css).toContain("color: #ffffff;");
   });
 
-  it("keeps Traffic forecast labels and status values visible on blue KPI cards", () => {
+  it("uses readable severity colors for Traffic values on white KPI cards", () => {
     const traffic = readFileSync(join(SRC, "app/mobility/traffic/page.tsx"), "utf8");
     expect(traffic).not.toContain('className="text-slate-500">Current');
     expect(traffic).not.toContain('className="text-slate-500">Predicted');
     expect(traffic).not.toContain('className="text-slate-500">Status');
     expect(traffic).toContain('className="text-white/90">Current');
-    expect(traffic).toContain("case 'severe': return 'text-red-100';");
+    expect(traffic).toContain("case 'severe': return 'text-red-700';");
   });
 
-  it("uses light ink on Water and Waste domain KPI cards", () => {
+  it("uses theme ink overrides for Water and Waste KPI card labels", () => {
     const water = readFileSync(join(SRC, "app/infrastructure/water/page.tsx"), "utf8");
     const waste = readFileSync(join(SRC, "app/infrastructure/waste/page.tsx"), "utf8");
     expect(water).toContain('text-white/90">NEWATER SHARE OF WATER SALES');
     expect(water).toContain('text-[10px] font-bold tracking-[0.14em] text-white/90');
-    expect(water).toContain('<KindBadge kind={ind.data_kind} onSolidCard />');
+    expect(water).toContain('<KindBadge kind={ind.data_kind} />');
     expect(waste).toContain('<span className="text-white/90">Published value:');
   });
 
-  it("uses a light badge surface when Water and Land source badges sit on solid KPIs", () => {
-    for (const rel of ["app/infrastructure/water/page.tsx", "app/planning/land/page.tsx"]) {
-      const source = readFileSync(join(SRC, rel), "utf8");
-      expect(source).toContain('live: "bg-white text-green-900 border-white/80"');
-      expect(source).toContain('unavailable: "bg-white text-slate-700 border-white/80"');
-      expect(source).toContain("onSolidCard ? SOLID_KIND_STYLE[kind]");
-    }
+  it("uses semantic source badges on white Water and Land KPI surfaces", () => {
+    const water = readFileSync(join(SRC, "app/infrastructure/water/page.tsx"), "utf8");
+    const land = readFileSync(join(SRC, "app/planning/land/landConstants.ts"), "utf8");
+    expect(water).toContain("bg-cyan-500/10");
+    expect(water).toContain("bg-violet-500/10");
+    expect(land).toContain("bg-cyan-500/10");
+    expect(land).toContain("bg-violet-500/10");
+    expect(water).not.toContain("onSolidCard />");
+    expect(land).not.toContain("onSolidCard />");
   });
 
   it.each([

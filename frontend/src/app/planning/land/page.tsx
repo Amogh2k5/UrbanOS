@@ -34,19 +34,10 @@ const LandMap = dynamic(() => import("./LandMap"), {
   ),
 });
 
-const SOLID_KIND_STYLE: Record<LandDataKind, string> = {
-  live: "bg-white text-green-900 border-white/80",
-  latest_available: "bg-white text-cyan-900 border-white/80",
-  historical: "bg-white text-violet-900 border-white/80",
-  forecast: "bg-white text-amber-900 border-white/80",
-  unavailable: "bg-white text-slate-700 border-white/80",
-};
-
-function KindBadge({ kind, onSolidCard = false }: { kind: LandDataKind; onSolidCard?: boolean }) {
+function KindBadge({ kind }: { kind: LandDataKind }) {
   const s = DATA_KIND_STYLE[kind] ?? DATA_KIND_STYLE.unavailable;
-  const cls = onSolidCard ? SOLID_KIND_STYLE[kind] : s.cls;
   return (
-    <span className={`text-[9px] font-bold tracking-[0.14em] px-2 py-0.5 rounded border ${cls}`}>
+    <span className={`text-[9px] font-bold tracking-[0.14em] px-2 py-0.5 rounded border ${s.cls}`}>
       {s.label}
     </span>
   );
@@ -173,7 +164,7 @@ function Metric({
     <Card tint>
       <div className="flex items-center justify-between gap-2">
         <div className="text-[10px] font-bold tracking-[0.16em] text-white/90">{label.toUpperCase()}</div>
-        {kind && <KindBadge kind={has ? kind : "unavailable"} onSolidCard />}
+        {kind && <KindBadge kind={has ? kind : "unavailable"} />}
       </div>
       <div className={`text-2xl font-mono font-bold mt-2 ${has ? "text-white" : "text-white/90"}`}>
         {has ? `${fmtNum(value, Number.isInteger(value) ? 0 : 1)} ` : "— "}
@@ -315,7 +306,7 @@ export default function LandPage() {
         {/* ------------------------------------------------------- header */}
         <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-5">
           <div>
-            <div className="text-[10px] uppercase tracking-[0.25em] text-cyan-700 font-bold">
+            <div className="text-[10px] uppercase tracking-[0.25em] text-primary font-bold">
               Planning domain
             </div>
             <h1 className="text-2xl md:text-3xl font-heading font-bold text-slate-900 mt-1">
@@ -434,7 +425,7 @@ export default function LandPage() {
             <Section
               id="use"
               title="LAND-USE DISTRIBUTION"
-              icon={<Layers size={16} className="text-cyan-700" />}
+              icon={<Layers size={16} className="text-primary" />}
               kind={lu?.data_kind}
             >
               {!lu || lu.data_kind === "unavailable" ? (
@@ -574,7 +565,7 @@ export default function LandPage() {
             <Section
               id="planning"
               title="PLANNING STRUCTURE"
-              icon={<MapPin size={16} className="text-cyan-700" />}
+              icon={<MapPin size={16} className="text-primary" />}
               kind={pl?.data_kind}
             >
               {!pl || pl.data_kind === "unavailable" ? (
@@ -670,7 +661,7 @@ export default function LandPage() {
                   {selected && (
                     <Card className="mt-4">
                       <div className="flex items-center gap-2 mb-2">
-                        <MapPin size={15} className="text-cyan-700" />
+                        <MapPin size={15} className="text-primary" />
                         <h3 className="text-xs font-bold tracking-[0.18em] text-slate-600">
                           {selected.name.toUpperCase()} — LAND USE BREAKDOWN
                         </h3>
@@ -707,7 +698,7 @@ export default function LandPage() {
             </Section>
 
             {/* ------------------------------------------------------ GLS */}
-            <Section id="gls" title="GOVERNMENT LAND SALES" icon={<Building2 size={16} className="text-cyan-700" />} kind={g?.data_kind}>
+            <Section id="gls" title="GOVERNMENT LAND SALES" icon={<Building2 size={16} className="text-primary" />} kind={g?.data_kind}>
               {!g || g.data_kind === "unavailable" ? (
                 <Card><div className="text-sm text-slate-500">GLS site records unavailable.</div></Card>
               ) : (
@@ -831,7 +822,7 @@ export default function LandPage() {
             </Section>
 
             {/* ------------------------------------------------ industrial */}
-            <Section id="industrial" title="INDUSTRIAL LAND" icon={<Factory size={16} className="text-cyan-700" />} kind={ind?.data_kind}>
+            <Section id="industrial" title="INDUSTRIAL LAND" icon={<Factory size={16} className="text-primary" />} kind={ind?.data_kind}>
               {!ind || ind.data_kind === "unavailable" ? (
                 <Card><div className="text-sm text-slate-500">Industrial land data unavailable.</div></Card>
               ) : (
@@ -880,7 +871,7 @@ export default function LandPage() {
             </Section>
 
             {/* ------------------------------------------------------ map */}
-            <Section id="map" title="LAND INTELLIGENCE MAP" icon={<MapPin size={16} className="text-cyan-700" />}>
+            <Section id="map" title="LAND INTELLIGENCE MAP" icon={<MapPin size={16} className="text-primary" />}>
               <div className="grid grid-cols-1 xl:grid-cols-[1.7fr_0.9fr] gap-6">
                 <div className="glass-panel rounded-xl border border-slate-200 overflow-hidden min-h-[480px]">
                   <LandMap
@@ -936,7 +927,7 @@ export default function LandPage() {
             </Section>
 
             {/* ---------------------------------------- land intelligence */}
-            <Section id="insight" title="LAND INTELLIGENCE" icon={<Info size={16} className="text-cyan-700" />}>
+            <Section id="insight" title="LAND INTELLIGENCE" icon={<Info size={16} className="text-primary" />}>
               {(overview?.insights ?? []).length === 0 ? (
                 <Card><div className="text-sm text-slate-500">No land insights available.</div></Card>
               ) : (

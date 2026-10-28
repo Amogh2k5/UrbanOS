@@ -145,6 +145,7 @@ describe("City Overview page", () => {
     const spy = mockEndpoints(BOTH_OK);
     render(<OverviewPage />);
     await waitFor(() => expect(screen.getByTestId("city-situation")).toBeTruthy());
+    expect(screen.queryByTestId("module-detail-strip")).toBeNull();
 
     const urls = spy.mock.calls.map((c) => String(c[0]));
     expect(urls.filter((u) => u.includes("/api/city/report"))).toHaveLength(0);
@@ -162,14 +163,14 @@ describe("City Overview page", () => {
     );
   });
 
-  it("renders risk signals from the coordinator endpoint", async () => {
+  it("renders the coordinator assessment in City Situation", async () => {
     mockEndpoints(BOTH_OK);
     render(<OverviewPage />);
     fireEvent.click(await screen.findByTestId("request-city-report"));
     await waitFor(() =>
-      expect(screen.getAllByTestId("risk-signal-card")).toHaveLength(1)
+      expect(screen.getByTestId("city-status-badge")).toBeTruthy()
     );
-    expect(screen.getByTestId("risk-signal-zones").textContent).toContain("Central South");
+    expect(screen.getByTestId("city-affected-zones").textContent).toContain("Central South");
   });
 
   it("renders a KPI card per module with its domain route", async () => {
@@ -212,22 +213,22 @@ describe("City Overview page", () => {
     });
     render(<OverviewPage />);
     fireEvent.click(await screen.findByTestId("request-city-report"));
-    await waitFor(() =>
-      expect(screen.getByTestId("risk-signals-error").textContent).toContain("API error 500")
-    );
+    await waitFor(() => expect(screen.getByTestId("city-situation-narrative")).toBeTruthy());
     // Overview data still renders.
     expect(screen.getAllByTestId("domain-kpi-card")).toHaveLength(2);
     expect(screen.getByTestId("city-situation-narrative")).toBeTruthy();
   });
 
   it("does not start the coordinator when the overview endpoint fails", async () => {
-    mockEndpoints({
+    const spy = mockEndpoints({
       "/api/city/report": { ok: true, status: 200, body: CITY_REPORT_OK },
       "/api/overview/city": { ok: false, status: 500, body: {} },
     });
     render(<OverviewPage />);
     await waitFor(() => expect(screen.getByTestId("city-situation-error")).toBeTruthy());
-    expect(screen.getByTestId("risk-signals-unavailable")).toBeTruthy();
+    expect(screen.queryByTestId("risk-signals")).toBeNull();
+    expect(screen.getByTestId("city-situation-error")).toBeTruthy();
+    expect(spy.mock.calls.filter((c) => String(c[0]).includes("/api/city/report"))).toHaveLength(0);
   });
 
   it("shows a clear unavailable state when there is no narrative", async () => {
@@ -247,7 +248,6 @@ describe("City Overview page", () => {
     const { useAppStore } = await import("@/store");
     render(<OverviewPage />);
     fireEvent.click(await screen.findByTestId("request-city-report"));
-    await waitFor(() => expect(screen.getAllByTestId("risk-signal-card")).toHaveLength(1));
     await waitFor(() => {
       expect(useAppStore.getState().report?.overall_city_status).toBe("DISRUPTED");
     });
@@ -264,7 +264,7 @@ describe("on-demand city assessment", () => {
     expect(spy.mock.calls.filter((c) => String(c[0]).includes("/api/city/report"))).toHaveLength(0);
 
     fireEvent.click(screen.getByTestId("request-city-report"));
-    await waitFor(() => expect(screen.getAllByTestId("risk-signal-card")).toHaveLength(1));
+    await waitFor(() => expect(screen.getByTestId("city-status-badge")).toBeTruthy());
     expect(spy.mock.calls.filter((c) => String(c[0]).includes("/api/city/report"))).toHaveLength(1);
     expect(spy.mock.calls.filter((c) => String(c[0]).includes("/api/overview/city-narrative"))).toHaveLength(1);
   });
@@ -278,7 +278,7 @@ describe("on-demand city assessment", () => {
     await screen.findByTestId("city-situation-narrative");
     expect(screen.getAllByTestId("domain-kpi-card")).toHaveLength(2);
     fireEvent.click(screen.getByTestId("request-city-report"));
-    await waitFor(() => expect(screen.getByTestId("risk-signals-error").textContent).toContain("API error 503"));
+    await waitFor(() => expect(screen.getByTestId("city-situation-narrative")).toBeTruthy());
     expect(screen.getAllByTestId("domain-kpi-card")).toHaveLength(2);
     expect(spy.mock.calls.filter((c) => String(c[0]).includes("/api/city/report"))).toHaveLength(1);
   });

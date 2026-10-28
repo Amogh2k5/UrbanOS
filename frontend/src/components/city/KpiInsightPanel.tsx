@@ -114,7 +114,7 @@ export default function KpiInsightPanel({ domainId, status, onClose }: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center bg-obsidian/50 backdrop-blur-sm p-4"
       onClick={onClose}
       role="presentation"
     >

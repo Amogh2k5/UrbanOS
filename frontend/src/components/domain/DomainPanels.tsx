@@ -3,11 +3,11 @@
 import { useAppStore } from '@/store';
 import { DomainStatus } from '@/types';
 import { Cloud, Car, Droplets } from 'lucide-react';
-import { domainCardClass } from '@/components/city/presentation';
+import { solidCardClass } from '@/components/city/presentation';
 
 interface DomainPanelProps {
   title: string;
-  /** Domain id - drives the card fill, consistently with the Overview. */
+  /** Domain id - keeps operational summary cards distinct by system. */
   domainId: string;
   status: DomainStatus | undefined;
   icon: React.ReactNode;
@@ -25,7 +25,7 @@ function DomainPanel({ title, domainId, status, icon }: DomainPanelProps) {
           : 'badge-normal';
 
   return (
-    <div className={domainCardClass(domainId, 'p-5')}>
+    <div className={solidCardClass(domainId, 'p-5')}>
       <div className="absolute inset-0 card-pattern opacity-30" aria-hidden="true" />
       <div className="relative z-10">
         <div className="flex items-center justify-between mb-4">

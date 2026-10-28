@@ -27,12 +27,13 @@ import {
 import type { OverviewCityResponse, ModuleDetailResponse } from "@/services/api";
 import type { CitySituationReport, DomainStatus } from "@/types/intelligence";
 import { useAppStore } from "@/store";
+import Alerts from "@/components/city/Alerts";
 import CitySituationPanel from "@/components/city/CitySituationPanel";
-import RiskSignals from "@/components/city/RiskSignals";
+// import RiskSignals from "@/components/city/RiskSignals";  // Removed per requirement 3
 import DomainKpiGrid from "@/components/city/DomainKpiGrid";
 import KpiInsightPanel from "@/components/city/KpiInsightPanel";
 import { formatTimestamp, substantiveFindings } from "@/components/city/presentation";
-import { Send, X, MessageSquare, TriangleAlert } from "lucide-react";
+import { Send, X, MessageSquare, TriangleAlert, AlertTriangle } from "lucide-react";
 
 export default function OverviewPage() {
   const setReport = useAppStore((s) => s.setReport);
@@ -201,7 +202,18 @@ export default function OverviewPage() {
   return (
     <div className="min-h-screen bg-[var(--color-background)]">
       <div className="max-w-6xl mx-auto px-4 lg:px-10 py-8 space-y-8">
-        {/* 1. AI City Situation */}
+        {/* 1. Alerts - moved to top per requirement 1 */}
+        {overview && (
+          <Alerts
+            alerts={overview.alerts}
+            onDismiss={(id) => {
+              // In a real implementation, this would call an API to dismiss the alert
+              console.log("Dismiss alert:", id);
+            }}
+          />
+        )}
+
+        {/* 2. City Situation - now comes after Alerts */}
         <CitySituationPanel
           narrative={overview?.ai_brief ?? null}
           report={report}
@@ -209,14 +221,6 @@ export default function OverviewPage() {
           loading={overviewLoading || reportLoading}
           error={overviewError}
           onRequestReport={requestCityReport}
-        />
-
-        {/* 2. Active Risk Signals */}
-        <RiskSignals
-          impacts={report?.cross_domain_impacts}
-          loading={reportLoading}
-          error={reportError}
-          reportAvailable={Boolean(report) && !reportError}
         />
 
         {/* 3. Domain Performance */}
@@ -270,24 +274,6 @@ export default function OverviewPage() {
           </section>
         )}
 
-        {/* Alerts (existing behaviour, preserved) */}
-        {overview && overview.alerts.length > 0 && (
-          <section data-testid="overview-alerts" className="card-panel p-6">
-            <h3 className="font-heading font-bold text-sm text-slate-900 mb-3">Alerts</h3>
-            <ul className="space-y-2">
-              {overview.alerts.map((a, i) => (
-                <li
-                  key={`${a.domain}-${i}`}
-                  className="text-xs text-slate-500 border-l-2 border-slate-200 pl-3"
-                >
-                  <span className="font-semibold text-slate-800">{a.title}</span>
-                  <span className="block text-slate-500">{a.description}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
         <div className="h-24" />
       </div>
 
@@ -306,7 +292,7 @@ export default function OverviewPage() {
         onClick={() => setChatOpen((v) => !v)}
         data-testid="copilot-toggle"
         aria-label="Toggle assistant"
-        className="fixed bottom-6 right-6 w-14 h-14 bg-indigo-600 text-white rounded-full shadow-lg hover:scale-105 transition-transform z-[100] flex items-center justify-center ring-4 ring-slate-200"
+        className="fixed bottom-6 right-6 w-14 h-14 bg-primary text-obsidian rounded-full shadow-lg hover:scale-105 transition-transform z-[100] flex items-center justify-center ring-4 ring-slate-200"
       >
         <MessageSquare size={22} />
       </button>
@@ -350,7 +336,7 @@ export default function OverviewPage() {
                 <div
                   className={`max-w-[85%] text-xs rounded-2xl px-3 py-2 leading-relaxed ${
                     m.role === "user"
-                      ? "bg-indigo-600 text-white rounded-tr-sm"
+                      ? "bg-primary text-obsidian rounded-tr-sm"
                       : "bg-white border border-slate-200 text-slate-600 rounded-tl-sm"
                   }`}
                 >
@@ -387,7 +373,7 @@ export default function OverviewPage() {
               onClick={() => void submitChat()}
               disabled={chatLoading || !chatInput.trim()}
               data-testid="copilot-send"
-              className="px-3 bg-indigo-600 text-white rounded-lg disabled:bg-slate-200 disabled:text-slate-500"
+              className="px-3 bg-primary text-obsidian rounded-lg disabled:bg-slate-200 disabled:text-slate-500"
               aria-label="Send"
             >
               <Send size={14} />
@@ -396,29 +382,6 @@ export default function OverviewPage() {
         </div>
       )}
 
-      {/* Module detail strip - preserves the existing inline module detail. */}
-      {overview && overview.modules.length > 0 && (
-        <section data-testid="module-detail-strip" className="flex flex-wrap items-center gap-2">
-          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mr-1">
-            Module detail
-          </span>
-          {overview.modules.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              data-testid={`module-detail-button-${m.id}`}
-              onClick={() => void loadModuleDetail(m.id)}
-              className={`text-[11px] px-2.5 py-1 rounded-lg border transition-colors ${
-                selectedModule === m.id
-                  ? "border-[var(--color-primary)] text-[var(--color-primary)]"
-                  : "border-slate-300 text-slate-500 hover:text-slate-800 hover:border-slate-400"
-              }`}
-            >
-              {m.name}
-            </button>
-          ))}
-        </section>
-      )}
     </div>
   );
 }

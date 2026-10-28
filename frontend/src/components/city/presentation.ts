@@ -12,10 +12,9 @@
  *
  * Two channels, kept strictly apart:
  *
- * 1. DOMAIN FILL (`DOMAIN_FILLS`) - a solid, medium-to-strong colour that
- *    identifies which domain a card belongs to. Used for KPI cards, and always
- *    paired with white text. A card's fill never encodes risk: a green
- *    Environment card can legitimately carry a red "Critical" badge.
+ * 1. SHARED CARD FILL - one Slate surface across domains. Domain identity is
+ *    carried by labels and data, while the separate status badge communicates
+ *    risk.
  *
  * 2. STATUS BADGE (`statusBadgeClass`) - the only colour that carries risk
  *    meaning. Critical, Elevated, Normal and Unavailable stay distinguishable
@@ -41,91 +40,28 @@ export type Tone = "normal" | "low" | "elevated" | "high" | "critical" | "unavai
  * Domain fills
  * ------------------------------------------------------------------ */
 
-/**
- * Every domain gets a solid fill. The shades are the reference palette where
- * white text already cleared AA, and one step darker where it did not:
- * cyan-600, amber-600 and emerald-600 all measured under 4.5:1 with white.
- */
-export const DOMAIN_FILLS: Record<string, string> = {
-  // Transport / Mobility
-  traffic: "bg-dom-traffic",
-  transit: "bg-dom-transit",
-  roads: "bg-dom-roads",
-  // Environment
-  pm25: "bg-dom-pm25",
-  weather: "bg-dom-weather",
-  flood: "bg-dom-flood",
-  // Public safety
-  fire: "bg-dom-fire",
-  crime: "bg-dom-crime",
-  // Infrastructure
-  water: "bg-dom-water",
-  energy: "bg-dom-energy",
-  waste: "bg-dom-waste",
-  // Planning / Administration
-  land: "bg-dom-land",
-  housing: "bg-dom-housing",
-  construction: "bg-dom-construction",
-};;
-
-/** Matching darker shade, used for hover and for pressed states. */
-export const DOMAIN_FILLS_HOVER: Record<string, string> = {
-  traffic: "hover:bg-blue-700",
-  transit: "hover:bg-indigo-800",
-  roads: "hover:bg-blue-800",
-  pm25: "hover:bg-emerald-800",
-  weather: "hover:bg-teal-800",
-  flood: "hover:bg-sky-800",
-  fire: "hover:bg-rose-700",
-  crime: "hover:bg-rose-900",
-  water: "hover:bg-cyan-800",
-  energy: "hover:bg-amber-800",
-  waste: "hover:bg-teal-800",
-  land: "hover:bg-violet-800",
-  housing: "hover:bg-violet-900",
-  construction: "hover:bg-amber-950",
-};
-
-/** Matching coloured shadow, as in the reference. */
-export const DOMAIN_FILLS_SHADOW: Record<string, string> = {
-  traffic: "shadow-blue-600/20 hover:shadow-blue-600/30",
-  transit: "shadow-indigo-700/20 hover:shadow-indigo-700/30",
-  roads: "shadow-blue-700/20 hover:shadow-blue-700/30",
-  pm25: "shadow-emerald-700/20 hover:shadow-emerald-700/30",
-  weather: "shadow-teal-700/20 hover:shadow-teal-700/30",
-  flood: "shadow-sky-700/20 hover:shadow-sky-700/30",
-  fire: "shadow-rose-600/20 hover:shadow-rose-600/30",
-  crime: "shadow-rose-800/20 hover:shadow-rose-800/30",
-  water: "shadow-cyan-700/20 hover:shadow-cyan-700/30",
-  energy: "shadow-amber-700/20 hover:shadow-amber-700/30",
-  waste: "shadow-teal-700/20 hover:shadow-teal-700/30",
-  land: "shadow-violet-700/20 hover:shadow-violet-700/30",
-  housing: "shadow-violet-800/20 hover:shadow-violet-800/30",
-  construction: "shadow-amber-900/20 hover:shadow-amber-900/30",
-};
-
-/** An unknown domain must not borrow a real domain's colour. */
-export const DEFAULT_FILL = "bg-slate-500";
-const DEFAULT_HOVER = "hover:bg-slate-600";
-const DEFAULT_SHADOW = "shadow-slate-500/20 hover:shadow-slate-500/30";
+/** Domain cards share one Slate fill regardless of system identity. */
+const SHARED_FILL = "bg-card";
+const SHARED_HOVER = "hover:bg-card";
+const SHARED_SHADOW = "shadow-slate-900/10 hover:shadow-slate-900/15";
 
 export function domainFill(domainId?: string | null): string {
-  if (!domainId) return DEFAULT_FILL;
-  return DOMAIN_FILLS[domainId] ?? DEFAULT_FILL;
+  void domainId;
+  return SHARED_FILL;
 }
 
 export function domainFillHover(domainId?: string | null): string {
-  if (!domainId) return DEFAULT_HOVER;
-  return DOMAIN_FILLS_HOVER[domainId] ?? DEFAULT_HOVER;
+  void domainId;
+  return SHARED_HOVER;
 }
 
 export function domainFillShadow(domainId?: string | null): string {
-  if (!domainId) return DEFAULT_SHADOW;
-  return DOMAIN_FILLS_SHADOW[domainId] ?? DEFAULT_SHADOW;
+  void domainId;
+  return SHARED_SHADOW;
 }
 
 /**
- * The whole solid-card treatment for one domain: fill + hover + shadow.
+ * The shared dark-card treatment; the domain argument is retained for callers.
  * Use this so a card can never be half-themed.
  */
 export function solidCardClass(domainId?: string | null, extra?: string): string {
@@ -141,20 +77,28 @@ export function solidCardClass(domainId?: string | null, extra?: string): string
 }
 
 /**
- * Solid KPI card on a domain detail page.
- *
- * Alias for `solidCardClass`, kept as the name the detail pages import so a
- * domain's headline card is guaranteed to use the same fill, hover and shadow
- * as its card on the Overview.
+ * Ordinary KPI card on a domain detail page. The domain remains in the class
+ * name for traceability, while all metric cards share the same light surface.
  */
 export function domainCardClass(domainId: string, extra?: string): string {
-  return solidCardClass(domainId, extra);
+  return [
+    "solid-card",
+    "metric-card",
+    `metric-card-${domainId}`,
+    "bg-white",
+    "border",
+    "border-line",
+    "text-ink",
+    extra ?? "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /** Detail-page and navigation headings take the domain colour as an accent. */
 export function domainAccentClass(domainId?: string | null): string {
-  const token = domainFill(domainId).replace("bg-", "text-");
-  return token;
+  void domainId;
+  return "text-primary";
 }
 
 /* ------------------------------------------------------------------ *

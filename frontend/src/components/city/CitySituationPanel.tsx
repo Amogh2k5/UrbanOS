@@ -4,7 +4,7 @@
 import { Info, Sparkles, TriangleAlert } from "lucide-react";
 import React from "react";
 import type { CitySituationReport, DomainStatus } from "@/types/intelligence";
-import { cityStatusBadgeClass, formatTimestamp } from "./presentation";
+import { cityStatusBadgeClass, statusBadgeClass, substantiveFindings } from "./presentation";
 
 interface Props {
   narrative: string | null;
@@ -24,6 +24,16 @@ const DOMAIN_NAMES: Record<string, string> = {
 
 const CANONICAL_DOMAINS = Object.keys(DOMAIN_NAMES);
 
+function cleanDisplayText(value?: string | null): string {
+  if (!value) return "Data currently unavailable";
+  const text = value
+    .replace(/\b[\w]*_?(?:id|uuid|debug|metadata|source_status)\s*[:=]\s*[^,;\s]+/gi, "")
+    .replace(/\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/gi, "")
+    .replaceAll("_", " ").replace(/\s+/g, " ").trim();
+  if (!text || text.startsWith("{") || text.startsWith("[") || /"\w+"\s*:/.test(text)) return "Data currently unavailable";
+  return text;
+}
+
 function readable(value?: string | null): string {
   if (!value) return "Unassessed";
   const text = value.replaceAll("_", " ").toLowerCase();
@@ -35,7 +45,7 @@ function readableNarrative(value: string): string {
   if (summary) {
     return `${readable(summary[1])} city status with ${readable(summary[2]).toLowerCase()} overall risk. Coordinator confidence is ${readable(summary[3]).toLowerCase()}.`;
   }
-  return value
+  return cleanDisplayText(value)
     .replaceAll("_", " ")
     .replace(/\bUNASSESSED\b/gi, "not assessed")
     .replace(/\bUNKNOWN\b/gi, "unknown")
@@ -64,24 +74,91 @@ function assessmentSummary(report: CitySituationReport): string {
   return `${conclusion} ${available} of ${CANONICAL_DOMAINS.length} domain reports were available; ${notAssessed} could not be assessed.`;
 }
 
+function generateDomainNarrative(domain: string, status: DomainStatus): string {
+  if (!status.available) {
+    return `${DOMAIN_NAMES[domain] || domain} status could not be assessed with the available data.`;
+  }
+
+  const risk = (status.overall_risk ?? status.risk_level ?? "").toUpperCase();
+  const statusText = (status.overall_status ?? "").toUpperCase();
+  const domainName = DOMAIN_NAMES[domain] || domain;
+
+  // Check for findings with evidence
+  const findings = status.findings ?? [];
+  const substantive = substantiveFindings(status.findings);
+  const hasEvidence = substantive.length > 0;
+
+  // Build narrative based on risk level and available information
+  let narrative = "";
+
+  if (risk === "CRITICAL" || risk === "HIGH") {
+    narrative = `${domainName} risk is ${readable(risk).toLowerCase()}. `;
+    if (status.primary_risk_factors?.length > 0) {
+      narrative += `Key factors: ${status.primary_risk_factors.map(cleanDisplayText).join(", ")}. `;
+    }
+    if (substantive.length > 0) {
+      const firstFinding = substantive[0];
+      narrative += `${cleanDisplayText(firstFinding.answer)} `;
+    }
+    narrative += "Review live data and consider mitigation measures.";
+  } else if (risk === "MODERATE" || risk === "ELEVATED") {
+    narrative = `${domainName} conditions are ${readable(risk).toLowerCase()}. `;
+    if (substantive.length > 0) {
+      const firstFinding = substantive[0];
+      narrative += `${cleanDisplayText(firstFinding.answer)} `;
+    }
+    narrative += "Monitor conditions and review latest data.";
+  } else if (risk === "LOW" || risk === "NORMAL") {
+    narrative = `${domainName} conditions are normal according to the available assessment.`;
+    if (substantive.length > 0) {
+      const firstFinding = substantive[0];
+      narrative += ` ${cleanDisplayText(firstFinding.answer)}.`;
+    }
+  } else if (status.available) {
+    narrative = `${domainName} status is ${readable(status.overall_status || "unknown").toLowerCase()}. `;
+    if (substantive.length > 0) {
+      const firstFinding = substantive[0];
+      narrative += ` ${cleanDisplayText(firstFinding.answer)}.`;
+    }
+    if (status.primary_risk_factors?.length > 0) {
+      narrative += `Factors to monitor: ${status.primary_risk_factors.map(cleanDisplayText).join(", ")}.`;
+    }
+  } else {
+    return `${domainName} status could not be assessed with the available data.`;
+  }
+
+  return narrative;
+}
+
 function DomainAssessments({ report }: { report: CitySituationReport }) {
   const entries = CANONICAL_DOMAINS
     .filter((domain) => report.domain_status?.[domain])
-    .map((domain) => ({
-      id: domain,
-      name: report.domain_status[domain].display_name || DOMAIN_NAMES[domain],
-      label: riskLabel(report.domain_status[domain]),
-    }));
+    .map((domain) => {
+      const status = report.domain_status[domain];
+      const narrative = generateDomainNarrative(domain, status);
+      return {
+        id: domain,
+        name: DOMAIN_NAMES[domain],
+        label: riskLabel(status),
+        narrative,
+      };
+    });
   if (!entries.length) return null;
 
   return (
     <section className="mt-5" data-testid="city-domain-assessments">
       <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">Domain assessments</h3>
-      <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {entries.map((entry) => (
-          <li key={entry.id} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
-            <span className="font-medium text-slate-800">{entry.name}</span>
-            <span className="text-slate-600">{entry.label}</span>
+          <li
+            key={entry.id}
+            className="rounded-lg border border-slate-200 bg-white p-4 text-sm"
+          >
+            <div className="flex items-start justify-between gap-3 mb-2">
+              <span className="font-medium text-slate-800">{entry.name}</span>
+              <span className={statusBadgeClass(entry.label)}>{entry.label}</span>
+            </div>
+            <p className="text-slate-600 text-sm leading-relaxed">{entry.narrative}</p>
           </li>
         ))}
       </ul>
@@ -98,7 +175,8 @@ function recommendationPriority(text: string): string {
 }
 
 function readableRecommendation(text: string): string {
-  return text.replace(/^([A-Z][A-Z+ _-]+):\s*/, (_match, prefix: string) => {
+  const cleaned = cleanDisplayText(text);
+  return cleaned.replace(/^([A-Z][A-Z+ -]+):\s*/, (_match, prefix: string) => {
     const label = prefix.toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
     return `${label}: `;
   });
@@ -133,24 +211,14 @@ function DataCoverageSection({ report }: { report: CitySituationReport }) {
   const domainRows = CANONICAL_DOMAINS.flatMap((domain) => {
     const status = report.domain_status?.[domain];
     if (!status) return [];
-    const sources = (status.findings ?? []).flatMap((finding) => finding.sources ?? []);
-    const observed = (status.findings ?? []).map((finding) => finding.observed_at).filter(Boolean);
-    const metadata = [
-      status.source_status ? `Source: ${status.source_status}` : null,
-      status.generated_at ? `Report: ${formatTimestamp(status.generated_at)}` : null,
-      observed.length ? `Observation: ${formatTimestamp(observed[0]!)}` : null,
-      sources.length ? `Sources: ${[...new Set(sources)].join(", ")}` : null,
-    ].filter(Boolean).join(" · ");
-    return [{ label: DOMAIN_NAMES[domain], value: `${status.available ? "Available" : "Unavailable"}${metadata ? ` · ${metadata}` : ""}` }];
+    return [{ label: DOMAIN_NAMES[domain], value: status.available ? "Assessment available" : "Data currently unavailable" }];
   });
   const items = [
-    ...(report.generated_at ? [{ label: "Assessment generated", value: formatTimestamp(report.generated_at) }] : []),
     ...(report.confidence ? [{ label: "Coordinator confidence", value: readable(report.confidence) }] : []),
     ...domainRows,
-    ...(report.data_gaps ?? []).map((value) => ({ label: "Data gap", value })),
-    ...(report.limitations ?? []).map((value) => ({ label: "Limitation", value })),
-    ...(report.warnings ?? []).map((value) => ({ label: "Warning", value })),
-    ...(report.errors ?? []).map((value) => ({ label: "Error", value })),
+    ...(report.data_gaps ?? []).map((value) => ({ label: "Data gap", value: cleanDisplayText(value) })),
+    ...(report.limitations ?? []).map((value) => ({ label: "Limitation", value: cleanDisplayText(value) })),
+    ...(report.warnings ?? []).map((value) => ({ label: "Note", value: cleanDisplayText(value) })),
   ];
   if (!items.length) return null;
 
@@ -185,7 +253,7 @@ export default function CitySituationPanel({
     <section data-testid="city-situation" className="card-panel overflow-hidden">
       <div className="card-panel-header flex items-center justify-between gap-4 px-6 py-4">
         <h2 className="flex items-center font-heading text-lg font-bold tracking-tight text-slate-900">
-          <span className="mr-2.5 flex h-7 w-7 items-center justify-center rounded-lg bg-slate-900 text-white"><Sparkles size={14} /></span>
+          <span className="mr-2.5 flex h-7 w-7 items-center justify-center rounded-lg bg-obsidian text-white"><Sparkles size={14} /></span>
           City Situation
         </h2>
         {report && assessed ? (
@@ -204,7 +272,7 @@ export default function CitySituationPanel({
         ) : error ? (
           <div data-testid="city-situation-error" className="flex items-start gap-3 text-sm text-rose-700">
             <TriangleAlert size={18} className="mt-0.5 shrink-0" />
-            <p>City assessment unavailable: {error}. Cached domain summaries remain available.</p>
+            <p>City assessment is temporarily unavailable. Cached domain summaries remain available.</p>
           </div>
         ) : report && assessed ? (
           <div data-testid="city-situation-narrative" className="max-w-5xl">
@@ -226,12 +294,12 @@ export default function CitySituationPanel({
         ) : (
           <div data-testid="city-situation-unavailable" className="flex items-start gap-3 text-sm text-slate-600">
             <Info size={18} className="mt-0.5 shrink-0" />
-            <p>No city assessment is loaded. Domain cards show cached data or clearly marked unavailable values.</p>
+            <p>Data currently unavailable. Domain cards show cached information where available.</p>
           </div>
         )}
 
         {!report && onRequestReport ? (
-          <button type="button" data-testid="request-city-report" onClick={onRequestReport} className="mt-5 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700">
+          <button type="button" data-testid="request-city-report" onClick={onRequestReport} className="mt-5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-obsidian hover:bg-primary-dim">
             Run full city assessment
           </button>
         ) : null}

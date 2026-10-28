@@ -214,7 +214,7 @@ export default function WastePage() {
         {/* Header */}
         <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-5">
           <div>
-            <div className="text-[10px] uppercase tracking-[0.25em] text-cyan-800 font-bold">Infrastructure domain</div>
+            <div className="text-[10px] uppercase tracking-[0.25em] text-primary font-bold">Infrastructure domain</div>
             <h1 className="text-2xl md:text-3xl font-heading font-bold text-slate-900 mt-1">Waste Management</h1>
             <p className="text-sm text-slate-600 mt-1">
               Waste generation, recycling, disposal, food waste and recycling infrastructure. Annual statistics — not live.
@@ -312,7 +312,7 @@ export default function WastePage() {
                 </div>
 
                 {/* Generation + recycling rate */}
-                <Section id="generation" title="WASTE GENERATION & RECYCLING RATE" icon={<BarChart3 size={16} className="text-cyan-800" />} kind={g.data_kind}>
+                <Section id="generation" title="WASTE GENERATION & RECYCLING RATE" icon={<BarChart3 size={16} className="text-primary" />} kind={g.data_kind}>
                   <div className="grid lg:grid-cols-2 gap-4">
                     <Panel title="Total waste generated — million tonnes">
                       {g.generated ? (
@@ -347,7 +347,7 @@ export default function WastePage() {
                 </Section>
 
                 {/* Waste by category */}
-                <Section id="categories" title={`WASTE BY TYPE (${report.categories.latest_year ?? "—"})`} icon={<Trash2 size={16} className="text-cyan-800" />} kind={report.categories.data_kind}>
+                <Section id="categories" title={`WASTE BY TYPE (${report.categories.latest_year ?? "—"})`} icon={<Trash2 size={16} className="text-primary" />} kind={report.categories.data_kind}>
                   <Panel>
                     <CategoryBars rows={report.categories.rows} />
                     {report.categories.limitations.length > 0 && (
@@ -357,7 +357,7 @@ export default function WastePage() {
                 </Section>
 
                 {/* Generated vs recycled vs disposed */}
-                <Section id="disposal" title="GENERATED VS RECYCLED VS DISPOSED" icon={<Recycle size={16} className="text-cyan-800" />} kind={g.data_kind}>
+                <Section id="disposal" title="GENERATED VS RECYCLED VS DISPOSED" icon={<Recycle size={16} className="text-primary" />} kind={g.data_kind}>
                   <Panel>
                     {g.generated && g.recycled && g.disposed
                       ? <RecycledDisposedBars generated={g.generated} recycled={g.recycled} disposed={g.disposed} />
@@ -370,7 +370,7 @@ export default function WastePage() {
                 <div id="food" className="grid xl:grid-cols-2 gap-4 mb-8 scroll-mt-4">
                   <section>
                     <div className="flex items-center gap-2 mb-3">
-                      <Utensils size={16} className="text-cyan-800" />
+                      <Utensils size={16} className="text-primary" />
                       <h2 className="text-sm font-bold tracking-[0.2em] text-slate-800">FOOD WASTE</h2>
                       <KindBadge kind={report.food.data_kind} />
                     </div>
@@ -400,7 +400,7 @@ export default function WastePage() {
 
                   <section>
                     <div className="flex items-center gap-2 mb-3">
-                      <Truck size={16} className="text-cyan-800" />
+                      <Truck size={16} className="text-primary" />
                       <h2 className="text-sm font-bold tracking-[0.2em] text-slate-800">WASTE SERVICES</h2>
                       <KindBadge kind={report.services.data_kind} />
                     </div>
@@ -432,7 +432,7 @@ export default function WastePage() {
             )}
 
             {/* Infrastructure map (only when real coordinates were loaded) */}
-            <Section id="infrastructure" title="WASTE INFRASTRUCTURE" icon={<MapPin size={16} className="text-cyan-800" />} kind={report.infrastructure.data_kind}>
+            <Section id="infrastructure" title="WASTE INFRASTRUCTURE" icon={<MapPin size={16} className="text-primary" />} kind={report.infrastructure.data_kind}>
               <Notice tone="info">
                 <div>Static location listings (record dates {report.infrastructure.kinds.map((k) => k.record_date_max).filter(Boolean).sort()[0]?.slice(0, 4) ?? "—"}–{report.infrastructure.kinds.map((k) => k.record_date_max).filter(Boolean).sort().slice(-1)[0]?.slice(0, 4) ?? "—"}). Locations may be out of date; no fill levels or collection activity are available.</div>
               </Notice>
@@ -497,7 +497,7 @@ export default function WastePage() {
             </Section>
 
             {/* Intelligence entry point */}
-            <Section id="intelligence" title="WASTE INTELLIGENCE" icon={<Brain size={16} className="text-cyan-800" />}>
+            <Section id="intelligence" title="WASTE INTELLIGENCE" icon={<Brain size={16} className="text-primary" />}>
               <div className="grid lg:grid-cols-2 gap-3">
                 {report.insights.map((i) => (
                   <Panel key={i.question}>

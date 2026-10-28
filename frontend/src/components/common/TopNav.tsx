@@ -86,15 +86,15 @@ export default function TopNav() {
   };
 
   return (
-    <nav className="bg-white border-b border-slate-200 sticky top-0 z-50">
+    <nav className="bg-obsidian text-white border-b border-slate-800 sticky top-0 z-50">
       {/* Primary top bar */}
       <div className="max-w-full mx-auto px-4 min-h-16 py-2 flex flex-wrap items-center justify-between gap-y-2">
         {/* Left brand */}
         <Link
           href="/"
-          className="order-1 font-heading font-bold text-lg sm:text-xl text-[var(--color-primary)] tracking-wide flex items-center gap-2"
+          className="order-1 font-heading font-bold text-lg sm:text-xl text-white tracking-wide flex items-center gap-2"
         >
-          UrbanOS <span className="hidden sm:inline text-slate-500 font-normal">CITY INTELLIGENCE</span>
+          UrbanOS <span className="hidden sm:inline text-slate-300 font-normal">CITY INTELLIGENCE</span>
         </Link>
 
         {/* Center division tabs */}
@@ -104,8 +104,8 @@ export default function TopNav() {
               key={d.key}
               href={d.href}
               className={`${isActiveTop(d.href)
-                ? "text-indigo-600 border-b-2 border-[var(--color-primary)] pb-1"
-                : "text-slate-500 hover:text-slate-900 transition-colors"}`}
+                ? "text-[#C6E75A] border-b-2 border-[#C6E75A] pb-1"
+                : "text-slate-300 hover:text-white transition-colors"}`}
             >
               {d.label}
             </Link>
@@ -114,7 +114,7 @@ export default function TopNav() {
 
         {/* Right: LIVE indicator + clock */}
         <div className="order-2 ml-auto flex items-center space-x-3 sm:space-x-5 lg:order-3">
-          <div className="flex items-center space-x-2 text-slate-500 text-sm font-mono">
+          <div className="flex items-center space-x-2 text-slate-300 text-sm font-mono">
             <Clock size={16} />
             <span>{currentTime}</span>
           </div>
@@ -123,7 +123,7 @@ export default function TopNav() {
 
       {/* Secondary module row */}
       {activeDivision.modules.length > 0 && (
-        <div className="bg-slate-50 border-b border-slate-200">
+        <div className="bg-obsidian border-t border-slate-800 border-b border-slate-800">
           <div className="max-w-full mx-auto px-4">
             <div className="flex items-center h-10 gap-4 overflow-x-auto">
               {activeDivision.modules.map((m) => (
@@ -132,8 +132,8 @@ export default function TopNav() {
                   href={m.href}
                   className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${
                     pathname === m.href
-                      ? "text-white bg-indigo-600"
-                      : "text-slate-500 hover:text-slate-900 hover:bg-slate-100"
+                      ? "text-obsidian bg-primary"
+                      : "text-slate-300 hover:text-white hover:bg-slate-800"
                   }`}
                 >
                   {m.label}

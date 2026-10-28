@@ -3,47 +3,58 @@
 /* ==========================================================================
    UrbanOS design tokens
    --------------------------------------------------------------------------
-   Source of truth: the UrbanOS solid-KPI reference (urbanos_solid_kpis.html).
+   Source of truth: UrbanOS global frontend palette.
 
    Two surfaces only:
-     - SOLID coloured cards for KPIs and risk signals. These are the defining
-       feature of the dashboard and carry white text.
-     - WHITE / slate panels for tables, forms, reports, maps and charts, where
-       a colour wash would cost readability.
+     - SLATE KPI cards and designated dark surfaces.
+     - LIGHT neutral panels for charts, forms, maps and tables.
 
-   Every coloured fill below is verified >= 4.5:1 against white text by
-   presentation.test.ts, which parses these tokens out of this file. Three of
-   the reference hues were deliberately darkened (cyan, amber, emerald) because
-   their 600 step fell short of AA with white text - amber-600 measured 3.18:1.
+   Semantic status fills remain independent from the shared palette and retain
+   their existing color meaning.
    ========================================================================== */
 
 @theme {
-  --color-background: #f1f5f9;
-  --color-foreground: #0f172a;
+  --color-background: #f1f3f6;
+  --color-foreground: #1f2633;
 
   /* Brand accent for chrome - page headings, icons, active nav, focus rings.
      Never used to encode status; status has its own scale below. */
-  --color-primary: #4f46e5;
-  --color-primary-dim: #4338ca;
-  --color-secondary: #eef2ff;
-  --color-tertiary: #0ea5e9;
+  --color-primary: #c6e75a;
+  --color-primary-dim: #a8c83e;
+  --color-secondary: #5f687a;
+  --color-tertiary: #c6e75a;
+  --color-highlight-special: #c6e75a;
+  --color-obsidian: #191d27;
+  --color-card: #30394a;
+
+  /* Neutral Tailwind utilities inherit the UrbanOS cool-grey palette. */
+  --color-slate-50: #e7ebf0;
+  --color-slate-100: #e7ebf0;
+  --color-slate-200: #d7dde6;
+  --color-slate-300: #c5ccd7;
+  --color-slate-400: #5f687a;
+  --color-slate-500: #5f687a;
+  --color-slate-600: #5f687a;
+  --color-slate-700: #1f2633;
+  --color-slate-800: #30394a;
+  --color-slate-900: #1f2633;
 
   /* Surfaces */
   --color-surface-lowest: #ffffff;
-  --color-surface-low: #ffffff;
-  --color-surface: #ffffff;
-  --color-surface-high: #f8fafc;
-  --color-surface-highest: #f1f5f9;
+  --color-surface-low: #e7ebf0;
+  --color-surface: #e7ebf0;
+  --color-surface-high: #e7ebf0;
+  --color-surface-highest: #d7dde6;
 
   /* Hairlines */
-  --color-line: #e2e8f0;
-  --color-line-soft: #f1f5f9;
+  --color-line: #d7dde6;
+  --color-line-soft: #d7dde6;
 
   /* Text */
-  --color-ink: #0f172a;
-  --color-ink-soft: #334155;
-  --color-ink-faint: #475569;
-  --color-ink-muted: #64748b;
+  --color-ink: #1f2633;
+  --color-ink-soft: #5f687a;
+  --color-ink-faint: #5f687a;
+  --color-ink-muted: #5f687a;
 
   /* Legacy severity names, still referenced by SystemHealth and
      PriorityIncidentFeed. Values match the semantic badges below. */
@@ -59,29 +70,6 @@
   --color-signal-elevated: #b45309;
   --color-signal-high: #c2410c;
   --color-signal-critical: #e11d48;
-
-  /* ---- Solid KPI card fills, one per domain ---------------------------- */
-  /* Transport / Mobility */
-  --color-dom-traffic: #2563eb;
-  --color-dom-transit: #4338ca;
-  --color-dom-roads: #1d4ed8;
-  /* Environment */
-  --color-dom-pm25: #047857;
-  --color-dom-weather: #0f766e;
-  --color-dom-flood: #0369a1;
-  /* Public safety */
-  --color-dom-fire: #e11d48;
-  --color-dom-crime: #9f1239;
-  /* Infrastructure */
-  --color-dom-water: #0e7490;
-  --color-dom-energy: #b45309;
-  --color-dom-waste: #115e59;
-  /* Planning / Administration */
-  --color-dom-land: #6d28d9;
-  --color-dom-housing: #5b21b6;
-  /* amber-900: distinct from energy's amber-700 fill and dark enough for
-     AA with white text, like every other domain fill. */
-  --color-dom-construction: #78350f;
 
   /* ---- Semantic status. Badges ONLY - never a card background. -------- */
   --color-badge-normal: #ecfdf5;
@@ -100,9 +88,9 @@
   --color-badge-critical-ink: #9f1239;
   --color-badge-critical-edge: #fda4af;
 
-  --color-badge-unavailable: #f1f5f9;
-  --color-badge-unavailable-ink: #475569;
-  --color-badge-unavailable-edge: #cbd5e1;
+  --color-badge-unavailable: #f3f6f8;
+  --color-badge-unavailable-ink: #536278;
+  --color-badge-unavailable-edge: #dce3e8;
 
   --font-sans: Inter, Arial, sans-serif;
   --font-heading: "Space Grotesk", Arial, sans-serif;
@@ -121,21 +109,64 @@ body {
   overflow: visible;
 }
 
+/* White utility surfaces become the light neutral treatment across tables,
+   forms, inspectors and nested panels. */
+.bg-white {
+  background-color: #e7ebf0;
+}
+
 /* ---------------------------------------------------------------------
-   Solid coloured card - the KPI / risk-signal treatment.
-   White text throughout; hover deepens the fill and lifts the card.
+   Shared Slate cards for KPIs and designated dark surfaces.
+   White text throughout; hover lifts the card.
    ------------------------------------------------------------------ */
 .solid-card {
   position: relative;
   overflow: hidden;
   border-radius: 1rem;
-  box-shadow: 0 10px 15px -3px rgb(15 23 42 / 0.1), 0 4px 6px -4px rgb(15 23 42 / 0.1);
+  background-color: #30394a;
+  color: #ffffff;
+  box-shadow: 0 10px 15px -3px rgb(37 51 74 / 0.1), 0 4px 6px -4px rgb(37 51 74 / 0.1);
   transition: transform 200ms ease, box-shadow 200ms ease;
 }
 
 .solid-card:hover {
+  background-color: #30394a;
   transform: translateY(-4px);
-  box-shadow: 0 20px 25px -5px rgb(15 23 42 / 0.15), 0 8px 10px -6px rgb(15 23 42 / 0.1);
+  box-shadow: 0 20px 25px -5px rgb(37 51 74 / 0.15), 0 8px 10px -6px rgb(37 51 74 / 0.1);
+}
+
+/* Citrus is a strong accent fill; on light surfaces its text utility uses
+   primary ink so small labels and icons remain readable. */
+.text-primary {
+  color: #1f2633;
+}
+
+/* Ordinary domain KPIs share a Slate surface; status colors remain semantic. */
+.metric-card {
+  background-color: #30394a;
+  border: 1px solid #3d485b;
+  color: #ffffff;
+}
+
+.metric-card .card-pattern,
+.metric-card .kpi-card-glow {
+  display: none;
+}
+
+.metric-card :is(.text-ink, .text-slate-900, .text-slate-800, .text-slate-700, .text-slate-600, .text-slate-500, .text-white\/70, .text-white\/80, .text-white\/90) {
+  color: #ffffff;
+}
+
+.metric-card .text-primary {
+  color: #c6e75a;
+}
+
+.metric-card :is(.bg-white, .bg-white\/10, .bg-white\/15, .bg-white\/20) {
+  background-color: rgb(255 255 255 / 0.12);
+}
+
+.metric-card :is(.border-white\/20, .border-white\/30, .border-line) {
+  border-color: rgb(255 255 255 / 0.2);
 }
 
 /* Subtle dot texture lifted straight from the reference. Decorative only. */
@@ -148,26 +179,26 @@ body {
    White content panel - tables, forms, reports, maps, charts.
    ------------------------------------------------------------------ */
 .card-panel {
-  background-color: #ffffff;
+  background-color: #e7ebf0;
   border: 1px solid var(--color-line);
   border-radius: 1rem;
-  box-shadow: 0 1px 2px 0 rgb(15 23 42 / 0.04);
+  box-shadow: 0 1px 2px 0 rgb(37 51 74 / 0.04);
 }
 
 .card-panel-header {
-  background-color: rgba(248, 250, 252, 0.8);
+  background-color: rgba(231, 235, 240, 0.8);
   border-bottom: 1px solid var(--color-line-soft);
 }
 
 /* Legacy aliases used by pages that predate the tokens above. */
 .glass-panel,
 .glass-panel-glow {
-  background-color: #ffffff;
+  background-color: #e7ebf0;
   border: 1px solid var(--color-line);
 }
 
 .glass-panel-glow {
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.1);
+  box-shadow: 0 10px 30px rgba(37, 51, 74, 0.1);
 }
 
 /* ---------------------------------------------------------------------

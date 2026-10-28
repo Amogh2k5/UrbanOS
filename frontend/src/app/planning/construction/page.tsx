@@ -127,12 +127,12 @@ export default function ConstructionPage() {
   const mapFeatureCount = (report?.map_data?.feature_count as number) ?? 0;
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-6 text-slate-900 md:px-8">
+    <main className="min-h-screen bg-background px-4 py-6 text-slate-900 md:px-8">
       <div className="mx-auto max-w-[1600px] space-y-6">
         {/* Header */}
         <header className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
           <div>
-            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-purple-600">
+            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-primary">
               <HardHat size={15} /> Planning / Construction
             </div>
             <h1 className="text-3xl font-bold text-slate-900 md:text-4xl">Construction Intelligence</h1>
@@ -339,13 +339,13 @@ export default function ConstructionPage() {
                   placeholder="Search project name…"
                   value={gmFilters.search}
                   onChange={(e) => { setGmFilters(f => ({ ...f, search: e.target.value })); setGmPage(1); }}
-                  className="w-full rounded-lg border border-slate-200 bg-white pl-10 pr-3 py-2 text-sm outline-none focus:border-purple-500"
+                  className="w-full rounded-lg border border-slate-200 bg-white pl-10 pr-3 py-2 text-sm outline-none focus:border-primary"
                 />
               </div>
               <select
                 value={gmFilters.rating}
                 onChange={(e) => { setGmFilters(f => ({ ...f, rating: e.target.value })); setGmPage(1); }}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-purple-500"
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary"
               >
                 <option value="">All Ratings</option>
                 {gmRatings.map(r => <option key={r} value={r}>{r}</option>)}
@@ -353,7 +353,7 @@ export default function ConstructionPage() {
               <select
                 value={gmFilters.projectType}
                 onChange={(e) => { setGmFilters(f => ({ ...f, projectType: e.target.value })); setGmPage(1); }}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-purple-500"
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary"
               >
                 <option value="">All Types</option>
                 {gmTypes.map(t => <option key={t} value={t}>{t}</option>)}
@@ -490,7 +490,7 @@ export default function ConstructionPage() {
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 {report.insights.map((x) => (
                   <div key={x.question} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                    <div className="text-sm font-semibold text-purple-700">{x.question}</div>
+                    <div className="text-sm font-semibold text-secondary">{x.question}</div>
                     <p className="mt-2 text-sm text-slate-600">{x.answer}</p>
                     <div className="mt-1 text-xs text-slate-600">Data kind: {x.data_kind}</div>
                   </div>

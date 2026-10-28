@@ -86,7 +86,7 @@ export default function LandPriceForecast({ section }: { section: LandPriceForec
     <div className="glass-panel rounded-xl border border-slate-200 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
         <div className="flex items-center gap-2">
-          <TrendingUp size={14} className="text-cyan-700" />
+          <TrendingUp size={14} className="text-primary" />
           <h3 className="text-xs font-bold tracking-[0.18em] text-slate-600">
             HISTORICAL LAND TENDER PRICE / GFA — BASELINE ESTIMATE
           </h3>
@@ -136,13 +136,13 @@ export default function LandPriceForecast({ section }: { section: LandPriceForec
                 median of {section!.latest_award_year} awards, nominal SGD
               </div>
             </div>
-            <div className="rounded-lg border border-amber-300/50 bg-amber-50/50 p-3">
-              <div className="text-[9px] tracking-[0.12em] text-amber-800">BASELINE ESTIMATE {section!.forecast_year ?? ""}</div>
-              <div className="text-lg font-mono font-bold text-amber-900 mt-1">
+            <div className="rounded-lg border border-highlight-special/50 bg-highlight-special/15 p-3">
+              <div className="text-[9px] tracking-[0.12em] text-ink">BASELINE ESTIMATE {section!.forecast_year ?? ""}</div>
+              <div className="text-lg font-mono font-bold text-ink mt-1">
                 {fmtPerGfa(section!.forecast_value)}
-                <span className="text-[10px] text-amber-800/70 font-normal ml-1">per GFA unit</span>
+                <span className="text-[10px] text-ink-soft font-normal ml-1">per GFA unit</span>
               </div>
-              <div className="text-[10px] text-amber-800/70 mt-1">
+              <div className="text-[10px] text-ink-soft mt-1">
                 persistence: {section!.latest_award_year} median carried forward to{" "}
                 {section!.forecast_year}
                 {section!.current_year_excluded !== null && (

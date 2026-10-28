@@ -16,7 +16,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className="antialiased bg-[#f1f5f9] min-h-screen text-slate-900 flex flex-col">
+      <body className="antialiased bg-background min-h-screen text-foreground flex flex-col">
         <TopNav />
         <main className="flex-1 overflow-visible">{children}</main>
       </body>

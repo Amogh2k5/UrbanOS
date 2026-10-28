@@ -57,7 +57,7 @@ export default function WeatherPage() {
               <div className="lg:col-span-2 glass-panel p-6 rounded-lg flex flex-col justify-between">
                 <div>
                   <div className="flex justify-between items-start mb-6">
-                    <h3 className="font-bold text-lg flex items-center space-x-2 text-cyan-700 uppercase tracking-widest text-xs">
+                    <h3 className="font-bold text-lg flex items-center space-x-2 text-primary uppercase tracking-widest text-xs">
                       <ThermometerSun size={18} />
                       <span>24-Hour National Outlook</span>
                     </h3>
@@ -68,8 +68,8 @@ export default function WeatherPage() {
                   
                   {data.general ? (
                     <div className="flex flex-col md:flex-row gap-8 items-center">
-                      <div className="flex flex-col items-center justify-center p-6 bg-cyan-50 border border-cyan-200/30 rounded-full w-48 h-48 shrink-0">
-                        <Cloud size={48} className="text-cyan-700 mb-2" />
+                      <div className="flex flex-col items-center justify-center p-6 bg-primary/5 border border-primary/20 rounded-full w-48 h-48 shrink-0">
+                        <Cloud size={48} className="text-primary mb-2" />
                         <span className="text-xl font-black text-center leading-tight">{data.general.forecast_text || 'Unknown'}</span>
                       </div>
                       
@@ -125,7 +125,7 @@ export default function WeatherPage() {
                             </div>
                           </div>
                           <div className="flex flex-col items-center justify-center bg-white/50 w-12 h-12 rounded-full border border-white/20">
-                            <Compass size={18} className="text-cyan-500 mb-1" />
+                            <Compass size={18} className="text-primary mb-1" />
                             <span className="text-[10px] font-bold text-teal-900">{data.general.wind_direction}</span>
                           </div>
                         </div>
@@ -277,7 +277,7 @@ export default function WeatherPage() {
             {/* Bottom Row: Regional Conditions */}
             <div className="glass-panel p-6 rounded-lg flex-grow">
               <div className="flex justify-between items-end mb-6 border-b border-slate-200 pb-4">
-                <h3 className="font-bold text-lg flex items-center space-x-2 text-cyan-700 uppercase tracking-widest text-xs">
+                <h3 className="font-bold text-lg flex items-center space-x-2 text-primary uppercase tracking-widest text-xs">
                   <Map size={18} />
                   <span>Regional Conditions</span>
                 </h3>
@@ -288,7 +288,7 @@ export default function WeatherPage() {
               
               {data.regions && Object.keys(data.regions).length > 0 ? (
                 selectedRegion ? (
-                  <div className="bg-slate-50 border border-cyan-200/50 rounded-lg p-6 relative animate-in fade-in slide-in-from-bottom-4 duration-300">
+                  <div className="bg-slate-50 border border-primary/20 rounded-lg p-6 relative animate-in fade-in slide-in-from-bottom-4 duration-300">
                     <button 
                       onClick={() => setSelectedRegion(null)}
                       className="absolute top-4 right-4 text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-full w-8 h-8 flex items-center justify-center transition-colors"
@@ -296,7 +296,7 @@ export default function WeatherPage() {
                       &times;
                     </button>
                     <div className="flex flex-col items-center">
-                      <span className="text-sm uppercase tracking-widest text-cyan-700 mb-4">{selectedRegion} Region</span>
+                      <span className="text-sm uppercase tracking-widest text-primary mb-4">{selectedRegion} Region</span>
                       <Cloud size={48} className="text-slate-600 mb-4" />
                       <div className="text-2xl font-bold text-slate-900 mb-6">
                         {data.regions[selectedRegion]?.forecast_text || 'Unknown'}
@@ -353,7 +353,7 @@ export default function WeatherPage() {
                       <div 
                         key={region} 
                         onClick={() => setSelectedRegion(region)}
-                        className="bg-slate-50 border border-slate-200 rounded-lg p-5 flex flex-col items-center justify-center text-center hover:border-cyan-500/50 hover:bg-cyan-50 transition-colors cursor-pointer relative"
+                        className="bg-slate-50 border border-slate-200 rounded-lg p-5 flex flex-col items-center justify-center text-center hover:border-primary/50 hover:bg-primary/5 transition-colors cursor-pointer relative"
                       >
                         {info.current_temperature?.value_c !== undefined && (
                           <span className="absolute top-2 right-2 text-[6px] px-1 py-0.5 bg-green-50 text-green-800 border border-green-200 rounded tracking-widest uppercase">LIVE</span>
@@ -362,7 +362,7 @@ export default function WeatherPage() {
                         <Cloud size={32} className="text-slate-500 mb-3" />
                         <span className={`text-sm font-bold text-slate-700 ${info.current_temperature?.value_c !== undefined ? 'mb-2' : ''}`}>{info.forecast_text || 'Unknown'}</span>
                         {info.current_temperature?.value_c !== undefined && (
-                          <span className="text-xs font-mono text-cyan-700">{info.current_temperature.value_c}°C</span>
+                          <span className="text-xs font-mono text-primary">{info.current_temperature.value_c}°C</span>
                         )}
                       </div>
                     ))}

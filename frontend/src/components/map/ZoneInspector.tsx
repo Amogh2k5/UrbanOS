@@ -72,7 +72,7 @@ export default function ZoneInspector() {
       <div className="space-y-4 mb-6">
         <div className="flex items-center justify-between p-2 rounded bg-slate-50 border border-slate-200">
           <div className="flex items-center gap-2 text-slate-600">
-            <Car size={16} className="text-cyan-700" />
+            <Car size={16} className="text-primary" />
             <span className="font-semibold text-sm">Traffic</span>
           </div>
           <span className={`text-sm font-mono ${trafficZoneState !== 'Normal' ? 'text-orange-700' : 'text-slate-500'}`}>
@@ -82,7 +82,7 @@ export default function ZoneInspector() {
         
         <div className="flex items-center justify-between p-2 rounded bg-slate-50 border border-slate-200">
           <div className="flex items-center gap-2 text-slate-600">
-            <ThermometerSun size={16} className="text-cyan-700" />
+            <ThermometerSun size={16} className="text-primary" />
             <span className="font-semibold text-sm">Environment</span>
           </div>
           <span className={`text-sm font-mono ${envZoneState !== 'Normal' ? 'text-yellow-800' : 'text-slate-500'}`}>
@@ -92,7 +92,7 @@ export default function ZoneInspector() {
 
         <div className="flex items-center justify-between p-2 rounded bg-slate-50 border border-slate-200">
           <div className="flex items-center gap-2 text-slate-600">
-            <Waves size={16} className="text-cyan-700" />
+            <Waves size={16} className="text-primary" />
             <span className="font-semibold text-sm">Flood</span>
           </div>
           <span className={`text-sm font-mono ${floodZoneState !== 'Clear' ? 'text-red-700' : 'text-slate-500'}`}>

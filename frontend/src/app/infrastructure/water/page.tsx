@@ -30,18 +30,9 @@ const KIND_STYLE: Record<WaterDataKind, { label: string; cls: string }> = {
   unavailable: { label: "UNAVAILABLE", cls: "text-slate-500 bg-slate-100 border-slate-300" },
 };
 
-const SOLID_KIND_STYLE: Record<WaterDataKind, string> = {
-  live: "bg-white text-green-900 border-white/80",
-  latest_available: "bg-white text-cyan-900 border-white/80",
-  historical: "bg-white text-violet-900 border-white/80",
-  forecast: "bg-white text-amber-900 border-white/80",
-  unavailable: "bg-white text-slate-700 border-white/80",
-};
-
-function KindBadge({ kind, onSolidCard = false }: { kind: WaterDataKind; onSolidCard?: boolean }) {
+function KindBadge({ kind }: { kind: WaterDataKind }) {
   const s = KIND_STYLE[kind];
-  const cls = onSolidCard ? SOLID_KIND_STYLE[kind] : s.cls;
-  return <span className={`text-[9px] font-bold tracking-[0.14em] px-2 py-0.5 rounded border ${cls}`}>{s.label}</span>;
+  return <span className={`text-[9px] font-bold tracking-[0.14em] px-2 py-0.5 rounded border ${s.cls}`}>{s.label}</span>;
 }
 
 function fmtTime(value?: string | null) {
@@ -108,7 +99,7 @@ function IndicatorCard({ ind, fallbackLabel }: { ind?: WaterIndicator | null; fa
     <Card tint>
       <div className="flex items-center justify-between">
         <div className="text-[10px] font-bold tracking-[0.16em] text-white/90">{ind.label.toUpperCase()}</div>
-        <KindBadge kind={ind.data_kind} onSolidCard />
+        <KindBadge kind={ind.data_kind} />
       </div>
       <div className="text-2xl font-mono font-bold text-white mt-2">
         {fmtNum(ind.value)} <span className="text-xs text-white/90 font-normal">{ind.unit}</span>
@@ -116,7 +107,7 @@ function IndicatorCard({ ind, fallbackLabel }: { ind?: WaterIndicator | null; fa
       <div className="text-[10px] text-white/90 mt-1">
         Annual, {ind.period}
         {change != null && (
-          <span className={`ml-2 font-mono ${change > 0 ? "text-amber-200" : "text-teal-200"}`}>{/* on solid card */}
+          <span className={`ml-2 font-mono ${change > 0 ? "text-amber-700" : "text-teal-700"}`}>
             {change > 0 ? "+" : ""}{change.toFixed(1)}% vs {ind.previous_period}
           </span>
         )}
@@ -200,7 +191,7 @@ export default function WaterPage() {
       <div className="w-full max-w-[1920px] mx-auto px-4 md:px-6 lg:px-8 pb-10 pt-5">
         <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-5">
           <div>
-            <div className="text-[10px] uppercase tracking-[0.25em] text-cyan-700 font-bold">Infrastructure domain</div>
+            <div className="text-[10px] uppercase tracking-[0.25em] text-primary font-bold">Infrastructure domain</div>
             <h1 className="text-2xl md:text-3xl font-heading font-bold text-slate-900 mt-1">Water</h1>
             <p className="text-sm text-slate-500 mt-1">
               Supply context, drain infrastructure and water usage. Rainfall and flood risk live in Flood &amp; Rainfall.
@@ -263,7 +254,7 @@ export default function WaterPage() {
             )}
 
             {/* ------------------------------------------------------ SUPPLY */}
-            <Section id="supply" title="WATER SUPPLY" icon={<Droplets size={16} className="text-cyan-700" />} kind={report.supply.data_kind}>
+            <Section id="supply" title="WATER SUPPLY" icon={<Droplets size={16} className="text-primary" />} kind={report.supply.data_kind}>
               <Notice tone="warn">{report.supply.reservoir_storage_note} The figures below are annual water <em>sales</em>, not storage or live availability.</Notice>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                 {report.supply.indicators.length === 0 && <Card><div className="text-sm text-slate-600">Supply indicators unavailable.</div></Card>}
@@ -280,7 +271,7 @@ export default function WaterPage() {
             </Section>
 
             {/* ------------------------------------------------------- DRAIN */}
-            <Section id="drain" title="DRAIN CONDITION" icon={<Waves size={16} className="text-cyan-700" />} kind={report.drain.data_kind}>
+            <Section id="drain" title="DRAIN CONDITION" icon={<Waves size={16} className="text-primary" />} kind={report.drain.data_kind}>
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
                 {conditionOrder.map((c) => (
                   <Card key={c} className="!p-3" tint>
@@ -299,7 +290,7 @@ export default function WaterPage() {
                 </div>
                 <Card>
                   <div className="flex items-center gap-2 mb-3">
-                    <MapPin size={15} className="text-cyan-700" />
+                    <MapPin size={15} className="text-primary" />
                     <h3 className="text-xs font-bold tracking-[0.18em] text-slate-600">SENSOR DETAILS</h3>
                   </div>
                   {selected ? (
@@ -338,7 +329,7 @@ export default function WaterPage() {
             </Section>
 
             {/* -------------------------------------------------------- USAGE */}
-            <Section id="usage" title="WATER USAGE" icon={<Activity size={16} className="text-cyan-700" />} kind={report.usage.data_kind}>
+            <Section id="usage" title="WATER USAGE" icon={<Activity size={16} className="text-primary" />} kind={report.usage.data_kind}>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                 <IndicatorCard ind={report.usage.potable_total} fallbackLabel="Potable water (total)" />
                 <IndicatorCard ind={report.usage.domestic} fallbackLabel="Domestic potable" />

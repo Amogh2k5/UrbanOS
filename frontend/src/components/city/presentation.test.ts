@@ -9,9 +9,6 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   ALL_BADGES,
-  DOMAIN_FILLS,
-  DOMAIN_FILLS_HOVER,
-  DOMAIN_FILLS_SHADOW,
   cityStatusBadgeClass,
   dataKindLabel,
   dataKindPillClass,
@@ -60,6 +57,11 @@ const REAL_MODULE: ModuleSummary = {
   detail_route: "/planning/land",
 };
 
+const ALL_DOMAINS = [
+  "traffic", "transit", "roads", "pm25", "weather", "flood", "fire",
+  "crime", "water", "energy", "waste", "land", "housing", "construction",
+];
+
 describe("severityBand", () => {
   it.each([
     ["CRITICAL", "critical"],
@@ -84,52 +86,17 @@ describe("severityBand", () => {
   });
 });
 
-describe("domain fills are assigned by domain, never by status", () => {
-  const ALL_DOMAINS = [
-    "traffic", "transit", "roads",
-    "pm25", "weather", "flood",
-    "fire", "crime",
-    "water", "energy", "waste",
-    "land", "housing", "construction",
-  ];
-
-  it("covers every domain in the app", () => {
-    expect(Object.keys(DOMAIN_FILLS).sort()).toEqual([...ALL_DOMAINS].sort());
-  });
-
-  it("gives a domain the same fill regardless of its status", () => {
-    // The fill identifies WHICH domain this is. If it changed with status, a
-    // red Environment card would no longer look like the Environment card.
-    expect(domainFill("traffic")).toBe(domainFill("traffic"));
-    expect(domainFill("traffic")).not.toBe(domainFill("land"));
-  });
-
-  it("gives every domain a distinct solid fill", () => {
-    // Reuse would make two cards indistinguishable at a glance.
-    expect(new Set(Object.values(DOMAIN_FILLS)).size).toBe(ALL_DOMAINS.length);
-  });
-
-  it("has a matching hover shade and coloured shadow for every domain", () => {
-    for (const d of ALL_DOMAINS) {
-      expect(DOMAIN_FILLS_HOVER[d]).toMatch(/^hover:bg-/);
-      expect(DOMAIN_FILLS_SHADOW[d]).toMatch(/^shadow-.*\/20 hover:shadow-.*\/30$/);
-    }
+describe("cards use one shared surface across domains", () => {
+  it("gives every domain the same fill", () => {
+    expect(new Set(ALL_DOMAINS.map((domain) => domainFill(domain)))).toEqual(new Set(["bg-card"]));
   });
 
   it("applies fill, hover and shadow together so a card is never half-themed", () => {
     const cls = solidCardClass("traffic", "p-5");
     expect(cls).toContain("solid-card");
-    // The fill references the design token, so the colour that ships is the
-    // colour the contrast tests measured.
-    expect(cls).toContain("bg-dom-traffic");
-    expect(cls).toContain("hover:bg-blue-700");
+    // Domain identity no longer assigns decorative colors to KPI cards.
+    expect(cls).toContain("bg-card");
     expect(cls).toContain("p-5");
-  });
-
-  it("falls back to a neutral slate for an unknown domain", () => {
-    expect(domainFill("does-not-exist")).toBe("bg-slate-500");
-    expect(domainFill(null)).toBe("bg-slate-500");
-    expect(domainFill(undefined)).toBe("bg-slate-500");
   });
 
   it("keeps data provenance out of the severity colour space", () => {
@@ -167,7 +134,7 @@ describe("status badges are semantically distinct and independent of fill", () =
 
   it("is driven only by the backend status, never by the card colour", () => {
     // Every domain at "critical" gets the identical badge, whatever its fill.
-    for (const domain of Object.keys(DOMAIN_FILLS)) {
+    for (const domain of ALL_DOMAINS) {
       expect(statusBadgeClass("critical")).toContain("badge-critical");
       expect(domainFill(domain)).toBeTruthy();
     }
@@ -227,42 +194,20 @@ describe("contrast, measured against the shipped CSS", () => {
     return (l1 + 0.05) / (l2 + 0.05);
   }
 
-  // Every domain token declared in globals.css.
-  const DOMAIN_TOKENS = [
-    "dom-traffic", "dom-transit", "dom-roads",
-    "dom-pm25", "dom-weather", "dom-flood",
-    "dom-fire", "dom-crime",
-    "dom-water", "dom-energy", "dom-waste",
-    "dom-land", "dom-housing",
-  ];
-
   const badges = ["normal", "elevated", "high", "critical", "unavailable"];
 
-  it("declares a token for every domain the app renders", () => {
-    for (const t of DOMAIN_TOKENS) expect(() => token(t)).not.toThrow();
+  it("uses the approved page, panel, card, nav and border palette", () => {
+    expect(token("background")).toBe("#f1f3f6");
+    expect(token("surface")).toBe("#e7ebf0");
+    expect(token("card")).toBe("#30394a");
+    expect(token("obsidian")).toBe("#191d27");
+    expect(token("line")).toBe("#d7dde6");
+    expect(token("ink")).toBe("#1f2633");
+    expect(token("primary")).toBe("#c6e75a");
   });
 
-  it("uses the reference palette for the six division colours", () => {
-    // These six come straight from urbanos_solid_kpis.html.
-    expect(token("dom-traffic")).toBe("#2563eb");   // blue-600
-    expect(token("dom-water")).toBe("#0e7490");     // cyan, darkened from cyan-600
-    expect(token("dom-fire")).toBe("#e11d48");      // rose-600
-    expect(token("dom-energy")).toBe("#b45309");    // amber, darkened from amber-600
-    expect(token("dom-pm25")).toBe("#047857");      // emerald, darkened from emerald-600
-    expect(token("dom-land")).toBe("#6d28d9");      // purple, darkened from purple-600
-  });
-
-  it("uses the reference page, panel and border colours", () => {
-    expect(token("background")).toBe("#f1f5f9");
-    expect(token("surface")).toBe("#ffffff");
-    expect(token("line")).toBe("#e2e8f0");
-    expect(token("ink")).toBe("#0f172a");
-  });
-
-  it.each(DOMAIN_TOKENS)("renders white text on %s at AA", (t) => {
-    // The KPI card treatment is white-on-fill everywhere, so this is the single
-    // most important contrast check in the app.
-    expect(contrast(token(t), "#ffffff")).toBeGreaterThanOrEqual(4.5);
+  it("renders white text on the shared Slate KPI card at AA", () => {
+    expect(contrast(token("card"), "#ffffff")).toBeGreaterThanOrEqual(4.5);
   });
 
   it("darkened exactly the three reference hues that failed AA", () => {
@@ -277,34 +222,23 @@ describe("contrast, measured against the shipped CSS", () => {
     expect(contrast(token(`badge-${badge}`), token(`badge-${badge}-ink`))).toBeGreaterThanOrEqual(4.5);
   });
 
-it.each(badges)("keeps the %s badge chip legible on every solid card fill", (badge) => {
+  it.each(badges)("keeps the %s badge chip legible on the shared KPI card", (badge) => {
     // A badge sits on top of a solid KPI card. It is a light chip with dark
     // ink, so only the CHIP has to contrast with the card - the ink is always
     // read against the chip (checked above), never directly against the fill.
-    for (const t of DOMAIN_TOKENS) {
-      expect(contrast(token(`badge-${badge}`), token(t))).toBeGreaterThanOrEqual(1.25);
-    }
+    expect(contrast(token(`badge-${badge}`), token("card"))).toBeGreaterThanOrEqual(1.25);
   });
 
-  it("keeps dark body text readable on the page and on white panels", () => {
+  it("keeps dark body text readable on the page and light panels", () => {
     for (const ink of ["ink", "ink-soft", "ink-faint", "ink-muted"]) {
       expect(contrast(token("background"), token(ink))).toBeGreaterThanOrEqual(3);
-      expect(contrast("#ffffff", token(ink))).toBeGreaterThanOrEqual(3);
+      expect(contrast(token("surface"), token(ink))).toBeGreaterThanOrEqual(3);
     }
   });
 
-  it("never uses pure black or a neon fill", () => {
-    for (const t of DOMAIN_TOKENS) {
-      const hex = token(t);
-      expect(hex).not.toBe("#000000");
-      expect(luminance(hex)).toBeLessThan(0.35);      // not excessively dark
-      expect(luminance(hex)).toBeGreaterThan(0.02);   // not a washed-out pastel
-    }
-  });
-
-  it("gives every domain fill a distinct colour", () => {
-    const hexes = DOMAIN_TOKENS.map(token);
-    expect(new Set(hexes).size).toBe(DOMAIN_TOKENS.length);
+  it("keeps the shared KPI card within a readable dark range", () => {
+    expect(luminance(token("card"))).toBeLessThan(0.35);
+    expect(luminance(token("card"))).toBeGreaterThan(0.02);
   });
 });
 

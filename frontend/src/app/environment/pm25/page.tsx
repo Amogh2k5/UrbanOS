@@ -130,14 +130,14 @@ export default function PollutionPage() {
             {/* ============================================================
                SECTION 1: LIVE OBSERVATION
                ============================================================ */}
-            <div className="glass-panel p-6 rounded-lg border-t-4 border-cyan-500 bg-cyan-50">
+            <div className="glass-panel p-6 rounded-lg border-t-4 border-primary bg-primary/5">
               <div className="flex justify-between items-start mb-6">
-                <h3 className="font-bold text-lg flex items-center space-x-2 text-cyan-700 uppercase tracking-widest text-xs">
+                <h3 className="font-bold text-lg flex items-center space-x-2 text-primary uppercase tracking-widest text-xs">
                   <ActivitySquare size={18} />
                   <span>LIVE OBSERVATION</span>
                 </h3>
-                <div className="flex items-center gap-2 text-xs text-cyan-700 font-mono bg-cyan-50 px-3 py-1 rounded">
-                  <Zap size={12} className="text-cyan-800" />
+                <div className="flex items-center gap-2 text-xs text-primary font-mono bg-primary/5 px-3 py-1 rounded">
+                  <Zap size={12} className="text-primary" />
                   <span>1-Hour PM2.5 · Real-time</span>
                 </div>
               </div>
@@ -178,7 +178,7 @@ export default function PollutionPage() {
                           </div>
                           <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
                             <div 
-                              className="h-full bg-cyan-500 transition-all duration-1000 ease-out rounded-full"
+                              className="h-full bg-primary transition-all duration-1000 ease-out rounded-full"
                               style={{ width: `${widthPct}%` }}
                             />
                           </div>
@@ -192,7 +192,7 @@ export default function PollutionPage() {
                 <div className="flex flex-col justify-center items-center gap-4">
                   <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-center w-full">
                     <span className="text-xs text-slate-500 uppercase tracking-wider mb-1">Last Updated</span>
-                    <span className="font-mono text-cyan-700">
+                    <span className="font-mono text-primary">
                       {data.raw_updated_timestamp ? `${formatSingaporeTime(data.raw_updated_timestamp)} SGT` : 'Unknown'}
                     </span>
                   </div>
@@ -318,7 +318,7 @@ export default function PollutionPage() {
 
                 {/* Regional Distribution Summary */}
                 <div className="glass-panel p-6 rounded-lg">
-                  <h3 className="font-bold text-lg mb-4 flex items-center space-x-2 text-cyan-700 uppercase tracking-widest text-xs">
+                  <h3 className="font-bold text-lg mb-4 flex items-center space-x-2 text-primary uppercase tracking-widest text-xs">
                     <ActivitySquare size={18} />
                     <span>Regional PM2.5 Distribution (Live)</span>
                   </h3>
@@ -337,7 +337,7 @@ export default function PollutionPage() {
                     </div>
                     <div className="flex justify-between items-center p-3 bg-slate-50 rounded border border-slate-200">
                       <span className="text-xs text-slate-500 uppercase">Regions Above City Average</span>
-                      <span className="text-sm text-cyan-700 font-bold">{summary.regionsAboveAvg} / {summary.totalRegions}</span>
+                      <span className="text-sm text-primary font-bold">{summary.regionsAboveAvg} / {summary.totalRegions}</span>
                     </div>
                   </div>
                 </div>
@@ -346,15 +346,15 @@ export default function PollutionPage() {
               <div className="flex flex-col gap-6">
                 {/* Coordinator Context */}
                 {airQualityImpacts.length > 0 ? (
-                  <div className="glass-panel p-6 rounded-lg border-l-4 border-cyan-500 bg-cyan-50">
-                    <h3 className="font-bold text-lg mb-4 flex items-center space-x-2 text-cyan-700 uppercase tracking-widest text-xs">
+                  <div className="glass-panel p-6 rounded-lg border-l-4 border-primary bg-primary/5">
+                    <h3 className="font-bold text-lg mb-4 flex items-center space-x-2 text-primary uppercase tracking-widest text-xs">
                       <CloudRain size={18} />
                       <span>Cross-Domain Impact</span>
                     </h3>
                     <div className="space-y-4">
                       {airQualityImpacts.map((impact, idx) => (
                         <div key={idx} className="flex flex-col gap-2">
-                          <div className="text-xs text-cyan-800 font-bold uppercase tracking-wider">
+                          <div className="text-xs text-primary font-bold uppercase tracking-wider">
                             {impact.domains_involved?.join(' + ')}
                           </div>
                           <div className="text-sm text-slate-700 italic">

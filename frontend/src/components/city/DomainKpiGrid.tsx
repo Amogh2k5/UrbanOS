@@ -3,10 +3,8 @@
 /**
  * Domain Performance KPI cards.
  *
- * Solid, medium-to-strong domain colour with white text - the defining
- * surface of the dashboard. The colour says which domain this is; the status
- * badge says how bad it is. Those are independent, so a green Environment card
- * carrying a red "Critical" badge is correct, not a contradiction.
+ * White metric cards with shared graphite text and Jade icon accents. Domain
+ * status remains distinct in its semantic badge.
  *
  * Every canonical UrbanOS module has a card here, including modules whose
  * data has not loaded: an unloaded card shows an honest "Unavailable" state
@@ -28,7 +26,7 @@ import type { ModuleSummary } from "@/services/api";
 import {
   formatKpiValue,
   formatTimestamp,
-  solidCardClass,
+  domainCardClass,
   statusBadgeClass,
   statusLabel,
 } from "./presentation";
@@ -108,21 +106,21 @@ export default function DomainKpiGrid({
               data-testid="domain-kpi-card"
               data-module={mod.id}
               data-status={mod.status}
-              className={solidCardClass(mod.id, "block p-5 group")}
+              className={domainCardClass(mod.id, "block p-5 group")}
             >
               <div className="absolute inset-0 card-pattern opacity-30" aria-hidden="true" />
               <div
-                className="absolute -right-4 -top-4 w-24 h-24 bg-white/10 rounded-full blur-2xl"
+                className="absolute -right-4 -top-4 w-24 h-24 bg-white/10 rounded-full blur-2xl kpi-card-glow"
                 aria-hidden="true"
               />
 
               <div className="relative z-10">
                 <div className="flex justify-between items-start mb-5">
                   <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-xl bg-white/20 text-white flex items-center justify-center backdrop-blur-sm">
+                    <div className="w-9 h-9 rounded-xl bg-primary text-obsidian flex items-center justify-center">
                       <Icon size={17} />
                     </div>
-                    <p className="text-xs font-bold text-white uppercase tracking-wider">
+                    <p className="text-xs font-bold text-slate-900 uppercase tracking-wider">
                       {mod.name}
                     </p>
                   </div>
@@ -141,27 +139,27 @@ export default function DomainKpiGrid({
                     }}
                     className={`w-7 h-7 rounded-full flex items-center justify-center transition-colors shrink-0 ${
                       domainsWithFindings.has(mod.id)
-                        ? "bg-white text-slate-900 hover:bg-white/90"
-                        : "bg-white/10 text-white/90 hover:bg-white/25 hover:text-white"
+                        ? "bg-secondary/10 text-secondary hover:bg-secondary/15"
+                        : "bg-slate-100 text-slate-500 hover:bg-slate-200"
                     }`}
                   >
                     <Sparkles size={12} />
                   </button>
                 </div>
 
-                <p className="text-sm text-white/90 mb-1 font-medium">
-                  {headlineLabel ?? "No supported metric"}
+                <p className="text-sm text-slate-600 mb-1 font-medium">
+                  {headlineLabel ?? "Data currently unavailable"}
                 </p>
 
                 {kpiText ? (
                   <div className="flex items-baseline gap-2 mb-3">
-                    <p data-testid="kpi-value" className="text-3xl font-bold text-white tracking-tight">
+                    <p data-testid="kpi-value" className="text-3xl font-bold text-slate-900 tracking-tight">
                       {kpiText}
                     </p>
                   </div>
                 ) : (
-                  <p data-testid="kpi-value-unavailable" className="text-xl font-bold text-white/90 tracking-tight mb-3">
-                    Unavailable
+                  <p data-testid="kpi-value-unavailable" className="text-xl font-bold text-slate-600 tracking-tight mb-3">
+                    Data currently unavailable
                   </p>
                 )}
 
@@ -178,9 +176,9 @@ export default function DomainKpiGrid({
                             data-testid={`kpi-metric-${m.key}`}
                             className="flex items-baseline justify-between gap-2 text-xs"
                           >
-                            <span className="text-white/90">{m.label}</span>
-                            <span className={`font-mono text-right ${formatted ? "text-white" : "text-white/70"}`}>
-                              {formatted ?? "Unavailable"}
+                            <span className="text-slate-600">{m.label}</span>
+                            <span className={`font-mono text-right ${formatted ? "text-slate-900" : "text-slate-500"}`}>
+                              {formatted ?? "Data currently unavailable"}
                             </span>
                           </div>
                         );
@@ -194,12 +192,12 @@ export default function DomainKpiGrid({
                 </span>
 
                 {mod.updated_at && (
-                  <p className="mt-3 text-[11px] text-white/90">
+                  <p className="mt-3 text-[11px] text-slate-500">
                     Updated {formatTimestamp(mod.updated_at)}
                   </p>
                 )}
                 {mod.data_state && (
-                  <p data-testid="kpi-data-state" className="mt-2 text-[10px] text-white/80">
+                  <p data-testid="kpi-data-state" className="mt-2 text-[10px] text-slate-500">
                     {mod.data_state === "stale" && mod.age_seconds != null
                       ? `Stale data · ${Math.round(mod.age_seconds / 60)} min old`
                       : mod.data_state === "stale"
@@ -212,7 +210,7 @@ export default function DomainKpiGrid({
                   </p>
                 )}
                 {mod.id === "fire" && (
-                  <p data-testid="fire-card-limitation" className="mt-2 text-[10px] text-white/80">
+                  <p data-testid="fire-card-limitation" className="mt-2 text-[10px] text-slate-500">
                     SCDF published reports; not a complete real-time dispatch feed.
                   </p>
                 )}

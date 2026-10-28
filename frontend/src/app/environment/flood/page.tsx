@@ -175,13 +175,13 @@ export default function FloodPage() {
             </div>
             <div className="text-slate-500 font-mono text-sm mt-4 flex justify-between items-center bg-slate-50 p-3 rounded">
               <span>Alerts: <span className="text-slate-900 font-bold ml-1">{activeAlertCount}</span></span>
-              <span>Confidence: <span className="text-cyan-700 font-bold ml-1 uppercase">{confidence}</span></span>
+              <span>Confidence: <span className="text-primary font-bold ml-1 uppercase">{confidence}</span></span>
             </div>
           </div>
 
           {/* Why This Risk? */}
           <div className="glass-panel p-6 rounded-lg md:col-span-2 border-l-4 border-cyan-200">
-            <h3 className="font-bold text-lg mb-4 text-cyan-700 flex items-center gap-2 uppercase tracking-widest text-xs">
+            <h3 className="font-bold text-lg mb-4 text-primary flex items-center gap-2 uppercase tracking-widest text-xs">
               <Target size={16} /> Why This Risk?
             </h3>
             {data.primary_risk_factors && data.primary_risk_factors.length > 0 ? (
@@ -248,7 +248,7 @@ export default function FloodPage() {
                   )}
                 </div>
                 <div className="flex justify-between items-center text-xs text-slate-500">
-                  <span>Stations with Rain: <span className="text-cyan-700 font-mono">{data.singapore_rainfall.stations_with_rain ?? 0}</span> / {data.singapore_rainfall.stations_reporting ?? 0}</span>
+                  <span>Stations with Rain: <span className="text-primary font-mono">{data.singapore_rainfall.stations_with_rain ?? 0}</span> / {data.singapore_rainfall.stations_reporting ?? 0}</span>
                 </div>
                 {data.regional_weather && (
                   <div className="pt-3 border-t border-slate-200 flex justify-between items-center">
@@ -285,7 +285,7 @@ export default function FloodPage() {
 
           {/* SUMATRA (SUPPORTING) */}
           <div className="glass-panel p-6 rounded-lg border-l-4 border-blue-200">
-            <h3 className="font-bold text-lg mb-4 text-blue-700 flex items-center justify-between uppercase tracking-widest text-xs">
+            <h3 className="font-bold text-lg mb-4 text-secondary flex items-center justify-between uppercase tracking-widest text-xs">
               <span className="flex items-center gap-2"><CloudRain size={16} /> Sumatra</span>
               <span className="px-2 py-1 bg-blue-50 text-blue-800 border border-blue-200 rounded text-[10px] tracking-wider font-bold">SUPPORTING</span>
             </h3>
@@ -309,7 +309,7 @@ export default function FloodPage() {
 
         {/* ROW 3: ALERTS */}
         <div className="glass-panel p-6 rounded-lg">
-          <h3 className="font-bold text-lg mb-4 text-cyan-700 flex items-center gap-2 uppercase tracking-widest text-xs">
+          <h3 className="font-bold text-lg mb-4 text-primary flex items-center gap-2 uppercase tracking-widest text-xs">
             <AlertTriangle size={16} /> Active Alerts
           </h3>
           {data.active_alerts && data.active_alerts.length > 0 ? (
@@ -354,7 +354,7 @@ export default function FloodPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Recommendations */}
           <div className="glass-panel p-6 rounded-lg border-t-4 border-cyan-200">
-            <h3 className="font-bold text-lg mb-4 text-cyan-700 flex items-center gap-2 uppercase tracking-widest text-xs">
+            <h3 className="font-bold text-lg mb-4 text-primary flex items-center gap-2 uppercase tracking-widest text-xs">
               <Info size={16} /> Recommendations
             </h3>
             {data.recommendations && data.recommendations.length > 0 ? (

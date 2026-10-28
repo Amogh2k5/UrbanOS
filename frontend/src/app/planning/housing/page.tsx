@@ -55,11 +55,11 @@ export default function HousingPage() {
   const forecastMethod = forecast?.method || "—";
   const forecastPeriod = forecast?.target_period || "—";
 
-  return <main className="min-h-screen bg-slate-50 px-4 py-6 text-slate-900 md:px-8">
+  return <main className="min-h-screen bg-background px-4 py-6 text-slate-900 md:px-8">
     <div className="mx-auto max-w-[1600px] space-y-6">
       <header className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
         <div>
-          <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-purple-600"><Home size={15} /> Planning / Housing</div>
+          <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-primary"><Home size={15} /> Planning / Housing</div>
           <h1 className="text-3xl font-bold text-slate-900 md:text-4xl">Singapore Housing Intelligence</h1>
           <p className="mt-2 max-w-3xl text-sm text-slate-500">A view of resale prices, housing stock and market data availability. Periodic statistics, not a property-search service.</p>
         </div>
@@ -79,25 +79,25 @@ export default function HousingPage() {
         </div>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <section className="solid-card bg-dom-housing p-5">
-            <div className="text-xs font-semibold uppercase tracking-wider text-white/80 mb-1">Latest resale median period</div>
-            <div className="text-2xl font-bold text-white">{report.kpis.latest_median_resale_period || "Unavailable"}</div>
-            <div className="mt-1 text-xs text-white/70">From the town and flat-type dataset</div>
+          <section className="solid-card metric-card bg-white border border-line p-5">
+            <div className="text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">Latest resale median period</div>
+            <div className="text-2xl font-bold text-slate-900">{report.kpis.latest_median_resale_period || "Unavailable"}</div>
+            <div className="mt-1 text-xs text-slate-500">From the town and flat-type dataset</div>
           </section>
-          <section className="solid-card bg-dom-housing p-5">
-            <div className="text-xs font-semibold uppercase tracking-wider text-white/80 mb-1">Town / flat-type observations</div>
-            <div className="text-2xl font-bold text-white">{integer(report.kpis.town_flat_type_median_price_rows)}</div>
-            <div className="mt-1 text-xs text-white/70">Rows with numeric prices in latest period</div>
+          <section className="solid-card metric-card bg-white border border-line p-5">
+            <div className="text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">Town / flat-type observations</div>
+            <div className="text-2xl font-bold text-slate-900">{integer(report.kpis.town_flat_type_median_price_rows)}</div>
+            <div className="mt-1 text-xs text-slate-500">Rows with numeric prices in latest period</div>
           </section>
-          <section className="solid-card bg-dom-housing p-5">
-            <div className="text-xs font-semibold uppercase tracking-wider text-white/80 mb-1">Latest resale application period</div>
-            <div className="text-2xl font-bold text-white">{report.kpis.latest_resale_applications_period || "Unavailable"}</div>
-            <div className="mt-1 text-xs text-white/70">Resale applications dataset</div>
+          <section className="solid-card metric-card bg-white border border-line p-5">
+            <div className="text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">Latest resale application period</div>
+            <div className="text-2xl font-bold text-slate-900">{report.kpis.latest_resale_applications_period || "Unavailable"}</div>
+            <div className="mt-1 text-xs text-slate-500">Resale applications dataset</div>
           </section>
-          <section className="solid-card bg-dom-housing p-5">
-            <div className="text-xs font-semibold uppercase tracking-wider text-white/80 mb-1">Public-housing property records</div>
-            <div className="text-2xl font-bold text-white">{integer(report.kpis.hdb_property_records)}</div>
-            <div className="mt-1 text-xs text-white/70">Reference inventory; through Dec 2025</div>
+          <section className="solid-card metric-card bg-white border border-line p-5">
+            <div className="text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">Public-housing property records</div>
+            <div className="text-2xl font-bold text-slate-900">{integer(report.kpis.hdb_property_records)}</div>
+            <div className="mt-1 text-xs text-slate-500">Reference inventory; through Dec 2025</div>
           </section>
         </div>
 
@@ -125,9 +125,9 @@ export default function HousingPage() {
           <section className="card-panel rounded-xl p-5">
             <header className="card-panel-header"><h2 className="font-semibold text-slate-900">Market indicators</h2></header>
             <div className="mt-3 space-y-4">
-              <div className="flex gap-3"><TrendingUp className="text-purple-600" size={20} /><div><div className="text-sm font-medium text-slate-900">Resale market</div><p className="mt-1 text-xs text-slate-500">{report.kpis.latest_median_resale_period ? `Latest available data: ${report.kpis.latest_median_resale_period}` : "Data unavailable"}</p></div></div>
-          <div className="flex gap-3"><Building2 className="text-purple-600" size={20} /><div><div className="text-sm font-medium text-slate-900">Private residential</div><p className="mt-1 text-xs text-slate-500">{report.private_residential.note}</p></div></div>
-              <div className="flex gap-3"><Database className="text-purple-600" size={20} /><div><div className="text-sm font-medium text-slate-900">Rental / household context</div><p className="mt-1 text-xs text-slate-500">Unavailable unless a verified structured source is accessible. No stale values are substituted.</p></div></div>
+              <div className="flex gap-3"><TrendingUp className="text-secondary" size={20} /><div><div className="text-sm font-medium text-slate-900">Resale market</div><p className="mt-1 text-xs text-slate-500">{report.kpis.latest_median_resale_period ? `Latest available data: ${report.kpis.latest_median_resale_period}` : "Data unavailable"}</p></div></div>
+          <div className="flex gap-3"><Building2 className="text-secondary" size={20} /><div><div className="text-sm font-medium text-slate-900">Private residential</div><p className="mt-1 text-xs text-slate-500">{report.private_residential.note}</p></div></div>
+              <div className="flex gap-3"><Database className="text-secondary" size={20} /><div><div className="text-sm font-medium text-slate-900">Rental / household context</div><p className="mt-1 text-xs text-slate-500">Unavailable unless a verified structured source is accessible. No stale values are substituted.</p></div></div>
             </div>
           </section>
         </div>
@@ -190,7 +190,7 @@ export default function HousingPage() {
           <header className="card-panel-header"><h2 className="font-semibold text-slate-900">Resale median prices by town and flat type</h2></header>
           <div className="mt-4 flex flex-col justify-between gap-3 md:flex-row md:items-center">
             <p className="text-xs text-slate-500">Period: {report.kpis.latest_median_resale_period || "unavailable"} · &quot;—&quot; means no numeric value was published.</p>
-            <input value={townSearch} onChange={(e) => setTownSearch(e.target.value)} placeholder="Filter town…" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-purple-500" />
+            <input value={townSearch} onChange={(e) => setTownSearch(e.target.value)} placeholder="Filter town…" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary" />
           </div>
           {towns.length ? <div className="mt-4 max-h-[520px] overflow-auto rounded-lg border border-slate-200">
             <table className="w-full min-w-[720px] text-left text-sm"><thead className="sticky top-0 bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-3">Town</th>{report.resale_by_flat_type.map((x) => <th key={x.flat_type} className="p-3">{x.flat_type}</th>)}</tr></thead>
@@ -232,7 +232,7 @@ export default function HousingPage() {
         <section className="card-panel rounded-xl p-5">
           <header className="card-panel-header"><h2 className="font-semibold text-slate-900">Housing Intelligence</h2></header>
           <p className="mt-3 mb-4 text-sm text-slate-500">Source-grounded prompts. Answers below are derived from the structured HousingReport; unavailable data is identified explicitly.</p>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">{report.insights.map((x) => <div key={x.question} className="rounded-lg border border-slate-200 bg-slate-50 p-4"><div className="text-sm font-semibold text-purple-700">{x.question}</div><p className="mt-2 text-sm text-slate-600">{x.answer}</p><div className="mt-1 text-xs text-slate-600">Data kind: {x.data_kind}</div></div>)}</div>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">{report.insights.map((x) => <div key={x.question} className="rounded-lg border border-slate-200 bg-slate-50 p-4"><div className="text-sm font-semibold text-secondary">{x.question}</div><p className="mt-2 text-sm text-slate-600">{x.answer}</p><div className="mt-1 text-xs text-slate-600">Data kind: {x.data_kind}</div></div>)}</div>
         </section>
 
         <section className="card-panel rounded-xl p-5">

@@ -106,11 +106,11 @@ describe("CitySituationPanel", () => {
     expect(screen.queryByTestId("city-situation-unavailable")).toBeNull();
   });
 
-  it("distinguishes an API error from a missing narrative", () => {
+  it("shows a clean unavailable message for a failed assessment", () => {
     render(
       <CitySituationPanel narrative={null} report={null} assessmentReady={false} error="API error 500" />
     );
-    expect(screen.getByTestId("city-situation-error").textContent).toContain("API error 500");
+    expect(screen.getByTestId("city-situation-error").textContent).toContain("temporarily unavailable");
     expect(screen.queryByTestId("city-situation-unavailable")).toBeNull();
   });
 
@@ -359,7 +359,7 @@ describe("DomainKpiGrid", () => {
     expect(screen.getAllByTestId("kpi-value")[0].textContent).toBe("796.8 km²");
   });
 
-  it("renders Unavailable rather than a zero when a module has no KPI", () => {
+  it("renders an unavailable message rather than a zero when a module has no KPI", () => {
     render(
       <DomainKpiGrid modules={REAL_MODULES} domainsWithFindings={new Set()} onOpenInsight={vi.fn()} />
     );
@@ -368,7 +368,7 @@ describe("DomainKpiGrid", () => {
     const crimeCard = cards[1];
     expect(crimeCard.getAttribute("data-status")).toBe("unavailable");
     expect(crimeCard.textContent).toContain("Unavailable");
-    expect(crimeCard.textContent).toContain("No supported metric");
+    expect(crimeCard.textContent).toContain("Data currently unavailable");
   });
 
   it("shows a real KPI even when the domain status is unavailable", () => {
@@ -409,10 +409,10 @@ describe("DomainKpiGrid", () => {
     ];
     render(<DomainKpiGrid modules={modules} domainsWithFindings={new Set()} onOpenInsight={vi.fn()} />);
     expect(screen.getByText("34.2 km/h")).toBeTruthy();
-    expect(screen.getByTestId("kpi-metric-congestion_level").textContent).toContain("Unavailable");
+    expect(screen.getByTestId("kpi-metric-congestion_level").textContent).toContain("Data currently unavailable");
     expect(screen.getByTestId("kpi-metric-incident_count").textContent).toContain("0");
     expect(screen.getByText("55244")).toBeTruthy();
-    expect(screen.getByTestId("kpi-metric-physical_crime").textContent).toContain("Unavailable");
+    expect(screen.getByTestId("kpi-metric-physical_crime").textContent).toContain("Data currently unavailable");
     expect(screen.getAllByTestId("kpi-data-state").every((el) => el.textContent === "Partial data")).toBe(true);
   });
 
@@ -456,44 +456,42 @@ describe("DomainKpiGrid", () => {
     );
     const land = screen.getAllByTestId("kpi-insight-button")[0];
     const crime = screen.getAllByTestId("kpi-insight-button")[1];
-    // Solid white chip over the domain fill, so it reads on every colour.
-    expect(land.className).toContain("bg-white");
-    expect(land.className).toContain("text-slate-900");
-    expect(crime.className).toContain("bg-white/10");
-    expect(crime.className).toContain("text-white/90");
+    // Grounded insight uses Sapphire; the unavailable action stays neutral.
+    expect(land.className).toContain("bg-secondary/10");
+    expect(land.className).toContain("text-secondary");
+    expect(crime.className).toContain("bg-slate-100");
+    expect(crime.className).toContain("text-slate-500");
   });
 
-it("fills each card with a solid domain colour and white text", () => {
+  it("uses a shared white surface and graphite values for ordinary KPI cards", () => {
     render(
       <DomainKpiGrid modules={REAL_MODULES} domainsWithFindings={new Set()} onOpenInsight={vi.fn()} />
     );
     const cards = screen.getAllByTestId("domain-kpi-card");
     cards.forEach((card) => {
       expect(card.className).toContain("solid-card");
-      // Exactly one base fill (hover shades excluded), and never a white card
-      // with only a coloured border or icon.
+      expect(card.className).toContain("metric-card");
+      expect(card.className).toContain("border-line");
       const baseFills = card.className
         .split(/\s+/)
-        .filter((c) => /^bg-/.test(c) && !c.startsWith("bg-white"));
-      expect(baseFills).toHaveLength(1);
-      // White metric values, per the reference treatment. An unavailable card
-      // dims the value to white/70 rather than dropping to a dark colour.
+        .filter((c) => /^bg-/.test(c));
+      expect(baseFills).toEqual(["bg-white"]);
       const value = card.querySelector('[data-testid="kpi-value"]') ?? card.querySelector('[data-testid="kpi-value-unavailable"]');
-      expect(value?.className.split(/\s+/).some((c) => c === "text-white" || c.startsWith("text-white/"))).toBe(true);
+      expect(value?.className.split(/\s+/).some((c) => c === "text-slate-900" || c === "text-slate-600")).toBe(true);
     });
   });
 
-  it("gives every domain in the grid a distinct fill", () => {
+  it("keeps ordinary KPI card backgrounds uniform across domains", () => {
     render(
       <DomainKpiGrid modules={REAL_MODULES} domainsWithFindings={new Set()} onOpenInsight={vi.fn()} />
     );
     const fills = screen.getAllByTestId("domain-kpi-card").map((c) =>
-      c.className.split(/\s+/).find((cl) => /^bg-/.test(cl) && !cl.startsWith("bg-white"))
+      c.className.split(/\s+/).find((cl) => /^bg-/.test(cl))
     );
-    expect(new Set(fills).size).toBe(fills.length);
+    expect(new Set(fills)).toEqual(new Set(["bg-white"]));
   });
 
-  it("keeps the card fill tied to the domain, not the status", () => {
+  it("keeps the card surface independent of domain and status", () => {
     const base = REAL_MODULES[0];
     const flipped: ModuleSummary[] = REAL_MODULES.map((m, i) =>
       i === 0 ? { ...m, status: base.status === "critical" ? "normal" : "critical" } : m
@@ -502,7 +500,6 @@ it("fills each card with a solid domain colour and white text", () => {
       <DomainKpiGrid modules={REAL_MODULES} domainsWithFindings={new Set()} onOpenInsight={vi.fn()} />
     );
     const before = screen.getAllByTestId("domain-kpi-card")[0];
-    const fillBefore = before.className.split(/\s+/).find((c) => /^bg-/.test(c) && !c.startsWith("bg-white"));
     const badgeBefore = before.querySelector('[data-testid="kpi-status"]')?.className;
     unmount();
 
@@ -510,8 +507,8 @@ it("fills each card with a solid domain colour and white text", () => {
       <DomainKpiGrid modules={flipped} domainsWithFindings={new Set()} onOpenInsight={vi.fn()} />
     );
     const after = screen.getAllByTestId("domain-kpi-card")[0];
-    expect(after.className.split(/\s+/).find((c) => /^bg-/.test(c) && !c.startsWith("bg-white"))).toBe(fillBefore);
-    // ...but the badge did change.
+    expect(after.className).toContain("bg-white");
+    expect(before.className).toContain("bg-white");
     expect(after.querySelector('[data-testid="kpi-status"]')?.className).not.toBe(badgeBefore);
   });
 

@@ -266,14 +266,14 @@ export default function RoadsPage() {
       <div className="flex flex-col flex-grow min-h-0 overflow-y-auto">
         {/* Header */}
         <div className="mb-6 flex items-center gap-3">
-          <Road size={24} className="text-blue-700" />
-          <h2 className="text-2xl font-heading text-blue-700">Road Infrastructure Intelligence</h2>
+          <Road size={24} className="text-secondary" />
+          <h2 className="text-2xl font-heading text-secondary">Road Infrastructure Intelligence</h2>
         </div>
 
         {/* KPI Summary Section */}
         <section className="mb-6">
           <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
-            <Package size={20} className="text-blue-700" />
+            <Package size={20} className="text-secondary" />
             <span>Road Infrastructure Overview</span>
           </h3>
 
@@ -326,7 +326,7 @@ export default function RoadsPage() {
         {/* Speed Context Section */}
         <section className="mb-6">
           <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
-            <TrendingUp size={20} className="text-cyan-700" />
+            <TrendingUp size={20} className="text-primary" />
             <span>Road Speed Context (Live)</span>
           </h3>
 
@@ -393,7 +393,7 @@ export default function RoadsPage() {
               onClick={() => setActiveTab('works')}
               className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
                 activeTab === 'works'
-                  ? 'bg-blue-500/20 text-blue-700 border-b-2 border-blue-400'
+                  ? 'bg-primary/10 text-primary border-b-2 border-primary'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
@@ -404,7 +404,7 @@ export default function RoadsPage() {
               onClick={() => setActiveTab('openings')}
               className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
                 activeTab === 'openings'
-                  ? 'bg-blue-500/20 text-blue-700 border-b-2 border-blue-400'
+                  ? 'bg-primary/10 text-primary border-b-2 border-primary'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
@@ -415,7 +415,7 @@ export default function RoadsPage() {
               onClick={() => setActiveTab('taxi')}
               className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
                 activeTab === 'taxi'
-                  ? 'bg-blue-500/20 text-blue-700 border-b-2 border-blue-400'
+                  ? 'bg-primary/10 text-primary border-b-2 border-primary'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
@@ -426,7 +426,7 @@ export default function RoadsPage() {
               onClick={() => setActiveTab('speed')}
               className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
                 activeTab === 'speed'
-                  ? 'bg-blue-500/20 text-blue-700 border-b-2 border-blue-400'
+                  ? 'bg-primary/10 text-primary border-b-2 border-primary'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
